@@ -12,4 +12,4 @@ Goo.framework: goo.go
 setup: .setup-done
 
 clean:
-	-rm -fr Goo.framework
+	-rm -fr Goo.framework .setup-done
