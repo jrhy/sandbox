@@ -6,6 +6,10 @@ import (
 	"net/http"
 )
 
+func Inc(i int) int {
+	return i + 1
+}
+
 func Greetings(name string) string {
 	go func() {
 		http.HandleFunc("/", handler)
