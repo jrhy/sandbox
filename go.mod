@@ -4,7 +4,8 @@ go 1.14
 
 require (
 	github.com/aws/aws-sdk-go v1.37.29
-	github.com/jessevdk/go-flags v1.4.0
-	golang.org/dl v0.0.0-20210204224843-1557c60ec592 // indirect
-	golang.org/x/mobile v0.0.0-20210208171126-f462b3930c8f // indirect
+	github.com/jessevdk/go-flags v1.5.0
+	github.com/stianeikeland/go-rpio v4.2.0+incompatible
+	github.com/stretchr/testify v1.7.0
+	golang.org/x/sys v0.0.0-20210402192133-700132347e07 // indirect
 )
