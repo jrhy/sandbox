@@ -1,19 +1,22 @@
-all: $$HOME/bin/vim $$HOME/.vim/pack/plugins/start/govim
-	echo OK, now you need to setup minimal .vimrc per https://github.com/govim/govim
+all: ${HOME}/bin/vim ${HOME}/.vim/pack/plugins/start/govim ${HOME}/.vimrc
 
-$$HOME/.vim/pack/plugins/start/govim:
+${HOME}/.vim/pack/plugins/start/govim:
 	git clone https://github.com/govim/govim.git ~/.vim/pack/plugins/start/govim
 
-$$HOME/bin/vim: vim/src/vim
-	cd vim/src && make prefix=$$HOME install
+${HOME}/bin/vim: vim/src/vim
+	cd vim/src && make prefix=${HOME} install
 
 vim/src/vim: vim
-	cd vim/src && make prefix=$$HOME
+	if [ `uname` = "Linux" ] ; then cd vim/src && make prefix=${HOME} ; fi
+	if [ `uname` != "Linux" ] ; then cd vim/src && ./configure --prefix=${HOME} && make ; fi
 
 vim:
-	su root -c 'apt -y install libncurses-dev'
+	if [ `uname` = "Linux" ] ; then su root -c 'apt -y install libncurses-dev' ; fi
 	git clone https://github.com/vim/vim.git
 
+${HOME}/.vimrc: vimrc
+	cp vimrc ${HOME}/.vimrc
+	
 clean:
 	rm -fr vim
 
