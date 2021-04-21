@@ -10,7 +10,7 @@ type Cmd struct {
 	*exec.Cmd
 }
 
-func new(name string, args ...string) *Cmd {
+func New(name string, args ...string) *Cmd {
 	return &Cmd{exec.Command(name, args...)}
 }
 
