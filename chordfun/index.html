@@ -1,0 +1,232 @@
+<html>
+<head>
+<title>Chord Typing Fun</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script language="JavaScript" type="text/javascript">
+
+var wordByUniqueLetters = {}
+
+class ChordDecoder {
+	constructor(onWord) {
+		this.currentlyDown = {}
+		this.currentLetters = ""
+		this.onWord = onWord
+		this.usingChords = false
+	}
+	keyDown(k) {
+		this.currentlyDown[k] = null
+		if (Object.keys(this.currentlyDown).length > 1) {
+			this.usingChords = true
+		}
+	}
+	keyUp(k) {
+		delete this.currentlyDown[k]
+		this.currentLetters += k
+		if (Object.keys(this.currentlyDown).length == 0) {
+			this.chordDone()
+		}
+	}
+	chordDone() {
+		var ul = uniqueLetters(this.currentLetters)
+		console.log("uniqueLetters of " + this.currentLetters + ": " + ul)
+		var w = wordByUniqueLetters[ul]
+		if (this.usingChords && w != null) {
+			this.onWord(w + " ")
+		} else {
+			if (this.currentLetters.length == 1) {
+				this.onWord(this.currentLetters)
+			} else {
+				console.log("no entry for " + this.currentLetters)
+				//this.onWord(this.currentLetters + " ")
+			}
+		}
+		this.currentLetters = ""
+		this.usingChords = false
+	}
+}
+
+function uniqueLetters(word) {
+	letters = {}
+	for (var i in word) {
+		letters[word[i].toLowerCase()] = true
+	}
+	res = ""
+	sorted = Object.keys(letters).sort()
+	for (var i in sorted) {
+		res += sorted[i]
+	}
+	return res
+}
+
+var ct = new ChordDecoder(function(word) {
+	document.getElementById("output").innerHTML += word;
+})
+console.log(ct)
+console.log("hey?")
+
+function handleEvent(ev) {
+	console.log(ev)
+//	try {
+		//document.getElementById("output").innerHTML = "";
+		//document.getElementById("error").innerHTML = "";
+		if (ev.key == null || ev.key.length != 1) {
+			return
+		}
+		switch (ev.type) {
+		case "keydown":
+			ct.keyDown(ev.key)
+			break
+		case "keyup":
+			ct.keyUp(ev.key)
+			break
+		default:
+			return
+		}
+		ev.preventDefault()
+//	} catch(s) {
+//		document.getElementById("output").innerHTML = "???";
+//		document.getElementById("error").innerHTML = s;
+//	}
+}
+
+</script>
+</head>
+<body>
+<table width="100%" height="100%"><tr align="center" width="100%"><td>
+<font size="+6" id="output"></font>
+<br/>
+<input type="text" size="24" id="thing" placeholder="type chords here">
+</td></tr>
+<tr><td>
+<div id="error" align="center"></div>
+</td></tr>
+</table>
+</body>
+<script language="JavaScript" type="text/javascript">
+
+var word = [
+	"the",
+	"be",
+	"to",
+	"of",
+	"and",
+	"a",
+	"in",
+	"that",
+	"have",
+	"I",
+	"it",
+	"for",
+	"not",
+	"on",
+	"with",
+	"he",
+	"as",
+	"you",
+	"do",
+	"at",
+	"this",
+	"but",
+	"his",
+	"by",
+	"from",
+	"they",
+	"we",
+	"say",
+	"she",
+	"or",
+	"an",
+	"will",
+	"my",
+	"one",
+	"all",
+	"would",
+	"there",
+	"their",
+	"what",
+	"so",
+	"up",
+	"out",
+	"if",
+	"about",
+	"who",
+	"get",
+	"which",
+	"go",
+	"me",
+	"when",
+	"make",
+	"can",
+	"like",
+	"time",
+	"no",
+	"just",
+	"him",
+	"know",
+	"take",
+	"people",
+	"into",
+	"year",
+	"your",
+	"good",
+	"some",
+	"could",
+	"them",
+	"see",
+	"other",
+	"than",
+	"then",
+	"now",
+	"look",
+	"only",
+	"come",
+	"its",
+	"over",
+	"think",
+	"also",
+	"back",
+	"after",
+	"use",
+	"two",
+	"how",
+	"our",
+	"work",
+	"first",
+	"well",
+	"way",
+	"even",
+	"new",
+	"want",
+	"because",
+	"any",
+	"these",
+	"give",
+	"day",
+	"most",
+	"us",
+	"her",
+	"is",
+	"hello",
+	"print",
+	"Jeff",
+	"Jana",
+	"nice",
+	"park",
+	"why",
+]
+
+for (var i in word) {
+	ul = uniqueLetters(word[i])
+	wordByUniqueLetters[ul] = word[i]
+}
+wordByUniqueLetters["dnot"] = "don't"
+wordByUniqueLetters["ok"] = "OK"
+
+document.getElementById("thing").onkeydown = handleEvent
+document.getElementById("thing").onkeyup = handleEvent
+document.getElementById("thing").focus()
+</script>
+</html>
