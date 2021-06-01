@@ -8,6 +8,12 @@ import (
 	"time"
 
 	"github.com/jessevdk/go-flags"
+	"github.com/mdp/qrterminal/v3"
+)
+
+const (
+	exitError           = 1
+	exitSubcommandUsage = 2
 )
 
 func main() {
@@ -18,7 +24,11 @@ func main() {
 		usages()
 	}
 	if f, ok := funcs[os.Args[1]]; ok {
-		os.Exit(f.f(os.Args[2:]))
+		exit := f.f(os.Args[2:])
+		if exit == exitSubcommandUsage {
+			fmt.Fprintf(os.Stderr, "usage: sb %s %s\n", os.Args[1], f.usage)
+		}
+		os.Exit(exit)
 	}
 	die("unknown subcommand")
 }
@@ -69,6 +79,24 @@ var funcs = map[string]subcommand{
 			}
 			t := o.FromTime.OrNow()
 			fmt.Println(big.NewInt(t.Unix()).Text(o.Base))
+			return 0
+		}},
+	"qr": {
+		"[-m/--message=<string>]",
+		"Prints the QR code for the given message",
+		func(a []string) int {
+			o := struct {
+				Message string `long:"message" short:"m"`
+			}{}
+			p := flags.NewParser(&o, 0)
+			_, err := p.ParseArgs(a)
+			if err != nil {
+				die(fmt.Sprintf("parse: %v", err))
+			}
+			if o.Message == "" {
+				return exitSubcommandUsage
+			}
+			qrterminal.Generate(o.Message, qrterminal.L, os.Stdout)
 			return 0
 		}},
 }
