@@ -3,6 +3,7 @@ module github.com/jrhy/sandbox
 go 1.14
 
 require (
+	github.com/PuerkitoBio/goquery v1.6.1
 	github.com/aws/aws-sdk-go v1.37.29
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/mdp/qrterminal/v3 v3.0.0
