@@ -20,16 +20,19 @@ type hgrepOptions struct {
 
 func init() {
 	funcs["hgrep"] = subcommand{
-		"[-t,--text] [-v <selector>]... [-o <selector>...]  [-u <url>] [-f <path>|-]",
+		"[-t/--text] [-v <selector>]... [-o <selector>]...  [-u <url> | -f <path>|-]",
 		"HTML grep applies jquery-style selector matching/filtering to the given document",
 		func(a []string) int {
 			o := hgrepOptions{}
 			p := flags.NewParser(&o, 0)
 			ra, err := p.ParseArgs(a)
 			if err != nil {
+				if strings.Contains(err.Error(), "unknown flag") {
+					return exitSubcommandUsage
+				}
 				die(fmt.Sprintf("parse: %v", err))
 			}
-			if len(ra) > 0 {
+			if o.File == "" && o.URL == "" || len(ra) > 0 {
 				return exitSubcommandUsage
 			}
 			if err := scrape(o); err != nil {
