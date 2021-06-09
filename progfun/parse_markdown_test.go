@@ -115,7 +115,7 @@ func (i *Input) ParseTable() *Table {
 	}
 	t.Headers = r
 	if !i.parseRow(&r) {
-		return nil
+		return &t
 	}
 	if !isDelimiterRow(r) {
 		t.Rows = append(t.Rows, r)
