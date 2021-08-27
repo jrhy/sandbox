@@ -1,5 +1,8 @@
 OUTPUT=output
 
+run: ${OUTPUT}/rust_from_go
+	${OUTPUT}/rust_from_go
+
 ${OUTPUT}/rust_from_go: ${OUTPUT} ${OUTPUT}/librfg.a main.go
 	go build -o ${OUTPUT}/rust_from_go
 
@@ -11,7 +14,4 @@ ${OUTPUT}:
 
 clean:
 	-rm -fr ${OUTPUT}
-
-run: ${OUTPUT}/rust_from_go
-	${OUTPUT}/rust_from_go
 
