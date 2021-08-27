@@ -133,7 +133,7 @@ func main() {
 	}
 	u := User{os.Getenv("IAX_USER"), os.Getenv("IAX_PASSWORD")}
 	if u.username == "" || u.password == "" {
-		fmt.Printf("set IAX_USER, IAX_PASSWOERD, IAX_ENDPOINT\n")
+		fmt.Printf("set IAX_USER, IAX_PASSWORD, IAX_ENDPOINT\n")
 		os.Exit(1)
 	}
 	p := Peer{
