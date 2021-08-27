@@ -10,19 +10,20 @@ enum MastError {
     StoreError(std::io::Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug,Clone)]
 struct Node {
     key: Vec<i32>,
     value: Vec<i32>,
     link: Vec<Option<Link>>,
     dirty: bool,
 }
+/*
+// TODO
 impl Clone for Node {
     fn clone(&self) -> Node {
         panic!("why are you doing this")
     }
 }
-/*
 impl ToOwned for Node {
     type Owned = Node;
     fn to_owned(&self) -> Self::Owned {
@@ -128,6 +129,7 @@ impl<'a> Mast<'a> {
     fn get(&self, key: &i32) -> Result<Option<&i32>, MastError> {
         let mut distance =
             self.height - std::cmp::min((self.key_layer)(key, self.branch_factor), self.height);
+        if distance < 0 { panic!("goo") };
         let mut node = load(&self.root_link)?;
         loop {
             let (equal, i) = get_index_for_key(key, &node.key, self.key_order);
@@ -285,21 +287,18 @@ impl Node {
         branch_factor: u16,
     ) -> Option<Link> {
         let mut new_parent = Node::new(self.key.capacity());
-        loop {
-            if self.is_empty() {
-                break;
+        if !self.is_empty() {
+        for i in 0..self.key.len() {
+            let key = &self.key[i];
+            let layer = key_layer(key, branch_factor);
+            if layer <= current_height {
+                continue;
             }
-            for i in 0..self.key.len() {
-                let key = &self.key[i];
-                let layer = key_layer(key, branch_factor);
-                if layer <= current_height {
-                    continue;
-                }
-                let new_left = self.extract(i);
-                new_parent.key.push(self.key[0]);
-                new_parent.value.push(self.value[0]);
-                new_parent.link.insert(new_parent.link.len() - 1, new_left);
-            }
+            let new_left = self.extract(i);
+            new_parent.key.push(self.key[0]);
+            new_parent.value.push(self.value[0]);
+            new_parent.link.insert(new_parent.link.len() - 1, new_left);
+        }
         }
         let new_right = self.extract(self.key.len());
         *new_parent.link.last_mut().unwrap() = new_right;
@@ -349,13 +348,13 @@ fn split(
     }
     let mut left_node = Node::new(node.key.capacity());
     let mut right_node = Node::new(node.key.capacity());
-    let (left, right) = node.key.split_at(i);
+    let (mut left, mut right) = node.key.split_at(i);
     left_node.key.extend_from_slice(left);
     right_node.key.extend_from_slice(right);
-    let (left, right) = node.value.split_at(i);
+    let (mut left, mut right) = node.value.split_at(i);
     left_node.value.extend_from_slice(left);
     right_node.value.extend_from_slice(left);
-    let (left, right) = node.link.split_at(i + 1);
+    let (mut left, mut right) = node.link.split_at(i + 1);
     left_node.link.remove(0);
     left_node.link.extend_from_slice(left);
     right_node.link.extend_from_slice(right);
@@ -488,7 +487,7 @@ fn test_bench_insert() -> std::result::Result<(), MastError> {
     let mut t = Mast::newInMemory();
     let parts = 4;
 
-    let mut n = 16;// * 16 * 16;
+    let mut n = 16 * 16 * 16;
     let mut i = 0;
     let mut start = std::time::Instant::now();
     for p in 0..parts {
