@@ -36,6 +36,12 @@ func init() {
 	}
 }
 
+type state struct {
+	Indent    string
+	LineBreak bool
+	ParaBreak bool
+}
+
 func doit() error {
 	doc, err := goquery.NewDocumentFromReader(os.Stdin)
 	if err != nil {
@@ -50,17 +56,20 @@ func doit() error {
 	if body == nil {
 		return nil
 	}
+	s := state{}
 	for _, n := range body.Nodes {
-		printNodeText(n)
+		s.printNodeText(n)
 	}
 	return nil
 }
 
-func printNodeText(n *html.Node) {
+func (s *state) printNodeText(n *html.Node) {
+	oldIndent := s.Indent
 	var href string
+
 	if n.Type == html.ElementNode {
 		switch n.Data {
-		case "body", "p", "b", "div":
+		case "body", "p", "b", "strong", "div", "span", "br":
 		case "a":
 			for i := range n.Attr {
 				if n.Attr[i].Key == "href" {
@@ -69,40 +78,88 @@ func printNodeText(n *html.Node) {
 				}
 			}
 			if href != "" {
-				fmt.Printf("\n\nLINK %s ", href)
+				s.lineBreak()
+				s.emit(fmt.Sprintf("LINK %s\n", href))
+				s.lineBreak()
 			}
 		case "h1", "h2", "h3", "h4", "h5", "h6":
-			fmt.Printf("\n\n= ")
+			s.paraBreak()
+			s.emit("= ")
+		case "table", "tbody", "tr", "td", "th":
+		case "ul":
+		case "li":
+			s.lineBreak()
+			s.emit(s.Indent)
 		default:
-			fmt.Printf("haha %s { \n", n.Data)
+			s.emit(fmt.Sprintf("haha %s { \n", n.Data))
 		}
 	}
 	if n.Type == html.TextNode {
-		fmt.Printf("%s", n.Data)
+		s.emit(n.Data)
 	}
 	if n.FirstChild != nil {
-		printNodeText(n.FirstChild)
+		s.printNodeText(n.FirstChild)
 	}
 	if n.Type == html.ElementNode {
 		switch n.Data {
-		case "body", "b", "div":
+		case "body", "b", "strong", "div", "span", "li":
 		case "a":
 			if href != "" {
-				fmt.Printf("\n\n")
+				s.lineBreak()
 			}
 		case "h1", "h2", "h3", "h4", "h5", "h6":
-			fmt.Printf(" =\n\n")
+			s.emit(" =")
+			s.paraBreak()
+		case "br":
+			s.lineBreak()
 		case "p":
-			fmt.Printf("\n\n")
+			s.paraBreak()
+		case "table":
+			s.paraBreak()
+		case "tr":
+			s.lineBreak()
+		case "tbody", "td", "th":
+			//s.emit("  ")
+		case "ul":
+			s.lineBreak()
 		default:
-			fmt.Printf("} // %s\n", n.Data)
+			s.emit(fmt.Sprintf("} // %s", n.Data))
+			s.lineBreak()
 		}
 	}
-	if false && n.Type == html.ElementNode {
-		fmt.Printf("} // %s\n", n.Data)
-	}
 	if n.NextSibling != nil {
-		printNodeText(n.NextSibling)
+		s.printNodeText(n.NextSibling)
 	}
+	s.Indent = oldIndent
+}
 
+func (s *state) lineBreak() {
+	if s.LineBreak || s.ParaBreak {
+		return
+	}
+	fmt.Printf("\n")
+	s.LineBreak = true
+}
+
+func (s *state) paraBreak() {
+	if s.ParaBreak {
+		return
+	}
+	if s.LineBreak {
+		fmt.Printf("\n")
+	} else {
+		fmt.Printf("\n\n")
+	}
+	s.ParaBreak = true
+}
+
+func (s *state) emit(st string) {
+	noNL := strings.ReplaceAll(st, "\n", " ")
+	noNL = strings.TrimSpace(noNL)
+	if noNL == "" {
+		return
+	}
+	fmt.Printf("%s ", noNL)
+	s.LineBreak = false
+	s.ParaBreak = false
 }

@@ -292,7 +292,7 @@ func Geminize(o Options, doc *goquery.Document, pageURL *url.URL) {
 	doc.Find("a[target]").Each(func(i int, s *goquery.Selection) {
 		s.RemoveAttr("target")
 	})
-	toKeep := doc.Find("body,div,p,table,tr,td,ul,li,a,h1,h2,h3,h4,h5,h6,i,b,u,strong,em,img")
+	toKeep := doc.Find("body,div,p,table,tr,td,ul,li,a,h1,h2,h3,h4,h5,h6,i,b,u,strong,em,img,br")
 	toKeep = toKeep.Union(toKeep.Parents())
 	doc.Find("*").NotSelection(toKeep).Remove()
 }
