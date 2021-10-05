@@ -1,6 +1,7 @@
 package rc4_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jrhy/sandbox/rc4"
@@ -58,19 +59,62 @@ func TestDrop3072HappyCase(t *testing.T) {
 	}
 }
 
+type UpCaseString string
+
+func ForBytes(b []byte) UpCaseString {
+	res := ""
+	for i := 0; i < len(b); i++ {
+		res += string(b[i] + 'A')
+	}
+	return UpCaseString(res)
+}
+
+func (ls UpCaseString) String() string {
+	return string(ls)
+}
+
+func (ls UpCaseString) Mod26() []byte {
+	res := make([]byte, len(string(ls)))
+	for i := 0; i < len(string(ls)); i++ {
+		s := string(ls)[i:(i + 1)]
+		c := s[0]
+		if strings.ToUpper(s) != s {
+			panic("string is not upper-case-letters-only")
+		}
+		res[i] = c - 'A'
+	}
+	return res
+}
+
+func TestUpCaseString(t *testing.T) {
+	require.Equal(t, "ABC", ForBytes([]byte{0, 1, 2}).String())
+	require.Equal(t, []byte{0, 1, 2}, UpCaseString("ABC").Mod26())
+}
+
 func TestLowModulus(t *testing.T) {
 	cases := []struct {
-		key            []byte
-		expectedStream []byte
+		key                string
+		expectedStream     string
+		plaintext          string
+		expectedCiphertext string
 	}{{
-		[]byte{0x1, 0x2, 0x3},
-		[]byte{0x13, 0x19},
+		key:                "KEYMASTER",
+		expectedStream:     "XOZMOZRHMOXXJ",
+		plaintext:          "THISISTHEDAWNINGOFTHEAGEOFAQARIUS",
+		expectedCiphertext: "DIURJEXBDEKGJKUMHYONXBKBDGOWHTIKW",
 	}}
 	for _, c := range cases {
-		r := rc4.New(c.key, 26).Drop(3072)
-		for _, e := range c.expectedStream {
-			g := r.Generate()
-			require.Equal(t, e, g)
+		r := rc4.New(UpCaseString(c.key).Mod26(), 26).Drop(3072)
+		g := make([]byte, len(c.expectedStream))
+		ec := make([]byte, len(c.expectedCiphertext))
+		for i := 0; i < len(c.expectedCiphertext); i++ {
+			curG := r.Generate()
+			if i < len(c.expectedStream) {
+				g[i] = curG
+			}
+			ec[i] = (curG + c.plaintext[i]) % 26
 		}
+		require.Equal(t, c.expectedStream, ForBytes(g).String())
+		require.Equal(t, c.expectedCiphertext, ForBytes(ec).String())
 	}
 }
