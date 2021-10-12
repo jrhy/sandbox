@@ -84,11 +84,11 @@ func main() {
 
 func scan(ctx context.Context, l *log.Logger, d *dynamodb.DynamoDB, segment, totalSegments int) {
 	input := dynamodb.ScanInput{
-		TableName:            aws.String("prod-coi"),
-		Segment:              aws.Int64(int64(segment)),
-		TotalSegments:        aws.Int64(int64(totalSegments)),
+		TableName:              aws.String(tableName),
+		Segment:                aws.Int64(int64(segment)),
+		TotalSegments:          aws.Int64(int64(totalSegments)),
 		ReturnConsumedCapacity: aws.String(dynamodb.ReturnConsumedCapacityTotal),
-		ProjectionExpression: aws.String("P,S"),
+		ProjectionExpression:   aws.String("P,S"),
 	}
 
 	var n int64
