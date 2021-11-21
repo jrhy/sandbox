@@ -40,7 +40,7 @@ enum Link {
     Stored(String),
 }
 
-struct Mast<'a> {
+pub struct Mast<'a> {
     size: u64,
     height: u8,
     root_link: Link,
@@ -85,7 +85,7 @@ fn default_layer(v: &i32, branch_factor: u16) -> u8 {
 }
 
 impl<'a> Mast<'a> {
-    fn newInMemory() -> Mast<'a> {
+    pub fn newInMemory() -> Mast<'a> {
         return Mast {
             size: 0,
             height: 0,
@@ -462,10 +462,6 @@ impl<'a> NodeStore<'a> for InMemoryNodeStore<'a> {
     }
 }
 */
-
-fn main() {
-    let t = Mast::newInMemory();
-}
 
 #[test]
 fn test_insert_accessibility() -> std::result::Result<(), MastError> {
