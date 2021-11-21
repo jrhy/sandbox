@@ -5,6 +5,7 @@ go 1.14
 require (
 	github.com/PuerkitoBio/goquery v1.7.1
 	github.com/andybalholm/cascadia v1.3.1 // indirect
+	github.com/apache/beam/sdks/v2 v2.34.0
 	github.com/aws/aws-sdk-go v1.41.3
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/jessevdk/go-flags v1.5.0
