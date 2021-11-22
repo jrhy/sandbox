@@ -107,6 +107,8 @@ name = "s3db"
 version = "0.1.0"
 dependencies = [
  "gob",
+ "serde",
+ "serde_derive",
 ]
 
 [[package]]
