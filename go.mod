@@ -8,8 +8,10 @@ require (
 	github.com/aws/aws-sdk-go v1.42.4
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/jessevdk/go-flags v1.5.0
+	github.com/jrhy/s3db v0.0.0-20211121211519-6748b36dc84a // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mdp/qrterminal/v3 v3.0.0
+	github.com/minio/minio v0.0.0-20211124000928-9ca25bd48f7f // indirect
 	github.com/niemeyer/pretty v0.0.0-20200227124842-a10e7caefd8e // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/stianeikeland/go-rpio v4.2.0+incompatible
