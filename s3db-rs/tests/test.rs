@@ -1,5 +1,3 @@
-use s3db;
-
 use std::ffi::CStr;
 
 #[test]
