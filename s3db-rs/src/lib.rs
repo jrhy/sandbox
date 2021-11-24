@@ -30,7 +30,7 @@ pub struct Root {
     #[serde(rename = "Source")]
     pub source: String,
     #[serde(rename = "MergeSources")]
-    pub merge_sources: std::collections::LinkedList<String>,
+    pub merge_sources: Option<std::collections::LinkedList<String>>,
     #[serde(rename = "MergeMode")]
     pub merge_mode: Option<u8>,
 }

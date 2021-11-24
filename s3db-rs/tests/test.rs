@@ -11,6 +11,7 @@ fn read_root() {
     };
 
     //{"MergeSources":["1MOlCL_yNhj9P1f2aGpmgoQ"],"Source":"","Root":{"Link":"lPSxUoQLXRzZAvYQzaBy-rQIBh_lIBRIy47ny41kQt4","Size":5125,"Height":5,"BranchFactor":4,"NodeFormat":"v1.1.5binary"}}
+    println!("got json: {}", json);
 
     let root: s3db::Root = serde_json::from_str(json).unwrap();
     println!("{:?}", root);
@@ -20,6 +21,6 @@ fn read_root() {
     assert_eq!("v1.1.5binary", &root.mast.node_format);
     assert_eq!(None, root.created);
     assert_eq!("", &root.source);
-    //assert_eq!(["1MOlCL_yNhj9P1f2aGpmgoQ"], root.merge_sources);
+    //assert_eq!(Some(["1MOlCL_yNhj9P1f2aGpmgoQ"]), root.merge_sources);
     //assert_eq!(Some("lPSxUoQLXRzZAvYQzaBy-rQIBh_lIBRIy47ny41kQt4"), &root.mast.link);
 }
