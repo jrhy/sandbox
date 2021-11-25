@@ -1,5 +1,5 @@
 use rusoto_core::Region;
-use rusoto_s3::{ListObjectsV2Request, S3Client, S3};
+use rusoto_s3::{S3Client, S3};
 
 use std::env;
 
@@ -12,30 +12,23 @@ async fn main() {
         .expect("endpoint is a valid Url");
     let custom_region = Region::Custom {
         name: region,
-        endpoint: endpoint,
+        endpoint,
     };
     let client = S3Client::new(custom_region);
-    let mut req: ListObjectsV2Request = Default::default();
-    req.bucket = "s3db-rs".to_owned();
-    req.prefix = Some("/root/current".to_owned());
+    let req = rusoto_s3::ListObjectsV2Request {
+        bucket: "s3db-rs".to_owned(),
+        prefix: Some("/root/current".to_owned()),
+        ..Default::default()
+    };
     match client.list_objects_v2(req).await {
         Ok(output) => {
             println!("roots:");
-            // match output.contents {
-            // Some(ref contents2) => contents2
-            // .iter()
-            // .for_each(|o| println!("  {} {}", o.key, o.last_modified)),
-            // None => (),
-            // }
-            match output.contents {
-                Some(ref contents) => contents
-                    .iter()
-                    .map(|o| (&o.key, &o.last_modified))
-                    .for_each(|t| match t {
-                        (Some(k), Some(l)) => println!("  {} {}", k, l),
-                        _ => (),
-                    }),
-                None => (),
+            if let Some(ref contents) = output.contents {
+                contents.iter().for_each(|o| {
+                    if let (Some(k), Some(l)) = (&o.key, &o.last_modified) {
+                        println!("  {} {}", k, l)
+                    }
+                })
             }
         }
         Err(error) => {
