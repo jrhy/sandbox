@@ -11,3 +11,8 @@ serde = { version = "1.0.130", features = ["derive"] }
 rusty-s3 = "0.2.0"
 reqwest = { version = "0.11.6", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
+aws-config = "0.0.25-alpha"
+aws-sdk-s3 = "0.0.25-alpha"
+tokio = { version = "1", features = ["full"] }
+
+

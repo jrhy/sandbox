@@ -1,8 +1,29 @@
+use aws_sdk_s3::{Client, Error};
 use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
+
 use std::env;
 use std::time::Duration;
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let shared_config = aws_config::load_from_env().await;
+    let client = Client::new(&shared_config);
+
+    let req = client.list_buckets();
+    let resp = req.send().await?;
+    let buckets = resp.buckets().unwrap_or_default();
+    let num_buckets = buckets.len();
+
+    for bucket in buckets {
+        println!("{}", bucket.name().unwrap_or_default());
+    }
+
+    println!();
+    println!("Found {} buckets", num_buckets);
+    Ok(())
+}
+
+fn omain() {
     // setting up a bucket
     let endpoint = env::var("S3_ENDPOINT")
         .expect("S3_ENDPOINT is set and a valid String")
