@@ -21,13 +21,22 @@ async fn main() {
     match client.list_objects_v2(req).await {
         Ok(output) => {
             println!("roots:");
-            output.contents.unwrap().iter().for_each(|o| {
-                println!(
-                    "  {} {}",
-                    o.key.as_ref().unwrap(),
-                    o.last_modified.as_ref().unwrap()
-                )
-            });
+            // match output.contents {
+            // Some(ref contents2) => contents2
+            // .iter()
+            // .for_each(|o| println!("  {} {}", o.key, o.last_modified)),
+            // None => (),
+            // }
+            match output.contents {
+                Some(ref contents) => contents
+                    .iter()
+                    .map(|o| (&o.key, &o.last_modified))
+                    .for_each(|t| match t {
+                        (Some(k), Some(l)) => println!("  {} {}", k, l),
+                        _ => (),
+                    }),
+                None => (),
+            }
         }
         Err(error) => {
             println!("Error: {:?}", error);
