@@ -21,7 +21,8 @@ fn main() {
     let credentials = Credentials::new(key, secret);
 
     let presigned_url_duration = Duration::from_secs(60);
-    let action = bucket.list_objects_v2(Some(&credentials));
+    let mut action = bucket.list_objects_v2(Some(&credentials));
+    action.query_mut().insert("prefix", "root/current");
     let url = action.sign(presigned_url_duration);
     println!("GET {}", url);
 
@@ -30,7 +31,33 @@ fn main() {
     println!("res: {}", res);
 
     let list = rusty_s3::actions::ListObjectsV2::parse_response(&res).unwrap();
-    list.contents
-        .iter()
-        .for_each(|contents| println!("  {} {}", contents.last_modified, contents.key));
+    if false {
+        list.contents
+            .iter()
+            .for_each(|contents| println!("  {} {}", contents.last_modified, contents.key));
+    } else {
+        let first = list.contents.first().map(|c| &c.key);
+        match first {
+            Some(key) => {
+                println!("first root: {}", key);
+                let url = bucket
+                    .get_object(Some(&credentials), key)
+                    .sign(presigned_url_duration);
+                let gob = http_client.get(url).send().unwrap().bytes().unwrap();
+                let root = s3db::read_root(gob).unwrap();
+                println!("read root: {:?}", root);
+
+                let url = bucket
+                    .get_object(
+                        Some(&credentials),
+                        &format!("node/{}", root.mast.link.unwrap()),
+                    )
+                    .sign(presigned_url_duration);
+                let gob = http_client.get(url).send().unwrap().bytes().unwrap();
+                let node = s3db::read_node(gob).unwrap();
+                println!("read node: {:?}", node);
+            }
+            None => println!("no roots to show"),
+        }
+    }
 }

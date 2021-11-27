@@ -1,10 +1,39 @@
+extern crate bytes;
 extern crate serde;
 use serde::Deserialize;
 
+use std::ffi::CStr;
 use std::os::raw::c_char;
 
 extern "C" {
-    pub fn ReadRoot(gob: *const u8, goblen: usize) -> *const c_char;
+    fn ReadNode(gob: *const u8, goblen: usize) -> *const c_char;
+    fn ReadRoot(gob: *const u8, goblen: usize) -> *const c_char;
+}
+
+fn read_json(
+    bytes: bytes::Bytes,
+    reader: unsafe extern "C" fn(*const u8, usize) -> *const c_char,
+) -> Result<String, std::io::Error> {
+    let json = unsafe {
+        let json_c = reader(bytes.as_ptr(), bytes.len());
+        if json_c.is_null() {
+            return Result::Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "unmarshal gob",
+            ));
+        }
+        CStr::from_ptr(json_c).to_str().unwrap()
+    };
+    println!("got json: {}", json);
+    Ok(json.to_owned())
+}
+
+pub fn read_node(bytes: bytes::Bytes) -> Result<Root, std::io::Error> {
+    Ok(serde_json::from_str(&read_json(bytes, ReadNode)?)?)
+}
+
+pub fn read_root(bytes: bytes::Bytes) -> Result<Root, std::io::Error> {
+    Ok(serde_json::from_str(&read_json(bytes, ReadRoot)?)?)
 }
 
 #[derive(Debug, Deserialize)]

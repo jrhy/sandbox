@@ -7,6 +7,12 @@ import (
 	"fmt"
 )
 
+type MastNode struct {
+	Key   []interface{}
+	Value []interface{}
+	Link  []interface{}
+}
+
 type MastRoot struct {
 	Link         string
 	Size         uint64
@@ -32,6 +38,10 @@ func Read(b []byte, i interface{}) (string, error) {
 		return "", fmt.Errorf("marshal: %w", err)
 	}
 	return string(s), nil
+}
+
+func ReadNode(b []byte) (string, error) {
+	return Read(b, &MastNode{})
 }
 
 func ReadRoot(b []byte) (string, error) {
