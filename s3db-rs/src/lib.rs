@@ -14,6 +14,7 @@ mod errors {
 }
 use errors::*;
 
+pub mod node_crypt;
 mod varint;
 
 #[derive(Debug, Deserialize)]
@@ -44,7 +45,7 @@ pub struct Root {
     pub merge_mode: Option<u8>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, PartialEq)]
 pub struct Node {
     pub links: Vec<String>,
 }

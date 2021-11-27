@@ -30,3 +30,13 @@ fn read_node() {
         node.links
     );
 }
+
+#[test]
+fn test_decrypt() {
+    let buffer = include_bytes!("PuLGxFL_mnxYtv6CkyWkBnbE5LRsCY1ZuIv9MQoKvgU");
+    let key = s3db::node_crypt::derive_key(b"keykeykey\n", &[]);
+    let decrypted = s3db::node_crypt::decrypt(&key, buffer);
+    let node = s3db::read_node(&bytes::Bytes::from(decrypted)).unwrap();
+    println!("node: {:?}", node);
+    assert_eq!(s3db::Node{links: Vec::new()}, node);
+}
