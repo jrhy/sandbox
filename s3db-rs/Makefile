@@ -4,7 +4,7 @@ target/libgob2json.a: go_from_rust/libgob2json.go
 	cd go_from_rust && ${MAKE}
 
 populate-local-s3db: start-minio-server .setup_s3db
-	mc ls myminio/s3db-rs || mb myminio/s3db-rs
+	mc ls myminio/s3db-rs || mc mb myminio/s3db-rs
 	AWS_ACCESS_KEY_ID=minioadmin \
 	AWS_SECRET_ACCESS_KEY=minioadmin \
 	AWS_REGION=dummy \
@@ -23,12 +23,12 @@ show-env:
 		S3_ENDPOINT=http://127.0.0.1:9091
 
 .setup_s3db:
-	go install github.com/jrhy/s3db/cmd/s3db
+	go install -v github.com/jrhy/s3db/cmd/s3db
 	touch .setup_s3db
 
 .setup_minio:
-	go install github.com/minio/minio
-	go install github.com/minio/mc
+	go install -v github.com/minio/minio
+	go install -v github.com/minio/mc
 	mktemp -d minio-XXXXXXXXXXX > .minio_dir
 	touch .setup_minio
 
