@@ -64,7 +64,6 @@ fn read_json(
         }
         CStr::from_ptr(json_c).to_str().unwrap()
     };
-    println!("got json: {}", json);
     Ok(json.to_owned())
 }
 
@@ -92,7 +91,6 @@ fn read_v115_array(bytes: &bytes::Bytes) -> Result<(usize, Vec<bytes::Bytes>)> {
     };
     let i: usize = usize::try_from(i).chain_err(|| "way too many entries")?;
     c += i;
-    println!("reading {} entries...\n", entry);
     let mut res = Vec::<bytes::Bytes>::new();
     while entry > 0 {
         let (key_bytes_u64, i) = varint::read(&bytes.slice(c..));
