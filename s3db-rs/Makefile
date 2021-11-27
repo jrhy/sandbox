@@ -12,9 +12,9 @@ S3DB=\
 
 populate-local-s3db: start-minio-server .setup_s3db .key
 	mc ls myminio/s3db-rs || mc mb myminio/s3db-rs
-	${S3DB} -b s3db-rs set foo=bar
+	${S3DB} -v -b s3db-rs set `let a=0 ; while [ $$a -lt 5000 ] ; do echo foo$$a=bar ; let a=a+1 ; done `
 	mc ls myminio/s3db-rs-encrypted || mc mb myminio/s3db-rs-encrypted
-	${S3DB} -b s3db-rs-encrypted -k .key set foo=bar
+	${S3DB} -v -b s3db-rs-encrypted -k .key set foo=bar
 
 start-minio-server: .setup_minio
 	minio server --address 127.0.0.1:9091 --console-address 127.0.0.1:9092 $$(cat .minio_dir) &

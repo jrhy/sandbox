@@ -43,19 +43,36 @@ fn main() {
                 let url = bucket
                     .get_object(Some(&credentials), key)
                     .sign(presigned_url_duration);
-                let gob = http_client.get(url).send().unwrap().bytes().unwrap();
-                let root = s3db::read_root(gob).unwrap();
+                let bytes = http_client.get(url).send().unwrap().bytes().unwrap();
+                let root = s3db::read_root(&bytes).unwrap();
                 println!("read root: {:?}", root);
 
-                let url = bucket
-                    .get_object(
-                        Some(&credentials),
-                        &format!("node/{}", root.mast.link.unwrap()),
-                    )
-                    .sign(presigned_url_duration);
-                let gob = http_client.get(url).send().unwrap().bytes().unwrap();
-                let node = s3db::read_node(gob).unwrap();
-                println!("read node: {:?}", node);
+                fn dump_tree(
+                    key: &str,
+                    bucket: &Bucket,
+                    credentials: &Credentials,
+                    http_client: &reqwest::blocking::Client,
+                    duration: Duration,
+                ) {
+                    let url = bucket
+                        .get_object(Some(credentials), &format!("node/{}", key))
+                        .sign(duration);
+                    let bytes = http_client.get(url).send().unwrap().bytes().unwrap();
+                    let node = s3db::read_node(&bytes).unwrap();
+                    println!("read node: {:?}", node);
+                    for ref l in node.links {
+                        if !l.is_empty() {
+                            dump_tree(l, bucket, credentials, http_client, duration)
+                        }
+                    }
+                }
+                dump_tree(
+                    &root.mast.link.unwrap(),
+                    &bucket,
+                    &credentials,
+                    &http_client,
+                    presigned_url_duration,
+                );
             }
             None => println!("no roots to show"),
         }

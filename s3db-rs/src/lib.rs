@@ -1,40 +1,20 @@
 extern crate bytes;
 extern crate serde;
 use serde::Deserialize;
+use std::convert::TryFrom;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-extern "C" {
-    fn ReadNode(gob: *const u8, goblen: usize) -> *const c_char;
-    fn ReadRoot(gob: *const u8, goblen: usize) -> *const c_char;
-}
+#[macro_use]
+extern crate error_chain;
 
-fn read_json(
-    bytes: bytes::Bytes,
-    reader: unsafe extern "C" fn(*const u8, usize) -> *const c_char,
-) -> Result<String, std::io::Error> {
-    let json = unsafe {
-        let json_c = reader(bytes.as_ptr(), bytes.len());
-        if json_c.is_null() {
-            return Result::Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "unmarshal gob",
-            ));
-        }
-        CStr::from_ptr(json_c).to_str().unwrap()
-    };
-    println!("got json: {}", json);
-    Ok(json.to_owned())
+mod errors {
+    error_chain! {}
 }
+use errors::*;
 
-pub fn read_node(bytes: bytes::Bytes) -> Result<Root, std::io::Error> {
-    Ok(serde_json::from_str(&read_json(bytes, ReadNode)?)?)
-}
-
-pub fn read_root(bytes: bytes::Bytes) -> Result<Root, std::io::Error> {
-    Ok(serde_json::from_str(&read_json(bytes, ReadRoot)?)?)
-}
+mod varint;
 
 #[derive(Debug, Deserialize)]
 pub struct MastRoot {
@@ -62,4 +42,75 @@ pub struct Root {
     pub merge_sources: Option<std::collections::LinkedList<String>>,
     #[serde(rename = "MergeMode")]
     pub merge_mode: Option<u8>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Node {
+    pub links: Vec<String>,
+}
+
+extern "C" {
+    fn ReadRoot(gob: *const u8, goblen: usize) -> *const c_char;
+}
+
+fn read_json(
+    bytes: &bytes::Bytes,
+    reader: unsafe extern "C" fn(*const u8, usize) -> *const c_char,
+) -> Result<String> {
+    let json = unsafe {
+        let json_c = reader(bytes.as_ptr(), bytes.len());
+        if json_c.is_null() {
+            bail!("unmarshal gob")
+        }
+        CStr::from_ptr(json_c).to_str().unwrap()
+    };
+    println!("got json: {}", json);
+    Ok(json.to_owned())
+}
+
+pub fn read_node(bytes: &bytes::Bytes) -> Result<Node> {
+    let mut c: usize = 0;
+    let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read keys")?;
+    c += nc;
+    let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read values")?;
+    c += nc;
+
+    let (_, links_bytes) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read links")?;
+    let mut links = Vec::<String>::new();
+    for l in links_bytes.iter() {
+        let s = String::from_utf8(Vec::from(l.as_ref())).chain_err(|| "link")?;
+        links.push(s);
+    }
+    Ok(Node { links })
+}
+
+fn read_v115_array(bytes: &bytes::Bytes) -> Result<(usize, Vec<bytes::Bytes>)> {
+    let mut c: usize = 0;
+    let (mut entry, i): (u64, i32) = varint::read(bytes);
+    if i < 0 {
+        bail!("truncated before entries")
+    };
+    let i: usize = usize::try_from(i).chain_err(|| "way too many entries")?;
+    c += i;
+    println!("reading {} entries...\n", entry);
+    let mut res = Vec::<bytes::Bytes>::new();
+    while entry > 0 {
+        let (key_bytes_u64, i) = varint::read(&bytes.slice(c..));
+        let key_bytes = usize::try_from(key_bytes_u64).chain_err(|| "too many {}")?;
+        if i < 0 {
+            bail!("node truncated in entry length")
+        }
+        let i: usize = usize::try_from(i).chain_err(|| "way too many {}")?;
+        if c + i + key_bytes > bytes.len() {
+            bail!("node truncated in entries")
+        }
+        res.push(bytes.slice(c + i..c + i + key_bytes));
+        c += i + key_bytes;
+        entry -= 1;
+    }
+    Ok((c, res))
+}
+
+pub fn read_root(bytes: &bytes::Bytes) -> Result<Root> {
+    serde_json::from_str(&read_json(bytes, ReadRoot).chain_err(|| "read")?).chain_err(|| "json")
 }
