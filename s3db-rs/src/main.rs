@@ -58,7 +58,7 @@ fn main() {
                         .get_object(Some(credentials), &format!("node/{}", key))
                         .sign(duration);
                     let bytes = http_client.get(url).send().unwrap().bytes().unwrap();
-                    let node = s3db::read_node(&bytes).unwrap();
+                    let node = s3db::read_node(&bytes, None).unwrap();
                     println!("read node: {:?}", node);
                     for ref l in node.links {
                         if !l.is_empty() {
@@ -76,5 +76,5 @@ fn main() {
             }
             None => println!("no roots to show"),
         }
-    }
+    };
 }
