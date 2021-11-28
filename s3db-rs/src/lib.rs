@@ -68,7 +68,14 @@ fn read_json(
     Ok(json.to_owned())
 }
 
-pub fn read_node(bytes: &bytes::Bytes) -> Result<Node> {
+pub fn read_node(bytes: &bytes::Bytes, key: Option<&[u8]>) -> Result<Node> {
+    let decrypted: Option<bytes::Bytes> =
+        key.map(|key| bytes::Bytes::from(node_crypt::decrypt(key, bytes)));
+    let bytes = match decrypted {
+        Some(ref buf) => buf,
+        None => bytes,
+    };
+
     let mut c: usize = 0;
     let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read keys")?;
     c += nc;
