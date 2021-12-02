@@ -1,10 +1,3 @@
-extern crate sodiumoxide;
-
-// TODO bring in a rust-native argon2
-use sodiumoxide::crypto::pwhash::argon2id13;
-use sodiumoxide::crypto::*;
-use sodiumoxide::*;
-
 use xsalsa20poly1305::aead::{generic_array::GenericArray, Aead, NewAead};
 use xsalsa20poly1305::XSalsa20Poly1305;
 
@@ -17,20 +10,17 @@ const NONCE_LEN: usize = 24;
 const KEY_LEN: usize = 32;
 const MAC_LEN: usize = 16;
 const DERIVEKEY_SALT_LEN: usize = 16;
-const DERIVEKEY_OPS_LIMIT: argon2id13::OpsLimit = argon2id13::OpsLimit(1);
-const DERIVEKEY_MEM_LIMIT: argon2id13::MemLimit = argon2id13::MemLimit(8192);
+const DERIVEKEY_OPS_LIMIT: u32 = 1;
+const DERIVEKEY_MEM_LIMIT: u32 = 8192;
 
 pub fn keyed_nonce_size(key: &[u8], plaintext: &[u8], desired_size: usize) -> Result<Vec<u8>> {
-    let mut state = crypto::generichash::State::new(Some(desired_size), None).unwrap();
-    state.update(plaintext).unwrap();
-    state.update(key).unwrap();
-    let digest = state.finalize().unwrap();
-    let slice = digest.as_ref();
-    if slice.len() == desired_size {
-        Ok(slice.to_owned())
-    } else {
-        Err(format!("expected nonce len {}, got {}", desired_size, slice.len()).into())
-    }
+    use blake2::digest::{Update, VariableOutput};
+    use blake2::VarBlake2b;
+
+    let mut hasher = VarBlake2b::new(desired_size).unwrap();
+    hasher.update(plaintext);
+    hasher.update(key);
+    Ok(hasher.finalize_boxed().into())
 }
 
 pub fn keyed_nonce(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
@@ -66,27 +56,35 @@ pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     }
     let nonce = GenericArray::from_slice(&ciphertext[0..NONCE_LEN]);
     let ciphertext = &ciphertext[NONCE_LEN..ciphertext.len()];
-
     let key = GenericArray::from_slice(key);
     XSalsa20Poly1305::new(key)
         .decrypt(nonce, ciphertext)
-        .chain_err(|| "decryption")
+        .chain_err(|| "decrypt")
 }
 
 pub fn derive_key(master_key: &[u8], context: &[u8]) -> Result<Vec<u8>> {
-    let encoded = base64::encode(master_key, base64::Variant::Original);
-    let pw = encoded.as_bytes();
-    let salt = match argon2id13::Salt::from_slice(&keyed_nonce_size(
-        master_key,
-        context,
-        DERIVEKEY_SALT_LEN,
-    )?) {
-        Some(salt) => salt,
-        None => return Err("derive_key no salt".into()),
+    use argon2::{Config, ThreadMode, Variant, Version};
+    let mut combined: Vec<u8> = context.into();
+    let mut vec: Vec<u8> = master_key.into();
+    combined.append(&mut vec);
+
+    let salt = &keyed_nonce_size(&combined, &[], DERIVEKEY_SALT_LEN)?;
+    let config = Config {
+        variant: Variant::Argon2id,
+        version: Version::Version13,
+        mem_cost: DERIVEKEY_MEM_LIMIT / 1024,
+        time_cost: DERIVEKEY_OPS_LIMIT,
+        lanes: 1,
+        thread_mode: ThreadMode::Sequential,
+        secret: &[],
+        ad: &[],
+        hash_length: KEY_LEN as u32,
     };
-    let mut k = [0; secretbox::KEYBYTES];
-    match argon2id13::derive_key(&mut k, pw, &salt, DERIVEKEY_OPS_LIMIT, DERIVEKEY_MEM_LIMIT) {
-        Ok(derived) => Ok(derived.to_owned()),
+
+    let pw = base64::encode(&combined);
+    let pw = pw.as_bytes();
+    match argon2::hash_raw(pw, salt, &config) {
+        Ok(derived) => Ok(derived),
         Err(x) => return Err(format!("derive_key failure: {:?}", x).into()),
     }
 }
@@ -97,49 +95,41 @@ mod tests {
 
     #[test]
     fn nonce_reference() {
-        let key = base64::decode(
-            "UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=",
-            base64::Variant::Original,
-        )
-        .unwrap();
+        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
         assert_eq!(
             "DuO9oCKfeLUrcIImvVH88Y67un3CFnRw",
-            base64::encode(
-                &keyed_nonce(&key, b"asdf").unwrap(),
-                base64::Variant::Original
-            )
+            base64::encode(&keyed_nonce(&key, b"asdf").unwrap())
+        )
+    }
+
+    #[test]
+    fn derive_reference() {
+        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
+        let derived = derive_key(&key, b"foo").unwrap();
+        assert_eq!(
+            "7a0p0qOL3IqOBMPwjUlGokjz8FNDQDedZRXom5ii/Ls=",
+            base64::encode(&derived)
         )
     }
 
     #[test]
     fn encrypt_reference() {
-        let key = base64::decode(
-            "UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=",
-            base64::Variant::Original,
-        )
-        .unwrap();
+        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
         assert_eq!(
             "DuO9oCKfeLUrcIImvVH88Y67un3CFnRwhZOvsmKMKFjTuKYsiLv0bwSBbjo=",
-            base64::encode(&encrypt(&key, b"asdf").unwrap(), base64::Variant::Original)
+            base64::encode(&encrypt(&key, b"asdf").unwrap())
         )
     }
 
     #[test]
     fn decrypt_reference() {
-        let key = base64::decode(
-            "UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=",
-            base64::Variant::Original,
-        )
-        .unwrap();
+        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
         assert_eq!(
             b"asdf".to_vec(),
             decrypt(
                 &key,
-                &base64::decode(
-                    "l9+HCAKhVy0HhB9QLX07wX3QXJ0unVyUnhw1LktsDQ4cOzeCIhDrQk/RYVo=",
-                    base64::Variant::Original
-                )
-                .unwrap()
+                &base64::decode("l9+HCAKhVy0HhB9QLX07wX3QXJ0unVyUnhw1LktsDQ4cOzeCIhDrQk/RYVo=")
+                    .unwrap()
             )
             .unwrap()
         )
