@@ -1,80 +1,235 @@
+use bytes::Bytes;
 use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
 use std::env;
+use std::io::Write;
+use std::string::ToString;
 use std::time::Duration;
 
-fn main() {
+use structopt::StructOpt;
+
+#[macro_use]
+extern crate error_chain;
+
+// We'll put our errors in an `errors` module, and other modules in
+// this crate will `use errors::*;` to get access to everything
+// `error_chain!` creates.
+mod errors {
+    // Create the Error, ErrorKind, ResultExt, and Result types
+    error_chain! {}
+}
+
+// This only gives access within this module. Make this `pub use errors::*;`
+// instead if the types must be accessible from other modules (e.g., within
+// a `links` section).
+use errors::*;
+
+/// Ensure S3_ENDPOINT, AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY are set.
+#[derive(StructOpt)]
+struct Cli {
+    /// name of S3 bucket to use
+    #[structopt(short = "b")]
+    bucket: String,
+    /// prefix of the DB (in bucket)
+    #[structopt(short = "p")]
+    prefix: Option<String>,
+    /// decryption key file path
+    #[structopt(short = "k", parse(from_os_str))]
+    key: Option<std::path::PathBuf>,
+    #[structopt(subcommand)]
+    cmd: Command,
+}
+
+#[derive(StructOpt)]
+enum Command {
+    /// Backup the current version only, for now (no history)
+    Backup {
+        /// Which versions to include: current (default), all
+        #[structopt(long = "scope", default_value = "current")]
+        scope: BackupScope,
+        /// destination path
+        #[structopt(short = "d", parse(from_os_str))]
+        dest: Option<std::path::PathBuf>,
+    },
+}
+
+enum BackupScope {
+    Current,
+    All,
+}
+impl std::str::FromStr for BackupScope {
+    type Err = String;
+    fn from_str(s: &str) -> std::result::Result<Self, String> {
+        match s.to_ascii_lowercase().as_ref() {
+            "current" => Ok(BackupScope::Current),
+            "all" => Ok(BackupScope::All),
+            _ => Err("unknown BackupScope".to_owned()),
+        }
+    }
+}
+
+quick_main!(run);
+
+fn run() -> Result<()> {
+    let args = Cli::from_args();
+
     // setting up a bucket
     let endpoint = env::var("S3_ENDPOINT")
-        .expect("S3_ENDPOINT is set and a valid String")
+        .chain_err(|| "S3_ENDPOINT must be set")?
         .parse()
-        .expect("endpoint is a valid Url");
+        .chain_err(|| "S3_ENDPOINT endpoint must be a valid URL")?;
     let path_style = UrlStyle::Path;
-    let name = "s3db-rs";
-    let region = env::var("AWS_REGION").expect("AWS_REGION is set and a valid String");
-    let bucket =
-        Bucket::new(endpoint, path_style, name, region).expect("Url has a valid scheme and host");
+    let region = env::var("AWS_REGION").chain_err(|| "AWS_REGION must be set")?;
+    let bucket = Bucket::new(endpoint, path_style, args.bucket, region)
+        .chain_err(|| "URL has a valid scheme and host")?;
 
     // setting up the credentials
-    let key = env::var("AWS_ACCESS_KEY_ID").expect("AWS_ACCESS_KEY_ID is set and a valid String");
-    let secret =
-        env::var("AWS_SECRET_ACCESS_KEY").expect("AWS_ACCESS_KEY_ID is set and a valid String");
+    let key = env::var("AWS_ACCESS_KEY_ID").chain_err(|| "AWS_ACCESS_KEY_ID must be set")?;
+    let secret = env::var("AWS_SECRET_ACCESS_KEY").chain_err(|| "AWS_ACCESS_KEY_ID must be set")?;
     let credentials = Credentials::new(key, secret);
+
+    let node_key: Option<Bytes> = match args.key {
+        Some(path) => {
+            let bytes = Bytes::from(std::fs::read(path).chain_err(|| "read_key")?);
+            Some(Bytes::from(
+                s3db::node_crypt::derive_key(&bytes, &[]).chain_err(|| "derive_key")?,
+            ))
+        }
+        None => None,
+    };
 
     let presigned_url_duration = Duration::from_secs(60);
     let mut action = bucket.list_objects_v2(Some(&credentials));
-    action.query_mut().insert("prefix", "root/current");
+    action.query_mut().insert(
+        "prefix",
+        format!(
+            "{}/root/current",
+            args.prefix.as_ref().unwrap_or(&"".to_owned())
+        ),
+    );
     let url = action.sign(presigned_url_duration);
     println!("GET {}", url);
 
     let http_client = reqwest::blocking::Client::new();
-    let res = http_client.get(url).send().unwrap().text().unwrap();
+    let res = http_client
+        .get(url)
+        .send()
+        .chain_err(|| "HTTP GET")?
+        .text()
+        .chain_err(|| "parse S3 list")?;
     println!("res: {}", res);
 
-    let list = rusty_s3::actions::ListObjectsV2::parse_response(&res).unwrap();
-    if false {
-        list.contents
-            .iter()
-            .for_each(|contents| println!("  {} {}", contents.last_modified, contents.key));
-    } else {
-        let first = list.contents.first().map(|c| &c.key);
-        match first {
-            Some(key) => {
-                println!("first root: {}", key);
-                let url = bucket
-                    .get_object(Some(&credentials), key)
-                    .sign(presigned_url_duration);
-                let bytes = http_client.get(url).send().unwrap().bytes().unwrap();
-                let root = s3db::read_root(&bytes).unwrap();
-                println!("read root: {:?}", root);
-
-                fn dump_tree(
-                    key: &str,
-                    bucket: &Bucket,
-                    credentials: &Credentials,
-                    http_client: &reqwest::blocking::Client,
-                    duration: Duration,
-                ) {
+    let list = rusty_s3::actions::ListObjectsV2::parse_response(&res)
+        .chain_err(|| "parse ListObjectsV2 response")?;
+    match args.cmd {
+        Command::Backup { dest, scope } => {
+            match scope {
+                BackupScope::All => return Err("'--scope all' is not implemented".into()),
+                BackupScope::Current => (),
+            };
+            let first_root_key = list.contents.first().map(|c| &c.key);
+            match first_root_key {
+                Some(root_key) => {
+                    // TODO: embrce PathBuf
+                    println!("first root: {}", root_key);
                     let url = bucket
-                        .get_object(Some(credentials), &format!("node/{}", key))
-                        .sign(duration);
-                    let bytes = http_client.get(url).send().unwrap().bytes().unwrap();
-                    let node = s3db::read_node(&bytes, None).unwrap();
-                    println!("read node: {:?}", node);
-                    for ref l in node.links {
-                        if !l.is_empty() {
-                            dump_tree(l, bucket, credentials, http_client, duration)
-                        }
+                        .get_object(Some(&credentials), root_key)
+                        .sign(presigned_url_duration);
+                    let response = http_client.get(url).send().unwrap();
+
+                    if !response.status().is_success() {
+                        return Err(format!(
+                            "failed loading root {}: received HTTP {} from S3",
+                            root_key,
+                            response.status()
+                        )
+                        .into());
                     }
+                    let bytes = response.bytes().unwrap();
+                    let root = s3db::read_root(&bytes).unwrap();
+                    println!("read root: {:?}", root);
+                    let node_prefix = args
+                        .prefix
+                        .as_ref()
+                        .map(|p| format!("{}/node/", p))
+                        .unwrap_or_else(|| "node/".to_owned());
+
+                    fn dump_tree(
+                        key: &str, // XXX this is actually a link name, not an S3 key
+                        bucket: &Bucket,
+                        credentials: &Credentials,
+                        http_client: &reqwest::blocking::Client,
+                        duration: Duration,
+                        node_prefix: &str,
+                        node_key: &Option<Bytes>,
+                        output_dir: &str,
+                    ) -> Result<()> {
+                        let path = format!("{}{}", node_prefix, key);
+                        let url = bucket.get_object(Some(credentials), &path).sign(duration);
+                        println!("GET {}", path);
+                        let response = http_client.get(url).send().unwrap();
+                        if !response.status().is_success() {
+                            return Err(format!(
+                                "failed loading node {}: received HTTP {} from S3",
+                                key,
+                                response.status()
+                            )
+                            .into());
+                        }
+                        let bytes = response.bytes().unwrap();
+                        let file_path = format!("{}/{}", output_dir, path);
+                        println!("writing to {}", file_path);
+                        let mut f = std::fs::File::create(file_path).unwrap();
+                        f.write(&bytes).unwrap();
+                        let node = s3db::read_node(&bytes, node_key).unwrap();
+                        println!("read node: {:?}", node);
+                        for ref l in node.links {
+                            if !l.is_empty() {
+                                dump_tree(
+                                    l,
+                                    bucket,
+                                    credentials,
+                                    http_client,
+                                    duration,
+                                    node_prefix,
+                                    node_key,
+                                    output_dir,
+                                )
+                                .chain_err(|| format!("dump {}", l))?
+                            }
+                        }
+                        Ok(())
+                    }
+                    dump_tree(
+                        &root.mast.link.unwrap_or_else(|| "".to_owned()),
+                        &bucket,
+                        &credentials,
+                        &http_client,
+                        presigned_url_duration,
+                        &node_prefix,
+                        &node_key,
+                        dest.as_ref()
+                            .map(|x| x.to_str().unwrap())
+                            .unwrap_or(&".".to_owned()),
+                    )?;
+                    let root_path = format!(
+                        "{}/{}",
+                        dest.as_ref()
+                            .map(|x| x.to_str().unwrap())
+                            .unwrap_or(&".".to_owned()),
+                        root_key
+                    );
+                    // TODO: put filename deets in chained error message
+                    println!("writing to {}", root_path);
+                    let mut f =
+                        std::fs::File::create(root_path).chain_err(|| "creating local root")?;
+                    f.write(&bytes).chain_err(|| "writing root")?;
+                    Ok(())
                 }
-                dump_tree(
-                    &root.mast.link.unwrap(),
-                    &bucket,
-                    &credentials,
-                    &http_client,
-                    presigned_url_duration,
-                );
+                None => {
+                    println!("no roots to show");
+                    Ok(())
+                }
             }
-            None => println!("no roots to show"),
         }
-    };
+    }
 }

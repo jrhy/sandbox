@@ -1,7 +1,9 @@
+use bytes::Bytes;
+
 #[test]
 fn read_root() {
     let buffer = include_bytes!("1MOlCL_1nv7fJlQpPVyQnxU");
-    let root = s3db::read_root(&bytes::Bytes::from_static(buffer)).unwrap();
+    let root = s3db::read_root(&Bytes::from_static(buffer)).unwrap();
 
     //{"MergeSources":["1MOlCL_yNhj9P1f2aGpmgoQ"],"Source":"","Root":{"Link":"lPSxUoQLXRzZAvYQzaBy-rQIBh_lIBRIy47ny41kQt4","Size":5125,"Height":5,"BranchFactor":4,"NodeFormat":"v1.1.5binary"}}
 
@@ -20,7 +22,7 @@ fn read_root() {
 #[test]
 fn read_node() {
     let buffer = include_bytes!("YKPRjxKOEttHaAN97ccSrsIT6-CFNj9znrP-4x8-dhE");
-    let node = s3db::read_node(&bytes::Bytes::from_static(buffer), None).unwrap();
+    let node = s3db::read_node(&Bytes::from_static(buffer), &None).unwrap();
     println!("node: {:?}", node);
     assert_eq!(
         vec!(
@@ -33,10 +35,10 @@ fn read_node() {
 
 #[test]
 fn test_decrypt() {
-    let buffer = include_bytes!("PuLGxFL_mnxYtv6CkyWkBnbE5LRsCY1ZuIv9MQoKvgU");
-    let key = s3db::node_crypt::derive_key(b"keykeykey\n", &[]);
-    let bytes = bytes::Bytes::from(buffer.as_ref());
-    let node = s3db::read_node(&bytes, Some(&key)).unwrap();
+    let buffer = include_bytes!("q-QDbW3Hr_4sIQU8FtE3D2mlGRbS9VPpnTjlIFvN61g");
+    let key = Bytes::from(s3db::node_crypt::derive_key(b"keykeykey\n", &[]).unwrap());
+    let bytes = Bytes::from(buffer.as_ref());
+    let node = s3db::read_node(&bytes, &Some(key)).unwrap();
     println!("node: {:?}", node);
     assert_eq!(s3db::Node { links: Vec::new() }, node);
 }

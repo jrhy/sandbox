@@ -40,10 +40,6 @@ func Read(b []byte, i interface{}) (string, error) {
 	return string(s), nil
 }
 
-func ReadNode(b []byte) (string, error) {
-	return Read(b, &MastNode{})
-}
-
 func ReadRoot(b []byte) (string, error) {
 	return Read(b, &CRDTRoot{})
 }

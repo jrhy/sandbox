@@ -1,5 +1,6 @@
 extern crate bytes;
 extern crate serde;
+use bytes::Bytes;
 use serde::Deserialize;
 use std::convert::TryFrom;
 
@@ -55,7 +56,7 @@ extern "C" {
 }
 
 fn read_json(
-    bytes: &bytes::Bytes,
+    bytes: &Bytes,
     reader: unsafe extern "C" fn(*const u8, usize) -> *const c_char,
 ) -> Result<String> {
     let json = unsafe {
@@ -68,13 +69,16 @@ fn read_json(
     Ok(json.to_owned())
 }
 
-pub fn read_node(bytes: &bytes::Bytes, key: Option<&[u8]>) -> Result<Node> {
-    let decrypted: Option<bytes::Bytes> =
-        key.map(|key| bytes::Bytes::from(node_crypt::decrypt(key, bytes)));
-    let bytes = match decrypted {
-        Some(ref buf) => buf,
+pub fn read_node(bytes: &Bytes, key: &Option<Bytes>) -> Result<Node> {
+    let decrypted: Bytes;
+    let bytes = match key {
+        Some(ref key) => {
+            decrypted = Bytes::from(node_crypt::decrypt(key.as_ref(), bytes)?);
+            &decrypted
+        }
         None => bytes,
     };
+    println!("reading {}-byte node", bytes.len());
 
     let mut c: usize = 0;
     let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read keys")?;
@@ -91,7 +95,7 @@ pub fn read_node(bytes: &bytes::Bytes, key: Option<&[u8]>) -> Result<Node> {
     Ok(Node { links })
 }
 
-fn read_v115_array(bytes: &bytes::Bytes) -> Result<(usize, Vec<bytes::Bytes>)> {
+fn read_v115_array(bytes: &Bytes) -> Result<(usize, Vec<Bytes>)> {
     let mut c: usize = 0;
     let (mut entry, i): (u64, i32) = varint::read(bytes);
     if i < 0 {
@@ -99,7 +103,7 @@ fn read_v115_array(bytes: &bytes::Bytes) -> Result<(usize, Vec<bytes::Bytes>)> {
     };
     let i: usize = usize::try_from(i).chain_err(|| "way too many entries")?;
     c += i;
-    let mut res = Vec::<bytes::Bytes>::new();
+    let mut res = Vec::<Bytes>::new();
     while entry > 0 {
         let (key_bytes_u64, i) = varint::read(&bytes.slice(c..));
         let key_bytes = usize::try_from(key_bytes_u64).chain_err(|| "too many {}")?;
@@ -117,6 +121,6 @@ fn read_v115_array(bytes: &bytes::Bytes) -> Result<(usize, Vec<bytes::Bytes>)> {
     Ok((c, res))
 }
 
-pub fn read_root(bytes: &bytes::Bytes) -> Result<Root> {
+pub fn read_root(bytes: &Bytes) -> Result<Root> {
     serde_json::from_str(&read_json(bytes, ReadRoot).chain_err(|| "read")?).chain_err(|| "json")
 }
