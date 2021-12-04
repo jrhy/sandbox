@@ -78,7 +78,7 @@ pub fn read_node(bytes: &Bytes, key: &Option<Bytes>) -> Result<Node> {
         }
         None => bytes,
     };
-    println!("reading {}-byte node", bytes.len());
+    //println!("reading {}-byte node", bytes.len());
 
     let mut c: usize = 0;
     let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read keys")?;
