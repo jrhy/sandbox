@@ -84,7 +84,7 @@ fn run() -> Result<()> {
         .chain_err(|| "S3_ENDPOINT endpoint must be a valid URL")?;
     let path_style = UrlStyle::Path;
     let region = env::var("AWS_REGION").chain_err(|| "AWS_REGION must be set")?;
-    let bucket = Bucket::new(endpoint, path_style, args.bucket, region)
+    let bucket = Bucket::new(endpoint, path_style, args.bucket.to_owned(), region)
         .chain_err(|| "URL has a valid scheme and host")?;
 
     // setting up the credentials
@@ -92,8 +92,8 @@ fn run() -> Result<()> {
     let secret = env::var("AWS_SECRET_ACCESS_KEY").chain_err(|| "AWS_ACCESS_KEY_ID must be set")?;
     let credentials = Credentials::new(key, secret);
 
-    let node_key: Option<Bytes> = match args.key {
-        Some(path) => {
+    let decryption_key: Option<Bytes> = match args.key {
+        Some(ref path) => {
             let bytes = Bytes::from(std::fs::read(path).chain_err(|| "read_key")?);
             Some(Bytes::from(
                 s3db::node_crypt::derive_key(&bytes, &[]).chain_err(|| "derive_key")?,
@@ -103,92 +103,108 @@ fn run() -> Result<()> {
     };
 
     let presigned_url_duration = Duration::from_secs(60);
-    let mut action = bucket.list_objects_v2(Some(&credentials));
-    action.query_mut().insert(
-        "prefix",
-        format!(
-            "{}/root/current",
-            args.prefix.as_ref().unwrap_or(&"".to_owned())
-        ),
-    );
-    let url = action.sign(presigned_url_duration);
-    //println!("GET {}", url);
+    let mut next: Option<String> = None;
+    loop {
+        let mut action = bucket.list_objects_v2(Some(&credentials));
+        if let Some(ref next) = next {
+            action.query_mut().insert("continuation-token", next);
+        };
+        let (prefix, dest) = match args.cmd {
+            Command::Backup {
+                ref dest,
+                scope: BackupScope::Current,
+            } => (
+                format!(
+                    "{}/root/current",
+                    args.prefix.as_ref().unwrap_or(&"".to_owned())
+                ),
+                dest,
+            ),
+            Command::Backup {
+                ref dest,
+                scope: BackupScope::All,
+            } => (
+                format!("{}/root", args.prefix.as_ref().unwrap_or(&"".to_owned())),
+                dest,
+            ),
+        };
+        action.query_mut().insert("prefix", prefix);
+        let url = action.sign(presigned_url_duration);
+        //println!("GET {}", url);
 
-    let http_client = reqwest::blocking::Client::new();
-    let res = http_client
-        .get(url)
-        .send()
-        .chain_err(|| "HTTP GET")?
-        .text()
-        .chain_err(|| "parse S3 list")?;
-    //println!("res: {}", res);
+        let http_client = reqwest::blocking::Client::new();
+        let res = http_client
+            .get(url)
+            .send()
+            .chain_err(|| "HTTP GET")?
+            .text()
+            .chain_err(|| "parse S3 list")?;
+        //println!("res: {}", res);
 
-    let list = rusty_s3::actions::ListObjectsV2::parse_response(&res)
-        .chain_err(|| "parse ListObjectsV2 response")?;
-    match args.cmd {
-        Command::Backup { dest, scope } => {
-            match scope {
-                BackupScope::All => return Err("'--scope all' is not implemented".into()),
-                BackupScope::Current => (),
-            };
-            let first_root_key = list.contents.first().map(|c| &c.key);
-            match first_root_key {
-                Some(root_key) => {
-                    // TODO: embrce PathBuf
-                    //println!("first root: {}", root_key);
-                    let url = bucket
-                        .get_object(Some(&credentials), root_key)
-                        .sign(presigned_url_duration);
-                    let response = http_client.get(url).send().unwrap();
+        let list = rusty_s3::actions::ListObjectsV2::parse_response(&res)
+            .chain_err(|| "parse ListObjectsV2 response")?;
+        use rusty_s3::actions::list_objects_v2::ListObjectsContent;
+        let mut x: std::iter::Map<std::slice::Iter<'_, ListObjectsContent>, _> =
+            list.contents.iter().map(|c| {
+                let root_key = &c.key;
+                // TODO: embrce PathBuf
+                //println!("first root: {}", root_key);
+                let url = bucket
+                    .get_object(Some(&credentials), root_key)
+                    .sign(presigned_url_duration);
+                let response = http_client.get(url).send().unwrap();
 
-                    if !response.status().is_success() {
-                        return Err(format!(
-                            "failed loading root {}: received HTTP {} from S3",
-                            root_key,
-                            response.status()
-                        )
-                        .into());
-                    }
-                    let bytes = response.bytes().unwrap();
-                    let root = s3db::read_root(&bytes).unwrap();
-                    //println!("read root: {:?}", root);
-                    let node_prefix = args
-                        .prefix
-                        .as_ref()
-                        .map(|p| format!("{}/node/", p))
-                        .unwrap_or_else(|| "node/".to_owned());
-
-                    dump_tree(
-                        &root.mast.link.unwrap_or_else(|| "".to_owned()),
-                        &bucket,
-                        &credentials,
-                        &http_client,
-                        presigned_url_duration,
-                        &node_prefix,
-                        &node_key,
-                        dest.as_ref()
-                            .map(|x| x.to_str().unwrap())
-                            .unwrap_or(&".".to_owned()),
-                    )?;
-                    let root_path = format!(
-                        "{}/{}",
-                        dest.as_ref()
-                            .map(|x| x.to_str().unwrap())
-                            .unwrap_or(&".".to_owned()),
-                        root_key
-                    );
-                    println!("writing to {}", &root_path);
-                    let mut f = std::fs::File::create(&root_path)
-                        .chain_err(|| format!("creating local root {}", &root_path))?;
-                    f.write(&bytes).chain_err(|| "writing root")?;
+                if !response.status().is_success() {
+                    return Err(format!(
+                        "failed loading root {}: received HTTP {} from S3",
+                        root_key,
+                        response.status()
+                    )
+                    .into());
                 }
-                None => {
-                    println!("no roots to show")
-                }
-            }
-            Ok(())
+                let bytes = response.bytes().unwrap();
+                let root = s3db::read_root(&bytes).unwrap();
+                //println!("read root: {:?}", root);
+                let node_prefix = &args
+                    .prefix
+                    .as_ref()
+                    .map(|p| format!("{}/node/", p))
+                    .unwrap_or_else(|| "node/".to_owned());
+
+                dump_tree(
+                    &root.mast.link.unwrap_or_else(|| "".to_owned()),
+                    &bucket,
+                    &credentials,
+                    &http_client,
+                    presigned_url_duration,
+                    &node_prefix,
+                    &decryption_key,
+                    dest.as_ref()
+                        .map(|x| x.to_str().unwrap())
+                        .unwrap_or(&".".to_owned()),
+                )?;
+                let root_path = format!(
+                    "{}/{}",
+                    dest.as_ref()
+                        .map(|x| x.to_str().unwrap())
+                        .unwrap_or(&".".to_owned()),
+                    root_key
+                );
+                println!("writing to {}", &root_path);
+                let mut f = std::fs::File::create(&root_path)
+                    .chain_err(|| format!("creating local root {}", &root_path))?;
+                f.write(&bytes).chain_err(|| "writing root")?;
+                Ok(())
+            });
+        if let Some(first_err) = x.find(|x| x.is_err()) {
+            return first_err;
+        };
+        if list.next_continuation_token.is_none() {
+            break;
         }
+        next = list.next_continuation_token
     }
+    Ok(())
 }
 
 fn dump_tree(
