@@ -10,6 +10,7 @@ require (
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/jrhy/s3db v0.0.0-20211130060709-aacd5f773570
 	github.com/mdp/qrterminal/v3 v3.0.0
+	github.com/minio/mc v0.0.0-20211202164813-8a207df2ab0f // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/stianeikeland/go-rpio v4.2.0+incompatible
 	github.com/stretchr/testify v1.7.0

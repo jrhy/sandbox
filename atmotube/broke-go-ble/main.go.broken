@@ -1,0 +1,71 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/go-ble/ble"
+	"github.com/go-ble/ble/examples/lib/dev"
+)
+
+var (
+	device = flag.String("device", "default", "implementation of ble")
+)
+
+func main() {
+	if err := run(); err != nil {
+		panic(err)
+	}
+}
+func run() error {
+	flag.Parse()
+
+	d, err := dev.NewDevice(*device)
+	if err != nil {
+		log.Fatalf("can't new device : %s", err)
+	}
+	ble.SetDefaultDevice(d)
+
+	ctx := context.Background()
+	if false { // this hangs
+		fmt.Printf("dial...\n")
+		var tube = ble.NewAddr("11:11:11:11:11:11")
+		client, err := ble.Dial(ctx, tube)
+		if err != nil {
+			return fmt.Errorf("dial: %w", err)
+		}
+		fmt.Printf("client: %+v\n", client)
+	}
+
+	advHandler := func(a ble.Advertisement) { fmt.Printf("h %+v\n", a) }
+	advFilter := func(a ble.Advertisement) bool { //fmt.Printf("filter %+v\n", a);
+		if a.LocalName() == "" {
+			return false
+		}
+		fmt.Printf("f %s %s\n", a.Addr().String(), a.LocalName())
+		return false
+	}
+	atmoFilter := func(a ble.Advertisement) bool {
+		return strings.ToLower(a.Addr().String()) == strings.ToLower("11:11:11:11:11:11")
+	}
+	if true {
+		err = ble.Scan(ctx, true, advHandler, atmoFilter)
+		if err != nil {
+			return fmt.Errorf("scan: %w", err)
+		}
+	}
+
+	if false {
+		fmt.Printf("connect\n")
+		c, err := ble.Connect(ctx, advFilter)
+		if err != nil {
+			return fmt.Errorf("connect: %w", err)
+		}
+		fmt.Printf("%+v\n", c)
+	}
+
+	return nil
+}
