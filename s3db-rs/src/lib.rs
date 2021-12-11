@@ -104,19 +104,21 @@ fn read_v115_array(bytes: &Bytes) -> Result<(usize, Vec<Bytes>)> {
     let i: usize = usize::try_from(i).chain_err(|| "way too many entries")?;
     c += i;
     let mut res = Vec::<Bytes>::new();
+    let mut entries_read = 0;
     while entry > 0 {
         let (key_bytes_u64, i) = varint::read(&bytes.slice(c..));
-        let key_bytes = usize::try_from(key_bytes_u64).chain_err(|| "too many {}")?;
+        let key_bytes = usize::try_from(key_bytes_u64).chain_err(|| "too many")?;
         if i < 0 {
             bail!("node truncated in entry length")
         }
-        let i: usize = usize::try_from(i).chain_err(|| "way too many {}")?;
+        let i: usize = usize::try_from(i).chain_err(|| "way too many")?;
         if c + i + key_bytes > bytes.len() {
-            bail!("node truncated in entries")
+            bail!("node truncated in entries after {}", entries_read)
         }
         res.push(bytes.slice(c + i..c + i + key_bytes));
         c += i + key_bytes;
         entry -= 1;
+        entries_read += 1;
     }
     Ok((c, res))
 }

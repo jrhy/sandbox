@@ -217,7 +217,7 @@ fn dump_tree(
     decryption_key: &Option<Bytes>,
     output_dir: &str,
 ) -> Result<()> {
-    let node = get_node(
+    let (node, maybe_cache) = get_node(
         bucket,
         credentials,
         http_client,
@@ -228,6 +228,10 @@ fn dump_tree(
         output_dir,
     )
     .chain_err(|| "get_node")?;
+    if maybe_cache.is_none() {
+        println!("skipping already-cached node {}\n", key);
+        return Ok(())
+    }
     //println!("read node: {:?}", node);
     for ref l in node.links {
         if !l.is_empty() {
@@ -244,6 +248,11 @@ fn dump_tree(
             .chain_err(|| format!("dump {}", l))?
         }
     }
+    // We only write a node's bytes if its subtree has been successfully
+    // backed up, so if we come back for another version, we can skip it.
+    let (bytes, mut file) = maybe_cache.unwrap();
+    file.write(&bytes)
+        .chain_err(|| format!("write node bytes for {}", key))?;
     Ok(())
 }
 
@@ -256,7 +265,7 @@ fn get_node(
     key: &str,
     decryption_key: &Option<Bytes>,
     output_dir: &str,
-) -> Result<s3db::Node> {
+) -> Result<(s3db::Node, Option<(Bytes, std::fs::File)>)> {
     let path = format!("{}{}", node_prefix, key);
     let file_path = format!("{}/{}", output_dir, path);
     let mut file = std::fs::OpenOptions::new()
@@ -270,25 +279,10 @@ fn get_node(
         .chain_err(|| format!("{}: get file size", file_path))?
         .len();
 
-    fn read_node(
-        file_path: &str,
-        len: u64,
-        file: &mut std::fs::File,
-        decryption_key: &Option<Bytes>,
-    ) -> Result<s3db::Node> {
-        println!("using cached {}", &file_path);
-        use std::convert::TryInto;
-        use std::io::Read;
-        let mut vec = Vec::<u8>::with_capacity(len.try_into().unwrap());
-        file.read_to_end(&mut vec)
-            .chain_err(|| format!("{}: read cached bytes", file_path))?;
-        Ok(s3db::read_node(&Bytes::from(vec), decryption_key)
-            .chain_err(|| format!("read_node from {}", file_path))?)
-    }
-
     if len != 0 {
-        if let Ok(node) = read_node(&file_path, len, &mut file, decryption_key) {
-            return Ok(node);
+        // TODO read_node doesn't need to return bytes
+        if let Ok((node, _bytes)) = read_node(&file_path, len, &mut file, decryption_key) {
+            return Ok((node, None));
         }
     }
 
@@ -305,7 +299,22 @@ fn get_node(
     let bytes = response.bytes().chain_err(|| "read HTTP response bytes")?;
     let node = s3db::read_node(&bytes, decryption_key)
         .chain_err(|| format!("read_node from {}", file_path))?;
-    file.write(&bytes)
-        .chain_err(|| format!("write node bytes to {}", file_path))?;
-    Ok(node)
+    Ok((node, Some((bytes, file))))
+}
+
+fn read_node(
+    file_path: &str,
+    len: u64,
+    file: &mut std::fs::File,
+    decryption_key: &Option<Bytes>,
+) -> Result<(s3db::Node, bytes::Bytes)> {
+    println!("using cached {}", &file_path);
+    use std::convert::TryInto;
+    use std::io::Read;
+    let mut vec = Vec::<u8>::with_capacity(len.try_into().unwrap());
+    file.read_to_end(&mut vec)
+        .chain_err(|| format!("{}: read cached bytes", file_path))?;
+    let bytes = Bytes::from(vec);
+    Ok((s3db::read_node(&bytes, decryption_key)
+        .chain_err(|| format!("read_node from {}", file_path))?, bytes))
 }
