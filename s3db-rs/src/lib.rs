@@ -46,7 +46,7 @@ pub struct Root {
     pub merge_mode: Option<u8>,
 }
 
-#[derive(Debug, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct Node {
     pub links: Vec<String>,
 }

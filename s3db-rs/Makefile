@@ -1,4 +1,4 @@
-SHELL=/usr/bin/bash
+SHELL=bash
 
 all: target/libgob2json.a 
 
@@ -39,7 +39,7 @@ show-env:
 .setup_minio:
 	go install -v github.com/minio/minio
 	go install -v github.com/minio/mc
-	mktemp -p -d minio-XXXXXXXXXXX > .minio_dir
+	mktemp -d /tmp/minio-XXXXXXXXXXX > .minio_dir
 	touch .setup_minio
 
 clean:
