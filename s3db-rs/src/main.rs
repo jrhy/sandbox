@@ -244,42 +244,88 @@ fn dump_tree(
     decryption_key: &Option<Bytes>,
     output_dir: &str,
 ) -> Result<()> {
-    let (node, maybe_cache) = get_node(
+    visit_tree(
+        key,
         bucket,
         credentials,
         http_client,
         duration,
         node_prefix,
-        key,
         decryption_key,
         output_dir,
+        |_, maybe_cache| {
+            if maybe_cache.is_none() {
+                println!("skipping already-cached node {}\n", key);
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        },
+        |_, maybe_cache| {
+            match maybe_cache {
+                Some((bytes, mut file)) => {
+                    // We only write a node's bytes if its subtree has been successfully
+                    // backed up, so if we come back for another version, we can skip it.
+                    file.write(&bytes)
+                        .chain_err(|| format!("write node bytes for {}", key))?;
+                    Ok(())
+                }
+                None => Ok(()),
+            }
+        },
     )
-    .chain_err(|| "get_node")?;
-    if maybe_cache.is_none() {
-        println!("skipping already-cached node {}\n", key);
-        return Ok(());
+}
+
+fn visit_tree<F, G>(
+    key: &str, // XXX this is actually a link name, not an S3 key
+    bucket: &Bucket,
+    credentials: &Credentials,
+    http_client: &reqwest::blocking::Client,
+    duration: Duration,
+    node_prefix: &str,
+    decryption_key: &Option<Bytes>,
+    output_dir: &str,
+    mut should_visit: F,
+    mut done_visit: G,
+) -> Result<()>
+where
+    F: FnMut(&s3db::Node, &Option<(Bytes, std::fs::File)>) -> Result<bool>,
+    G: FnMut(&s3db::Node, Option<(Bytes, std::fs::File)>) -> Result<()>,
+{
+    enum Cur {
+        Todo { link: String },
+        Done(s3db::Node, Option<(Bytes, std::fs::File)>),
     }
-    //println!("read node: {:?}", node);
-    for ref l in node.links {
-        if !l.is_empty() {
-            dump_tree(
-                l,
-                bucket,
-                credentials,
-                http_client,
-                duration,
-                node_prefix,
-                decryption_key,
-                output_dir,
-            )
-            .chain_err(|| format!("dump {}", l))?
+    let mut stack = vec![Cur::Todo {
+        link: key.to_owned(),
+    }];
+    loop {
+        match stack.pop() {
+            None => break,
+            Some(Cur::Done(node, maybe_cache)) => done_visit(&node, maybe_cache)?,
+            Some(Cur::Todo { ref link }) => {
+                let (node, maybe_cache) = get_node(
+                    bucket,
+                    credentials,
+                    http_client,
+                    duration,
+                    node_prefix,
+                    link,
+                    decryption_key,
+                    output_dir,
+                ).chain_err(|| "get_node")?;
+                if !should_visit(&node, &maybe_cache)? {
+                    continue;
+                }
+                for l in (&node.links).iter().rev() {
+                    if !l.is_empty() {
+                        stack.push(Cur::Todo { link: l.to_owned() })
+                    }
+                }
+                stack.push(Cur::Done(node, maybe_cache));
+            }
         }
     }
-    // We only write a node's bytes if its subtree has been successfully
-    // backed up, so if we come back for another version, we can skip it.
-    let (bytes, mut file) = maybe_cache.unwrap();
-    file.write(&bytes)
-        .chain_err(|| format!("write node bytes for {}", key))?;
     Ok(())
 }
 
