@@ -3,8 +3,10 @@ module foo
 go 1.17
 
 require (
+	github.com/jrhy/s3db v0.0.0-20211130060709-aacd5f773570
 	github.com/jrhy/sandbox v0.0.0-20211227192233-3edf39c42108
 	github.com/stretchr/testify v1.7.0
+	golang.org/x/crypto v0.0.0-20211209193657-4570a0811e8b
 )
 
 require (
@@ -21,6 +23,7 @@ require (
 	github.com/alecthomas/participle v0.2.1 // indirect
 	github.com/apache/thrift v0.15.0 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20200907205600-7a23bdc65eef // indirect
+	github.com/aws/aws-sdk-go v1.42.22 // indirect
 	github.com/bcicen/jstream v1.0.1 // indirect
 	github.com/beevik/ntp v0.3.0 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
@@ -94,7 +97,9 @@ require (
 	github.com/jcmturner/gokrb5/v8 v8.4.2 // indirect
 	github.com/jcmturner/rpc/v2 v2.0.3 // indirect
 	github.com/jessevdk/go-flags v1.5.0 // indirect
+	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
+	github.com/jrhy/mast v1.2.5 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.13.6 // indirect
 	github.com/klauspost/cpuid/v2 v2.0.9 // indirect
@@ -117,6 +122,7 @@ require (
 	github.com/mb0/glob v0.0.0-20160210091149-1eb79d2de6c4 // indirect
 	github.com/miekg/dns v1.1.43 // indirect
 	github.com/minio/argon2 v1.0.0 // indirect
+	github.com/minio/blake2b-simd v0.0.0-20160723061019-3f5f724cb5b1 // indirect
 	github.com/minio/cli v1.22.0 // indirect
 	github.com/minio/colorjson v1.0.1 // indirect
 	github.com/minio/console v0.13.1 // indirect
@@ -193,7 +199,6 @@ require (
 	go.uber.org/atomic v1.9.0 // indirect
 	go.uber.org/multierr v1.7.0 // indirect
 	go.uber.org/zap v1.19.1 // indirect
-	golang.org/x/crypto v0.0.0-20211209193657-4570a0811e8b // indirect
 	golang.org/x/net v0.0.0-20211112202133-69e39bad7dc2 // indirect
 	golang.org/x/oauth2 v0.0.0-20210819190943-2bc19b11175f // indirect
 	golang.org/x/sync v0.0.0-20210220032951-036812b2e83c // indirect

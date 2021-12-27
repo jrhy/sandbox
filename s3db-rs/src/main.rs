@@ -48,8 +48,8 @@ struct Cli {
 #[derive(StructOpt)]
 enum Command {
     Vacuum {
-        #[structopt(long = "before", default_value = "1h")]
-        before: String,
+        #[structopt(parse(try_from_str = duration_str::parse), long = "older-than")]
+        duration: Duration,
     },
     /// Backup the current or all versions
     Backup {
@@ -122,7 +122,7 @@ fn run() -> Result<()> {
         http_client: reqwest::blocking::Client::new(),
     };
     match args.cmd {
-        Command::Vacuum { ref before } => vacuum(&s3, before, &args.prefix, &decryption_key)?,
+        Command::Vacuum { duration } => vacuum(&s3, duration, &args.prefix, &decryption_key)?,
 
         Command::Backup {
             ref scope,
@@ -179,18 +179,18 @@ fn run() -> Result<()> {
 
 fn vacuum(
     s3: &S3Cli,
-    before: &str,
+    duration: Duration,
     prefix: &Option<String>,
     decryption_key: &Option<Bytes>,
 ) -> Result<()> {
-    use duration_str::parse;
+    // use duration_str::parse;
     use std::time::SystemTime;
-    let cutoff = match parse(before) {
-        Ok(duration) => SystemTime::now().checked_sub(duration).unwrap(),
-        Err(ref err) => bail!("{}", err),
-    };
+    // let cutoff = match parse(duration) {
+    // Ok(duration) => SystemTime::now().checked_sub(duration).unwrap(),
+    // Err(ref err) => bail!("{}", err),
+    // };
     use chrono::{DateTime, Utc};
-    let cutoff: DateTime<Utc> = cutoff.into();
+    let cutoff: DateTime<Utc> = SystemTime::now().checked_sub(duration).unwrap().into();
     println!("cutoff time is {}", cutoff);
     // TODO: this normalization should be done for args.prefix instead.
     let prefix = match prefix {
