@@ -30,7 +30,7 @@ show-env:
 		S3_ENDPOINT=http://127.0.0.1:9091
 
 .setup_s3db:
-	go install -v github.com/jrhy/s3db/cmd/s3db
+	go install -v github.com/jrhy/s3db/cmd/s3db@latest
 	touch .setup_s3db
 
 .key:
