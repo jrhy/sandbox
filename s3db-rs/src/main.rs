@@ -128,44 +128,45 @@ fn run() -> Result<()> {
             ref scope,
             ref dest,
         } => {
-            let prefix = match scope {
-                BackupScope::Current => format!(
-                    "{}/root/current",
-                    args.prefix.as_ref().unwrap_or(&"".to_owned())
-                ),
+            let dest = dest
+                .as_ref()
+                .map(|x| x.to_str().unwrap().to_owned())
+                .unwrap_or(".".to_owned());
+            let prefix: String = args.prefix.clone().unwrap_or("".to_string());
+
+            let node_prefix = format!("{}node/", prefix);
+            let node_dest = format!("{}/{}/node/", &dest, &prefix,);
+            std::fs::create_dir_all(&node_dest).chain_err(|| format!("create {}", &node_dest))?;
+
+            match scope {
+                BackupScope::Current => {
+                    std::fs::create_dir_all(format!("{}/{}/root/current", dest, prefix))?;
+                }
                 BackupScope::All => {
-                    format!("{}/root", args.prefix.as_ref().unwrap_or(&"".to_owned()))
+                    std::fs::create_dir_all(format!("{}/{}/root/current", dest, prefix))?;
+                    std::fs::create_dir_all(format!("{}/{}/root/merged", dest, prefix))?;
                 }
             };
 
-            foreach_object(&s3, Some(&prefix), |c| {
+            let root_prefix = match scope {
+                BackupScope::Current => format!("{}/root/current", prefix),
+                BackupScope::All => format!("{}/root", prefix),
+            };
+            foreach_object(&s3, Some(&root_prefix), |c| {
                 // TODO: embrce PathBuf
                 //println!("first root: {}", root_key);
                 let bytes = get_object(&s3, &c.key)?;
                 let root = s3db::read_root(&bytes).chain_err(|| "read_root")?;
                 //println!("read root: {:?}", root);
-                let node_prefix = &args
-                    .prefix
-                    .as_ref()
-                    .map(|p| format!("{}/node/", p))
-                    .unwrap_or_else(|| "node/".to_owned());
 
                 dump_tree(
                     &s3,
                     &root.mast.link.unwrap_or_else(|| "".to_owned()),
-                    node_prefix,
+                    &node_prefix,
                     &decryption_key,
-                    dest.as_ref()
-                        .map(|x| x.to_str().unwrap())
-                        .unwrap_or(&".".to_owned()),
+                    &dest,
                 )?;
-                let root_path = format!(
-                    "{}/{}",
-                    dest.as_ref()
-                        .map(|x| x.to_str().unwrap())
-                        .unwrap_or(&".".to_owned()),
-                    c.key
-                );
+                let root_path = format!("{}/{}", &dest, c.key);
                 println!("writing to {}", &root_path);
                 let mut f = std::fs::File::create(&root_path)
                     .chain_err(|| format!("creating local root {}", &root_path))?;
@@ -407,10 +408,9 @@ fn dump_tree(
         |e| match e {
             VisitTreeCaching::ShouldVisit(_, maybe_cache) => {
                 if maybe_cache.is_none() {
-                    println!("skipping already-cached node {}\n", key);
-                    Ok(true)
-                } else {
                     Ok(false)
+                } else {
+                    Ok(true)
                 }
             }
             VisitTreeCaching::DoneVisit(_, maybe_cache) => match maybe_cache {
