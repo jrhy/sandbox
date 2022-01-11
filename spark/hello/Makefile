@@ -24,5 +24,8 @@ run: build build/spark-3.2.0-bin-hadoop3.2
 	  --master 'local[4]' \
 	    target/scala-2.12/simple-project_2.12-1.0.jar
 
+tryBloop:
+	sbt bloopInstall
+	bloop test hello-test -w 
 
 
