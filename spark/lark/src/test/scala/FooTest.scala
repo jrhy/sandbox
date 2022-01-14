@@ -1,65 +1,29 @@
 import org.scalatest.funsuite.AnyFunSuite
 
-//trait Dataset[A, Repr] extends scala.collection.generic.FilterMonadic[A, Repr] {
-trait Dataset[A] extends scala.collection.TraversableOnce[A] {
-}
+trait Dataset[A] extends Iterable[A] {}
 
-trait JoinableDataset[K,V] {
-  def join[W](other: Dataset[(K, W)]): JoinableDataset[K, (V, W)]
+trait Joiner[K,V] {
+  def join[W](other: Dataset[(K, W)]): Joiner[K, (V, W)]
 }
 
 case class Lark[A](l: List[A]) extends Dataset[A] {
-//  def map[B](f: A => B): Lark[B] = ???
-//  def filter[B](f: A => Boolean): Lark[A] = ???
-//  def flatMap[B](f: A => scala.collection.GenTraversableOnce[B]): Lark[B] = ???
-
-// what class provides ^^ from vv?  (a: TraversableOnce does, but not GenTraversableOnce)
-        def isTraversableAgain: Boolean = l.isTraversableAgain
-        def toIterator: Iterator[A] = l.toIterator
-        def toStream: Stream[A] = l.toStream
-
-        def copyToArray[B >: A](xs: Array[B],start: Int,len: Int): Unit = l.copyToArray(xs,start,len)
-        def exists(p: A => Boolean): Boolean = l.exists(p)
-        def find(p: A => Boolean): Option[A] = l.find(p)
-        def forall(p: A => Boolean): Boolean = l.forall(p)
-        def foreach[U](f: A => U): Unit = l.foreach(f)
-        def hasDefiniteSize: Boolean = l.hasDefiniteSize
-        def isEmpty: Boolean = l.isEmpty
-        def seq: scala.collection.TraversableOnce[A] = l.seq
-        def toTraversable: Traversable[A] = l.toTraversable
-
+//  override def map[B](f: A => B): Lark[B] 
+  //override def map[B, Lark[B]](f: A => B)(implicit bf: scala.collection.generic.CanBuildFrom[Iterable[A],B,Lark[B]]): Lark[B] = Lark(l.map(f))
+  //override def filter(f: A => Boolean): Lark[A] = Lark(l.filter(f))
+  //def flatMap[B](f: A => scala.collection.GenTraversableOnce[B]): Lark[B] = Lark(l.flatMap(f))
+  def iterator: Iterator[A] = l.iterator
 }
 object Lark {
-  def from[A](o: scala.collection.GenTraversableOnce[A]) = Lark[A](o.toList)
+  implicit def from[A](o: scala.collection.GenTraversableOnce[A]) = Lark[A](o.toList)
   implicit def from[K, V](o: Keyed[K, V]) = o.l
-  implicit class Keyed[K,V](val l: Lark[(K,V)]) extends JoinableDataset[K,V] {
+  implicit class Keyed[K,V](val l: Lark[(K,V)]) extends Joiner[K,V] {
     def join[W](other: Dataset[(K, W)]): Keyed[K, (V, W)] =
-      Keyed(from(l.flatMap { case (k, v) => other.find { case (k2, w) => k == k2 }.map { case (k2, w) => (k, (v, w))}}))
-/*
-// it is kinda inconvenient to have to do this. maybe we can meet the trait requirements with
-// an implicit that goes back to a Lark? YES!
-        def isTraversableAgain: Boolean = l.isTraversableAgain
-        def toIterator: Iterator[(K,V)] = l.toIterator
-        def toStream: Stream[(K,V)] = l.toStream
-
-        def copyToArray[B >: (K,V)](xs: Array[B],start: Int,len: Int): Unit = l.copyToArray(xs,start,len)
-        def exists(p: ((K,V)) => Boolean): Boolean = l.exists(p)
-        def find(p: ((K,V)) => Boolean): Option[(K,V)] = l.find(p)
-        def forall(p: ((K,V)) => Boolean): Boolean = l.forall(p)
-        def foreach[U](f: ((K,V)) => U): Unit = l.foreach(f)
-        def hasDefiniteSize: Boolean = l.hasDefiniteSize
-        def isEmpty: Boolean = l.isEmpty
-        def seq: scala.collection.TraversableOnce[(K,V)] = l.seq
-        def toTraversable: Traversable[(K,V)] = l.toTraversable
-*/
-
+      Keyed(l.flatMap {
+        case (k, v) => other.iterator
+          .find { case (k2, w) => k == k2 }
+          .map { case (k2, w) => (k, (v, w))}})
   }
 }
-/*object Keyed {
-  // to "overcome" the lack of "case-to-case inheritance", instead of the implicit above
-  // could an extractor be used somehow? A: not necessary. just implicit from(other).
-  def from[K,V](o: Lark[(K,V)]) = Keyed[K,V](o)
-}*/
 
 class DatasetTest extends AnyFunSuite {
   test("happy") {
