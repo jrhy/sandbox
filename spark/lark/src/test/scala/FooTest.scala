@@ -4,8 +4,8 @@ import org.scalatest.funsuite.AnyFunSuite
 trait Dataset[A] extends scala.collection.TraversableOnce[A] {
 }
 
-trait KeyedDataset[K,V] extends Dataset[(K,V)] {
-  def join[W](other: KeyedDataset[K, W]): KeyedDataset[K,(V,W)]
+trait JoinableDataset[K,V] {
+  def join[W](other: Dataset[(K, W)]): JoinableDataset[K, (V, W)]
 }
 
 case class Lark[A](l: List[A]) extends Dataset[A] {
@@ -13,7 +13,7 @@ case class Lark[A](l: List[A]) extends Dataset[A] {
 //  def filter[B](f: A => Boolean): Lark[A] = ???
 //  def flatMap[B](f: A => scala.collection.GenTraversableOnce[B]): Lark[B] = ???
 
-// what class provides ^^ from vv?
+// what class provides ^^ from vv?  (a: TraversableOnce does, but not GenTraversableOnce)
         def isTraversableAgain: Boolean = l.isTraversableAgain
         def toIterator: Iterator[A] = l.toIterator
         def toStream: Stream[A] = l.toStream
@@ -31,12 +31,13 @@ case class Lark[A](l: List[A]) extends Dataset[A] {
 }
 object Lark {
   def from[A](o: scala.collection.GenTraversableOnce[A]) = Lark[A](o.toList)
-  implicit class KeyedLark[K,V](l: Lark[(K,V)]) extends KeyedDataset[K,V] {
-    def join[W](other: KeyedDataset[K, W]): KeyedLark[K,(V,W)] =
-      l.map { case (k, v) => other.find { case (k2, w) => k == k2 }.map { case (k2, w) => (k, v, w)}}
-
+  implicit def from[K, V](o: Keyed[K, V]) = o.l
+  implicit class Keyed[K,V](val l: Lark[(K,V)]) extends JoinableDataset[K,V] {
+    def join[W](other: Dataset[(K, W)]): Keyed[K, (V, W)] =
+      Keyed(from(l.flatMap { case (k, v) => other.find { case (k2, w) => k == k2 }.map { case (k2, w) => (k, (v, w))}}))
+/*
 // it is kinda inconvenient to have to do this. maybe we can meet the trait requirements with
-// an implicit that goes back to a Lark?
+// an implicit that goes back to a Lark? YES!
         def isTraversableAgain: Boolean = l.isTraversableAgain
         def toIterator: Iterator[(K,V)] = l.toIterator
         def toStream: Stream[(K,V)] = l.toStream
@@ -50,27 +51,27 @@ object Lark {
         def isEmpty: Boolean = l.isEmpty
         def seq: scala.collection.TraversableOnce[(K,V)] = l.seq
         def toTraversable: Traversable[(K,V)] = l.toTraversable
-
+*/
 
   }
 }
-/*object KeyedLark {
+/*object Keyed {
   // to "overcome" the lack of "case-to-case inheritance", instead of the implicit above
-  // could an extractor be used somehow
-  def from[K,V](o: Lark[(K,V)]) = KeyedLark[K,V](o)
+  // could an extractor be used somehow? A: not necessary. just implicit from(other).
+  def from[K,V](o: Lark[(K,V)]) = Keyed[K,V](o)
 }*/
 
 class DatasetTest extends AnyFunSuite {
   test("happy") {
     val l = Lark.from(List(1,2,3))
     assert(l.filter(_ != 2).size == 2)
-    // RDDs have ++, what is the idiomatic Scala? ... and should the KeyedLark just work like the PairRDD implicits?
+    // RDDs have ++, what is the idiomatic Scala? ... and should the Keyed just work like the PairRDD implicits?
     //val l2 = l ++ Lark.from(List(4,5,6))
     //assert(l2.filter(_ != 2).size == 4)
-    import Lark._
-    val k: KeyedLark[Int,String] = Lark.from(List((1,"one"),(2,"two")))
+    val k = Lark.from(List((1,"one"),(2,"two")))
     val k2 = Lark.from(List((1,"foo"),(2,"bar")))
-    val kk2 = k.join(k2)
+    val kk2: Lark.Keyed[Int, (String, String)] = k.join(k2)
+    assert(kk2.toList == List((1,("one","foo")), (2,("two","bar"))))
   }
 }
 
