@@ -12,4 +12,3 @@ object SimpleApp {
     spark.stop()
   }
 }
-
