@@ -2,12 +2,13 @@ package com.rhyason.sparkish
 
 import org.apache.spark.sql.SparkSession
 import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.BeforeAndAfterAll
 import org.apache.spark.sql.Dataset
 import com.rhyason.sparkish.StaticEncoders.implicits._
 
 import Data._
 
-class DatasetishTest extends AnyFunSuite {
+class DatasetishTest extends AnyFunSuite with BeforeAndAfterAll {
 
   var fastTests = List.empty[() => Unit]
 
@@ -171,6 +172,13 @@ class DatasetishTest extends AnyFunSuite {
   )
 
   fastTests.foreach(_())
+
+  override def afterAll(): Unit = {
+    if (doSpark) {
+      spark.stop()
+    }
+  }
+
 }
 
 case class Department(department_id: Long, name: String)

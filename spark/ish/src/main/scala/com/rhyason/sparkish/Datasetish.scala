@@ -5,11 +5,11 @@ import scala.reflect.runtime.universe.TypeTag
 import org.apache.spark.sql.catalyst.encoders.encoderFor
 import org.apache.spark.sql._
 
-/** Datasetish is a strongly-typed subset of Spark Dataset functionality that
-  * reduces the likelihood of SparkAnalysisExceptions and is faster to test with
-  * by eliminating the requirement for a SparkSession when testing. Datasetish
-  * emulates Spark's laziness and provides similar map(), flatMap(), join(),
-  * though without requiring loosely-typed Columns.
+/** Datasetish is a strongly-typed lazy list like a Spark Dataset, that reduces
+  * the likelihood of SparkAnalysisExceptions and is faster to test with by
+  * eliminating the SparkSession when testing. Datasetish methods are similar to
+  * a Dataset except join() is done with keyed pairs instead of loosely-typed
+  * Columns.
   *
   * You'll probably also need to import:
   *
