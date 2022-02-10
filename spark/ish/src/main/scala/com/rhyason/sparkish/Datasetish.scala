@@ -5,62 +5,72 @@ import scala.reflect.runtime.universe.TypeTag
 import org.apache.spark.sql.catalyst.encoders.encoderFor
 import org.apache.spark.sql._
 
-abstract class LazyList[A] extends Iterable[A] {
+/** Datasetish is a strongly-typed subset of Spark Dataset functionality that
+  * reduces the likelihood of SparkAnalysisExceptions and is faster to test with
+  * by eliminating the requirement for a SparkSession when testing. Datasetish
+  * emulates Spark's laziness and provides similar map(), flatMap(), join(),
+  * though without requiring loosely-typed Columns.
+  *
+  * You'll probably also need to import:
+  *
+  * import com.rhyason.sparkish.StaticEncoders.implicits._
+  */
+abstract class Datasetish[A] extends Iterable[A] {
 
-  // The advantage of implicit parameters is that it defers the
-  // requirement for a SparkSession until the dataset is requested;
-  // LazyList is a common interface between the app and tests that
-  // improves on Spark blahblah.
+  override def iterator(): Iterator[A]
+
   def dataset()(implicit
       spark: SparkSession
   ): Dataset[A]
 
-  def map[B: Encoder](f: A => B): LazyList[B] =
+  def map[B: Encoder](f: A => B): Datasetish[B] =
     Map[A, B](this, f)
-  def flatMap[B: Encoder](f: A => TraversableOnce[B]): LazyList[B] =
+  def flatMap[B: Encoder](f: A => TraversableOnce[B]): Datasetish[B] =
     FlatMap[A, B](this, f)
-  override def filter(f: A => Boolean): LazyList[A] =
+  override def filter(f: A => Boolean): Datasetish[A] =
     Filter[A](this, f)
 }
 
-object LazyList {
-  def apply[A: Encoder](i: Iterable[A]): LazyList[A] = Source(i)
+object Datasetish {
+  def apply[A: Encoder](i: Iterable[A]): Datasetish[A] = Source(i)
 
   implicit class FromIterable[A: Encoder](val i: Iterable[A]) {
-    def toLazyList: LazyList[A] = Source(i)
+    def toLazyList: Datasetish[A] = Source(i)
   }
 
-  implicit class Joinable[K: Encoder, V: Encoder](val i: LazyList[(K, V)]) {
-    def join[V2: Encoder](o: Joinable[K, V2]): LazyList[(K, V, V2)] =
+  implicit class Joinable[K: Encoder, V: Encoder](val i: Datasetish[(K, V)]) {
+    def join[V2: Encoder](o: Joinable[K, V2]): Datasetish[(K, V, V2)] =
       Join(i, o.i)
   }
 
-  implicit class KeyBy[A: Encoder](val l: LazyList[A]) {
-    def keyBy[K: Encoder](f: A => K): LazyList[(K, A)] = {
+  implicit class KeyBy[A: Encoder](val l: Datasetish[A]) {
+    def keyBy[K: Encoder](f: A => K): Datasetish[(K, A)] = {
       val outputEncoder =
         Encoders.tuple(encoderFor[K], encoderFor[A])
       l.map((e: A) => (f(e), e))(outputEncoder)
     }
   }
 
-  implicit class LeftJoinable[K: Encoder, V: Encoder](val i: LazyList[(K, V)]) {
+  implicit class LeftJoinable[K: Encoder, V: Encoder](
+      val i: Datasetish[(K, V)]
+  ) {
     def leftJoin[V2: Encoder: TypeTag](
         o: Joinable[K, V2]
-    ): LazyList[(K, V, Option[V2])] =
+    ): Datasetish[(K, V, Option[V2])] =
       LeftJoin(i, o.i)
   }
 
   implicit class OuterJoinable[K: Encoder, V: Encoder: TypeTag](
-      val i: LazyList[(K, V)]
+      val i: Datasetish[(K, V)]
   ) {
     def outerJoin[V2: Encoder: TypeTag](
         o: Joinable[K, V2]
-    ): LazyList[(K, Option[V], Option[V2])] =
+    ): Datasetish[(K, Option[V], Option[V2])] =
       OuterJoin(i, o.i)
   }
 }
 
-case class Source[A: Encoder](source: Iterable[A]) extends LazyList[A] {
+case class Source[A: Encoder](source: Iterable[A]) extends Datasetish[A] {
   override def iterator: Iterator[A] =
     source.iterator
 
@@ -71,9 +81,9 @@ case class Source[A: Encoder](source: Iterable[A]) extends LazyList[A] {
 }
 
 case class Map[A, B: Encoder](
-    input: LazyList[A],
+    input: Datasetish[A],
     f: A => B
-) extends LazyList[B] {
+) extends Datasetish[B] {
   override def iterator: Iterator[B] =
     input.iterator.map(f)
 
@@ -86,9 +96,9 @@ case class Map[A, B: Encoder](
 }
 
 case class Filter[A](
-    input: LazyList[A],
+    input: Datasetish[A],
     f: A => Boolean
-) extends LazyList[A] {
+) extends Datasetish[A] {
   override def iterator: Iterator[A] =
     input.iterator
       .filter(f)
@@ -102,9 +112,9 @@ case class Filter[A](
 }
 
 case class FlatMap[A, B: Encoder](
-    input: LazyList[A],
+    input: Datasetish[A],
     f: A => TraversableOnce[B]
-) extends LazyList[B] {
+) extends Datasetish[B] {
   override def iterator: Iterator[B] =
     input.iterator
       .flatMap(f)
@@ -118,9 +128,9 @@ case class FlatMap[A, B: Encoder](
 }
 
 case class Join[Left: Encoder, Right: Encoder, Key: Encoder](
-    leftInput: LazyList[(Key, Left)],
-    rightInput: LazyList[(Key, Right)]
-) extends LazyList[
+    leftInput: Datasetish[(Key, Left)],
+    rightInput: Datasetish[(Key, Right)]
+) extends Datasetish[
       (Key, Left, Right)
     ] {
   def iterator: Iterator[(Key, Left, Right)] =
@@ -156,9 +166,9 @@ case class LeftJoin[
     Right: Encoder: TypeTag,
     Key: Encoder
 ](
-    leftInput: LazyList[(Key, Left)],
-    rightInput: LazyList[(Key, Right)]
-) extends LazyList[
+    leftInput: Datasetish[(Key, Left)],
+    rightInput: Datasetish[(Key, Right)]
+) extends Datasetish[
       (Key, Left, Option[Right])
     ] {
   def iterator: Iterator[(Key, Left, Option[Right])] =
@@ -203,9 +213,9 @@ case class OuterJoin[
     Right: Encoder: TypeTag,
     Key: Encoder
 ](
-    leftInput: LazyList[(Key, Left)],
-    rightInput: LazyList[(Key, Right)]
-) extends LazyList[
+    leftInput: Datasetish[(Key, Left)],
+    rightInput: Datasetish[(Key, Right)]
+) extends Datasetish[
       (Key, Option[Left], Option[Right])
     ] {
   def iterator: Iterator[(Key, Option[Left], Option[Right])] =

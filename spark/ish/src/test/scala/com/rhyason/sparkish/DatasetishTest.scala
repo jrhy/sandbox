@@ -7,7 +7,7 @@ import com.rhyason.sparkish.StaticEncoders.implicits._
 
 import Data._
 
-class LazyListTest extends AnyFunSuite {
+class DatasetishTest extends AnyFunSuite {
 
   var fastTests = List.empty[() => Unit]
 
@@ -18,7 +18,7 @@ class LazyListTest extends AnyFunSuite {
     .getOrCreate()
   def testCase[A](
       name: String,
-      transformer: LazyList[A],
+      transformer: Datasetish[A],
       expected: Iterable[A],
       expectIterable: ((Iterable[A]) => Unit) = null,
       expectDataset: ((Dataset[A]) => Unit) = null
@@ -46,7 +46,7 @@ class LazyListTest extends AnyFunSuite {
   testCase(
     "happyIterator",
     transformer = {
-      LazyList(List(1, 2, 3))
+      Datasetish(List(1, 2, 3))
         .filter(_ % 2 != 0)
     },
     expected = List(1, 3)
@@ -56,8 +56,8 @@ class LazyListTest extends AnyFunSuite {
     "join1",
     transformer = {
       import StaticEncoders.implicits._
-      val left = LazyList(List((1, "a"), (2, "b"), (3, "c")))
-      val right = LazyList(List((1, "aaa"), (2, "bbb"), (3, "ccc")))
+      val left = Datasetish(List((1, "a"), (2, "b"), (3, "c")))
+      val right = Datasetish(List((1, "aaa"), (2, "bbb"), (3, "ccc")))
       left.join(right)
     },
     expected = List(
@@ -94,7 +94,7 @@ class LazyListTest extends AnyFunSuite {
     "leftJoin",
     transformer = {
       val summaries =
-        LazyList
+        Datasetish
           .LeftJoinable(
             employees
               .keyBy(_.department_id)
@@ -125,7 +125,7 @@ class LazyListTest extends AnyFunSuite {
     "outerJoin",
     transformer = {
       val summaries =
-        LazyList
+        Datasetish
           .OuterJoinable(
             employees
               .keyBy(_.department_id)
@@ -177,13 +177,13 @@ case class Department(department_id: Long, name: String)
 case class Employee(name: String, department_id: Long)
 
 object Data {
-  val employees = LazyList(
+  val employees = Datasetish(
     Employee("bob", 1) ::
       Employee("joe", 2) ::
       Employee("kat", 4) ::
       Nil
   )
-  val departments = LazyList(
+  val departments = Datasetish(
     Department(1, "forensics") ::
       Department(2, "investigations") ::
       Department(3, "complaints") ::
