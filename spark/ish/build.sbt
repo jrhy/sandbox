@@ -1,6 +1,7 @@
 name := "sparkish"
 
 scalaVersion := "2.12.15"
+sparkVersion := "3.1.2"
 
 ThisBuild / organization := "com.rhyason"
 ThisBuild / version := "0.1-SNAPSHOT"
@@ -11,7 +12,7 @@ ThisBuild / scalafixScalaBinaryVersion :=
   CrossVersion.binaryScalaVersion(scalaVersion.value)
 
 libraryDependencies += "org.scalatest" %% "scalatest" % "3.2.10" % "test"
-libraryDependencies += "org.apache.spark" %% "spark-sql" % "3.1.2"
+libraryDependencies += "org.apache.spark" %% "spark-sql" % sparkVersion
 
 inThisBuild(
   List(
