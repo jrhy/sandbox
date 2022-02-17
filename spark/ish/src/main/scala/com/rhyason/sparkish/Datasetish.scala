@@ -29,13 +29,24 @@ abstract class Datasetish[A] extends Iterable[A] {
     FlatMap[A, B](this, f)
   override def filter(f: A => Boolean): Datasetish[A] =
     Filter[A](this, f)
+  def union(o: Datasetish[A]): Datasetish[A] = Union(this, o)
+  def coalesce(partitions: Int): Datasetish[A] = Coalesce(this, partitions)
+  def repartition(partitions: Int): Datasetish[A] =
+    Repartition(this, partitions)
+  def persist(): Datasetish[A] = Persist(this)
+  def unpersist(blocking: Boolean = false): Datasetish[A] =
+    Unpersist(this, blocking)
 }
 
 object Datasetish {
   def apply[A: Encoder](i: Iterable[A]): Datasetish[A] = Source(i)
+  def apply[A: Encoder](d: Dataset[A]): Datasetish[A] = DatasetSource(d)
 
   implicit class FromIterable[A: Encoder](val i: Iterable[A]) {
-    def toLazyList: Datasetish[A] = Source(i)
+    def toDatasetish: Datasetish[A] = Source(i)
+  }
+  implicit class FromDataset[A: Encoder](val d: Dataset[A]) {
+    def toDatasetish: Datasetish[A] = DatasetSource(d)
   }
 
   implicit class Joinable[K: Encoder, V: Encoder](val i: Datasetish[(K, V)]) {
@@ -48,6 +59,20 @@ object Datasetish {
       val outputEncoder =
         Encoders.tuple(encoderFor[K], encoderFor[A])
       l.map((e: A) => (f(e), e))(outputEncoder)
+    }
+  }
+
+  implicit class Unkey[K: Encoder, A: Encoder](val l: Datasetish[(K, A)]) {
+    def unkey(): Datasetish[A] = Map(l, (rec: (K, A)) => rec._2)
+  }
+
+  implicit class Unkey2[K: Encoder, A: Encoder, B: Encoder](
+      val l: Datasetish[(K, A, B)]
+  ) {
+    def unkey(): Datasetish[(A, B)] = {
+      val outputEncoder =
+        Encoders.tuple(encoderFor[A], encoderFor[B])
+      Map(l, (rec: (K, A, B)) => (rec._2, rec._3))(outputEncoder)
     }
   }
 
@@ -78,6 +103,16 @@ case class Source[A: Encoder](source: Iterable[A]) extends Datasetish[A] {
       spark: SparkSession
   ): Dataset[A] =
     spark.createDataset(source.toSeq)
+}
+
+case class DatasetSource[A: Encoder](source: Dataset[A]) extends Datasetish[A] {
+  override def iterator: Iterator[A] =
+    ???
+
+  override def dataset()(implicit
+      spark: SparkSession
+  ): Dataset[A] =
+    source
 }
 
 case class Map[A, B: Encoder](
@@ -271,4 +306,78 @@ case class OuterJoin[
       case (null, (key, right))      => (key, Option.empty, Some(right))
     }(outputEncoder)
   }
+}
+
+case class Coalesce[A](
+    input: Datasetish[A],
+    partitions: Int
+) extends Datasetish[A] {
+  override def iterator: Iterator[A] =
+    input.iterator
+
+  override def dataset()(implicit
+      spark: SparkSession
+  ): Dataset[A] =
+    input
+      .dataset()
+      .coalesce(partitions)
+}
+
+case class Repartition[A](
+    input: Datasetish[A],
+    partitions: Int
+) extends Datasetish[A] {
+  override def iterator: Iterator[A] =
+    input.iterator
+
+  override def dataset()(implicit
+      spark: SparkSession
+  ): Dataset[A] =
+    input
+      .dataset()
+      .repartition(partitions)
+}
+
+case class Union[A](
+    input1: Datasetish[A],
+    input2: Datasetish[A]
+) extends Datasetish[A] {
+  override def iterator: Iterator[A] =
+    input1.iterator ++ input2.iterator
+
+  override def dataset()(implicit
+      spark: SparkSession
+  ): Dataset[A] =
+    input1
+      .dataset()
+      .union(input2.dataset())
+}
+
+case class Persist[A](
+    input: Datasetish[A]
+) extends Datasetish[A] {
+  override def iterator: Iterator[A] =
+    input.iterator
+
+  override def dataset()(implicit
+      spark: SparkSession
+  ): Dataset[A] =
+    input
+      .dataset()
+      .persist()
+}
+
+case class Unpersist[A](
+    input: Datasetish[A],
+    blocking: Boolean = false
+) extends Datasetish[A] {
+  override def iterator: Iterator[A] =
+    input.iterator
+
+  override def dataset()(implicit
+      spark: SparkSession
+  ): Dataset[A] =
+    input
+      .dataset()
+      .unpersist(blocking)
 }
