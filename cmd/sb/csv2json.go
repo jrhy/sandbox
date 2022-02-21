@@ -51,6 +51,9 @@ func csv2json() error {
 		}
 		m := make(map[string]string, len(header))
 		for i := range r {
+			if i >= len(header) {
+				break
+			}
 			m[header[i]] = r[i]
 		}
 		b, err := json.MarshalIndent(m, "", "  ")
