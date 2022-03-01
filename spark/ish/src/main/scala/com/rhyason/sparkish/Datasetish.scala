@@ -19,9 +19,7 @@ abstract class Datasetish[A] extends Iterable[A] {
 
   override def iterator(): Iterator[A]
 
-  def dataset()(implicit
-      spark: SparkSession
-  ): Dataset[A]
+  def dataset()(implicit spark: SparkSession): Dataset[A]
 
   def map[B: Encoder](f: A => B): Datasetish[B] =
     Map[A, B](this, f)
@@ -29,13 +27,19 @@ abstract class Datasetish[A] extends Iterable[A] {
     FlatMap[A, B](this, f)
   override def filter(f: A => Boolean): Datasetish[A] =
     Filter[A](this, f)
-  def union(o: Datasetish[A]): Datasetish[A] = Union(this, o)
-  def coalesce(partitions: Int): Datasetish[A] = Coalesce(this, partitions)
+  def union(o: Datasetish[A]): Datasetish[A] =
+    Union(this, o)
+  def coalesce(partitions: Int): Datasetish[A] =
+    sparkOnly(_.coalesce(partitions))
   def repartition(partitions: Int): Datasetish[A] =
-    Repartition(this, partitions)
-  def persist(): Datasetish[A] = Persist(this)
+    sparkOnly(_.repartition(partitions))
+  def persist(): Datasetish[A] =
+    sparkOnly(_.persist)
   def unpersist(blocking: Boolean = false): Datasetish[A] =
-    Unpersist(this, blocking)
+    sparkOnly(_.unpersist(blocking))
+
+  private def sparkOnly(f: (Dataset[A]) => Dataset[A]): Datasetish[A] =
+    new SparkOnly(this, f)
 }
 
 object Datasetish {
@@ -277,19 +281,24 @@ case class Coalesce[A](
       .coalesce(partitions)
 }
 
-case class Repartition[A](
-    input: Datasetish[A],
-    partitions: Int
+abstract class IterableNop[A](
+    input: Datasetish[A]
 ) extends Datasetish[A] {
-  override def iterator: Iterator[A] =
+  final override def iterator: Iterator[A] =
     input.iterator
+}
 
+class SparkOnly[A](
+    input: Datasetish[A],
+    sparkFunc: (Dataset[A]) => Dataset[A]
+) extends IterableNop[A](input) {
   override def dataset()(implicit
       spark: SparkSession
   ): Dataset[A] =
-    input
-      .dataset()
-      .repartition(partitions)
+    sparkFunc(
+      input
+        .dataset()
+    )
 }
 
 case class Union[A](
@@ -305,33 +314,4 @@ case class Union[A](
     input1
       .dataset()
       .union(input2.dataset())
-}
-
-case class Persist[A](
-    input: Datasetish[A]
-) extends Datasetish[A] {
-  override def iterator: Iterator[A] =
-    input.iterator
-
-  override def dataset()(implicit
-      spark: SparkSession
-  ): Dataset[A] =
-    input
-      .dataset()
-      .persist()
-}
-
-case class Unpersist[A](
-    input: Datasetish[A],
-    blocking: Boolean = false
-) extends Datasetish[A] {
-  override def iterator: Iterator[A] =
-    input.iterator
-
-  override def dataset()(implicit
-      spark: SparkSession
-  ): Dataset[A] =
-    input
-      .dataset()
-      .unpersist(blocking)
 }
