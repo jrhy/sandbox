@@ -169,15 +169,10 @@ case class Join[Left: Encoder, Right: Encoder, Key: Encoder](
       (Key, Left, Right)
     ] {
   def iterator: Iterator[(Key, Left, Right)] =
-    leftInput.iterator.flatMap { case (k1, v1) =>
-      rightInput.iterator.flatMap { case (k2, v2) =>
-        if (k1 == k2) {
-          Some((k1, v1, v2))
-        } else {
-          None
-        }
-      }
-    }
+    JoinExtensions
+      .FromTraversableLike(leftInput.toIterable)
+      .join(rightInput)
+      .iterator
 
   override def dataset()(implicit
       spark: SparkSession
@@ -207,22 +202,10 @@ case class LeftJoin[
       (Key, Left, Option[Right])
     ] {
   def iterator: Iterator[(Key, Left, Option[Right])] =
-    leftInput.iterator.flatMap {
-      case (k1, v1) => {
-        val res = rightInput.iterator.flatMap { case (k2, v2) =>
-          if (k1 == k2) {
-            Some((k1, v1, Some(v2)))
-          } else {
-            None
-          }
-        }
-        if (res.nonEmpty) {
-          res
-        } else {
-          Some((k1, v1, None))
-        }
-      }
-    }
+    JoinExtensions
+      .FromTraversableLike(leftInput.toIterable)
+      .leftJoin(rightInput)
+      .iterator
 
   override def dataset()(implicit
       spark: SparkSession
@@ -254,39 +237,10 @@ case class OuterJoin[
       (Key, Option[Left], Option[Right])
     ] {
   def iterator: Iterator[(Key, Option[Left], Option[Right])] =
-    leftInput.iterator
-      .flatMap {
-        case (k1, v1) => {
-          val res = rightInput.iterator.flatMap { case (k2, v2) =>
-            if (k1 == k2) {
-              Some((k1, Some(v1), Some(v2)))
-            } else {
-              None
-            }
-          }.toList
-          if (res.nonEmpty) {
-            res
-          } else {
-            Some((k1, Some(v1), None))
-          }
-        }
-      } ++
-      rightInput.iterator.flatMap {
-        case (k2, v2) => {
-          val res = leftInput.iterator.flatMap { case (k1, v1) =>
-            if (k1 == k2) {
-              Some((k1, Some(v1), Some(v2)))
-            } else {
-              None
-            }
-          }.toList
-          if (res.nonEmpty) {
-            None
-          } else {
-            Some((k2, None, Some(v2)))
-          }
-        }
-      }
+    JoinExtensions
+      .FromTraversableLike(leftInput.toIterable)
+      .outerJoin(rightInput)
+      .iterator
 
   override def dataset()(implicit
       spark: SparkSession
