@@ -1,5 +1,5 @@
 DATA=BCCDC_COVID19_Dashboard_Case_Details.csv
-S3DB=s3db --bucket=$$(cat .bucket) --master-key-file=$$(cat .key) -q
+S3DB=s3db --bucket=$$(cat .bucket) --master-key-file=.key -q
 
 all: cdc.version.current cdc.vch.version.current active.txt
 
