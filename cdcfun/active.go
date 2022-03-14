@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"io/ioutil"
 	"math"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -18,33 +18,31 @@ import (
 	"github.com/jrhy/s3db"
 )
 
-func main() {
+const keyFile = ".key"
+const bucketFile = ".bucket"
 
-	prefix := flag.String("p", "", "prefix of s3db")
-	bucket := flag.String("b", "", "s3 bucket containing s3db")
-	keyFile := flag.String("k", "", "encryption keyphrase")
-	flag.Parse()
-	if *prefix == "" || *bucket == "" {
-		fmt.Printf("%v %v\n", *prefix, *bucket)
-		flag.Usage()
-		os.Exit(1)
-	}
+func main() {
 
 	ctx := context.Background()
 	s := getS3()
 	var nodeEncryptor s3db.Encryptor
-	if *keyFile != "" {
-		keyBytes, err := ioutil.ReadFile(*keyFile)
+	if keyFile != "" {
+		keyBytes, err := ioutil.ReadFile(keyFile)
 		if err != nil {
 			panic(err)
 		}
 		nodeEncryptor = s3db.V1NodeEncryptor(keyBytes)
 	}
+	bucketBytes, err := ioutil.ReadFile(bucketFile)
+	if err != nil {
+		panic(err)
+	}
+	bucketName := strings.TrimSpace(string(bucketBytes))
 	cfg := s3db.Config{
 		Storage: &s3db.S3BucketInfo{
 			EndpointURL: s.Endpoint,
-			BucketName:  *bucket,
-			Prefix:      *prefix,
+			BucketName:  bucketName,
+			Prefix:      "cdc-vch",
 		},
 		KeysLike:      "stringy",
 		ValuesLike:    "stringy",

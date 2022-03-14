@@ -1,9 +1,10 @@
-DATA=BCCDC_COVID19_Dashboard_Case_Details.csv 
-S3DB=s3db --bucket=${S3_BUCKET} --master-key-file=.key -q
+DATA=BCCDC_COVID19_Dashboard_Case_Details.csv
+S3DB=s3db --bucket=$$(cat .bucket) --master-key-file=$$(cat .key) -q
 
 all: cdc.version.current cdc.vch.version.current active.txt
 
 fetch::
+	#curl -O http://www.bccdc.ca/Health-Info-Site/Documents/${DATA}
 	wget -m -np http://www.bccdc.ca/Health-Info-Site/Documents/${DATA}
 	cp -rp www.bccdc.ca/Health-Info-Site/Documents/${DATA} ${DATA}
 
@@ -26,8 +27,7 @@ cdc.vch.version.current: /tmp/values-vch
 		| awk '{printf("%s=%s\n", $$2, $$1)}' | sort > /tmp/values-vch
 
 ${DATA}:
-	wget -m -np http://www.bccdc.ca/Health-Info-Site/Documents/${DATA}
-	cp -rp www.bccdc.ca/Health-Info-Site/Documents/${DATA} ${DATA}
+	curl -O http://www.bccdc.ca/Health-Info-Site/Documents/${DATA}
 
 diff:
 	${S3DB} --prefix=cdc diff $$(cat cdc.version)
@@ -36,6 +36,6 @@ clean:
 	rm -f ${DATA} /tmp/values cdc.version.current cdc.vch.version.current
 
 active.txt: active.go cdc.vch.version.current
-	go run active.go -b ${S3_BUCKET} -p cdc-vch -k .key > active.txt
+	go run active.go > active.txt
 	tail active.txt
 
