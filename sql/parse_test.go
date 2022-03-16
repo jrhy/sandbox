@@ -50,15 +50,14 @@ func TestSelectValues(t *testing.T) {
 func TestWith(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(
-		`
-		WITH t1 (c1) AS (
-		     VALUES (1)
-		          , (NULL)
-		)
-		 SELECT COUNT(c1)
-		      , COUNT(*)
-		   FROM t1;
-		`)
+`WITH t1 (c1) AS (
+     VALUES (1)
+	  , (NULL)
+)
+ SELECT COUNT(c1)
+      , COUNT(*)
+   FROM t1;
+`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, "", s.Input)
@@ -89,22 +88,22 @@ func TestWith2(t *testing.T) {
 func TestSimulateOuterJoinLikeSqlite(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(
-		`
-		WITH left (employee,department_id) AS (
-		     VALUES ('bob', 1)
-		          , ('joe', 2)
-		          , ('kat', 4)
-		), right (department_id, department_name) as (
-		     VALUES (1, 'forensics')
-		          , (2, 'investigations')
-		          , (3, 'complaints')
-		)
-		 SELECT left.employee, right.department_name from left
-                 left join right using(department_id) 
-                 --UNION ALL
-		 --SELECT left.employee, right.department_name from right
-                 --left join left using(department_id) where left.department_id is null
-		`)
+`
+WITH left (employee,department_id) AS (
+     VALUES ('bob', 1)
+	  , ('joe', 2)
+	  , ('kat', 4)
+), right (department_id, department_name) as (
+     VALUES (1, 'forensics')
+	  , (2, 'investigations')
+	  , (3, 'complaints')
+)
+SELECT left.employee, right.department_name from left
+left join right using(department_id) 
+UNION ALL
+SELECT left.employee, right.department_name from right
+left join left using(department_id) where left.department_id is null
+`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, "", s.Input)
@@ -114,19 +113,18 @@ func TestSimulateOuterJoinLikeSqlite(t *testing.T) {
 func TestOuterJoin(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(
-		`
-		WITH left (employee,department_id) AS (
-		     VALUES ('bob', 1)
-		          , ('joe', 2)
-		          , ('kat', 4)
-		), right (department_id, department_name) as (
-		     VALUES (1, 'forensics')
-		          , (2, 'investigations')
-		          , (3, 'complaints')
-		)
-		 SELECT employee, department_name from left
-                 outer join right using(department_id) 
-		`)
+`WITH left (employee,department_id) AS (
+     VALUES ('bob', 1)
+	  , ('joe', 2)
+	  , ('kat', 4)
+), right (department_id, department_name) as (
+     VALUES (1, 'forensics')
+	  , (2, 'investigations')
+	  , (3, 'complaints')
+)
+ SELECT employee, department_name from left
+ outer join right using(department_id) 
+`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, "", s.Input)

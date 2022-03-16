@@ -21,7 +21,9 @@ type Select struct {
 	Expressions []OutputExpression
 	Tables      []Table
 	Values      *Values
+	Where       []Condition
 	Join        *Join
+	SetOp       *SetOp
 }
 
 type JoinType int
@@ -196,6 +198,9 @@ func AtLeastOne(f parseFunc) parseFunc {
 }
 
 func RE(re *regexp.Regexp, submatchcb func([]string) bool) parseFunc {
+	if !strings.HasPrefix(re.String(), "^") {
+		panic("regexp missing ^ restriction: " + re.String())
+	}
 	return func(b *Expression) bool {
 		fmt.Printf("checking RE %v against '%v'\n", re, b.Input)
 		s := re.FindStringSubmatch(b.Input)
@@ -285,11 +290,52 @@ func ParseSelect(s *Select) parseFunc {
 	return SeqWS(
 		CI("select"),
 		outputExpressions(&s.Expressions),
-		Optional(SeqWS(CI("from"), OneOf(
-			tables(&s.Tables),
-			SeqWS(Exact("("), values(&s.Values), Exact(")")),
-		))),
-		Optional(join(&s.Join)),
+		Optional(SeqWS(
+			CI("from"),
+			fromItems(s),
+		)),
+		Optional(where(&s.Where)),
+		Optional(setOp(&s.SetOp)),
+	)
+}
+
+type Condition struct {
+	Left  string // TODO not just columns but functions
+	Right string
+	Op    string
+}
+
+func where(conditions *[]Condition) parseFunc {
+	return func(b *Expression) bool {
+		var c *Condition
+		return b.match(SeqWS(
+			CI("where"),
+			Delimited(SeqWS(
+				condition(&c).Action(func() {
+					*conditions = append(*conditions, *c)
+				})),
+				Exact("and")),
+			))
+	}
+}
+func condition(c **Condition) parseFunc {
+	return func(b *Expression) bool {
+		var left, right, op string
+		return b.match(OneOf(
+			// TODO: functions, fix sqlFunc, refactor w/SelectExpression
+			SeqWS(name(&left), binaryOp(&op), name(&right)).Action(func() {
+				*c = &Condition{Left: left, Right: right, Op: op}
+			}),
+		))
+	}
+}
+func binaryOp(res *string) parseFunc {
+	var Exact = func(s string, res *string) parseFunc {
+		return Exact(s).Action(func() { *res = s })
+	}
+	return OneOf(
+		Exact("==", res),
+		Exact("is", res),
 	)
 }
 
@@ -314,6 +360,41 @@ func join(j **Join) parseFunc {
 				Using:    using,
 			}
 		}))
+	}
+}
+
+type SetOpType int
+
+const (
+	Union = SetOpType(iota)
+	Intersect
+	Except
+)
+
+type SetOp struct {
+	Op    SetOpType
+	All   bool
+	Right *Select
+}
+
+func setOp(s **SetOp) parseFunc {
+	return func(b *Expression) bool {
+		var operation SetOpType
+		var all bool
+		var right Select
+		return b.match(SeqWS(
+			OneOf(
+				CI("union").Action(func() { operation = Union }),
+				CI("intersect").Action(func() { operation = Intersect }),
+				CI("except").Action(func() { operation = Except })),
+			Optional(CI("all").Action(func() { all = true })),
+			ParseSelect(&right).Action(func() {
+				*s = &SetOp{
+					Op:    operation,
+					All:   all,
+					Right: &right,
+				}
+			})))
 	}
 }
 
@@ -357,9 +438,9 @@ func outputExpressions(expressions *[]OutputExpression) parseFunc {
 	return func(b *Expression) bool {
 		var e OutputExpression
 		return b.match(Delimited(
-			outputExpression(&e).Action(func() {
+			SeqWS(outputExpression(&e).Action(func() {
 				*expressions = append(*expressions, e)
-			}),
+			})),
 			Exact(",")))
 	}
 }
@@ -400,19 +481,22 @@ func sqlFunc(f *Func) parseFunc {
 	}
 }
 
-func tables(tables *[]Table) parseFunc {
-	return func(b *Expression) bool {
-		return b.match(Delimited(nameAs(func(name, as string) {
-			*tables = append(*tables, Table{Table: name, Alias: as})
-		}), Exact(",")))
-	}
+func fromItems(s *Select) parseFunc {
+	return SeqWS(
+		Delimited(OneOf(
+			nameAs(func(name, as string) {
+				s.Tables = append(s.Tables, Table{Table: name, Alias: as})
+			}),
+			SeqWS(Exact("("), values(&s.Values), Exact(")")),
+		), Exact(",")),
+		Optional(join(&s.Join)))
 }
 
 func name(res *string) parseFunc {
 	return func(b *Expression) bool {
 		var name string
 		return b.match(SeqWS(
-			sqlName(&name),
+			sqlName(&name), // TODO: '.' should be broken out into separate schema
 		).Action(func() { *res = name }))
 	}
 }
@@ -427,7 +511,7 @@ func nameAs(cb func(name, as string)) parseFunc {
 	}
 }
 
-var sqlNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9-]*`)
+var sqlNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9-\.]*`)
 
 func sqlName(res *string) parseFunc {
 	return RE(sqlNameRE, func(s []string) bool {
