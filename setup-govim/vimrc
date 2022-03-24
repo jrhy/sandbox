@@ -1,5 +1,6 @@
-set t_Co=0
-  
+" disable crazy colors
+" set t_Co=0  
+colorscheme murphy  
   
 inoremap jk <esc>
 set t_SH=
@@ -75,3 +76,9 @@ if has("patch-8.1.1904")
   set completeopt+=popup
   set completepopup=align:menu,border:off,highlight:Pmenu
 endif
+
+
+
+set cursorline  " underline the current line
+
+
