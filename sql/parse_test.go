@@ -1,11 +1,14 @@
 package sql_test
 
 import (
+	"testing"
+
 	"github.com/jrhy/sandbox/sql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
+
+// TODO: SELECT t1.*
 
 func TestSelect1(t *testing.T) {
 	t.Parallel()
@@ -31,26 +34,43 @@ func TestSelectWithoutFrom(t *testing.T) {
 
 func TestValues(t *testing.T) {
 	t.Parallel()
-	// := sql.Parse(`values(1,2),(3,4)`)
 	s, err := sql.Parse(`values('1',2,null,340282366920938463463374607431768211456),
 		(3,4)`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, "", s.Input)
-	t.Logf("%s\n", s)
+	assert.NotNil(t, s.Values)
+	assert.Equal(t, 2, len(s.Values.Rows))
+	assert.NotNil(t, s.Values.Schema)
+	assert.Equal(t, 4, len(s.Values.Schema.Columns))
+	if t.Failed() {
+		t.Logf("%s\n", s)
+	}
 }
 func TestSelectValues(t *testing.T) {
 	t.Parallel()
-	s, err := sql.Parse(`select * from (values(1,2),(3,4));`)
+	s, err := sql.Parse(`select * from (values(1,2)),(values(3,4),(5,6));`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Equal(t, "", s.Input)
+	assert.NotNil(t, s.Select)
+	assert.Equal(t, 1, len(s.Select.Values[0].Rows))
+	assert.Equal(t, 2, len(s.Select.Values[1].Rows))
+	assert.NotNil(t, s.Select.Schema)
+	assert.Equal(t, 6, len(s.Select.Schema.Columns))
+	assert.Equal(t, "column1", s.Select.Schema.Columns[0].Name)
+	assert.Equal(t, "column2", s.Select.Schema.Columns[1].Name)
+	assert.Equal(t, "column1", s.Select.Schema.Columns[2].Name)
+	assert.Equal(t, "column2", s.Select.Schema.Columns[3].Name)
+	if t.Failed() {
+		t.Logf("%s\n", s)
+	}
 }
 
 func TestWith(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(
-`WITH t1 (c1) AS (
+		`WITH t1 (c1) AS (
      VALUES (1)
 	  , (NULL)
 )
@@ -88,7 +108,7 @@ func TestWith2(t *testing.T) {
 func TestSimulateOuterJoinLikeSqlite(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(
-`
+		`
 WITH left (employee,department_id) AS (
      VALUES ('bob', 1)
 	  , ('joe', 2)
@@ -113,7 +133,7 @@ left join left using(department_id) where left.department_id is null
 func TestOuterJoin(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(
-`WITH left (employee,department_id) AS (
+		`WITH left (employee,department_id) AS (
      VALUES ('bob', 1)
 	  , ('joe', 2)
 	  , ('kat', 4)
