@@ -2,19 +2,8 @@ package sql
 
 import (
 	"errors"
+	"fmt"
 )
-
-type Schema struct {
-	Parent   *Schema            `json:",omitempty"`
-	Name     string             `json:",omitempty"`
-	Children map[string]*Schema `json:",omitempty"` // functions/tables
-	Columns  []SchemaColumn     `json:",omitempty"`
-	//GetRowIterator func() RowIterator
-}
-type SchemaColumn struct {
-	Name        string `json:",omitempty"`
-	DefaultType string `json:",omitempty"`
-}
 
 type Resolver interface {
 	Resolve(name string, schemas map[string]*Schema) (RowIterator, error)
@@ -22,6 +11,7 @@ type Resolver interface {
 
 type RowIterator interface {
 	Next() (*Row, error)
+	GetSchema() *Schema
 }
 
 func Eval(e *Expression, schemas map[string]*Schema, cb func(*Row) error) error {
@@ -32,31 +22,77 @@ func Eval(e *Expression, schemas map[string]*Schema, cb func(*Row) error) error 
 	return errors.New("unimplemented SQL")
 }
 func evalSelect(e *Select, schemas map[string]*Schema, cb func(*Row) error) error {
-	r := Row{}
-	err := enumerateRows(e, r, 0, func(r *Row) error {
-		nr := *r
-		applyFromItems(e, &nr)
-		return cb(&nr)
+	var fromItems map[string]Row = make(map[string]Row)
+	err := enumerateRows(e, &fromItems, 0, func(fromItems *map[string]Row) error {
+		var r *Row = &Row{}
+		if false {
+			fmt.Printf("cb: want to apply output expressions for these %d fromItems:\n",
+				len(*fromItems))
+			for schemaName, row := range *fromItems {
+				fmt.Printf("\t%s: ", schemaName)
+				for _, col := range row {
+					fmt.Printf("%v, ", col)
+					*r = append(*r, col)
+				}
+				fmt.Printf("\n")
+			}
+		} else {
+			if !evaluateConditions(e, fromItems, r) {
+				return nil
+			}
+			applyOutputExpressions(e, fromItems, r)
+		}
+		return cb(r)
 	})
 	if err != nil {
 		panic(err)
 	}
 	return nil
 }
-func applyFromItems(e *Select, r *Row) {
+
+func evaluateConditions(e *Select, fromItems *map[string]Row, r *Row) bool {
+	if e.Where == nil {
+		return true
+	}
+	panic("unimpl")
+}
+
+func applyOutputExpressions(e *Select, fromItems *map[string]Row, r *Row) {
+	var output Row = make(Row, len(e.Schema.Columns))
+	fmt.Printf("AOE going through %d schema columns\n", len(e.Schema.Columns))
+	for i, c := range e.Schema.Columns {
+		if c.Source == "" {
+			fmt.Printf("skipping column %d w/blank source\n", i)
+			continue
+		}
+		sourceSchema := e.Schema.Sources[c.Source]
+		sourceRow := (*fromItems)[c.Source]
+		sourceColIndex := sourceSchema.FindColumnIndex(c.SourceColumn)
+		if sourceColIndex == nil {
+			panic("sourceColIndex nil, aliases not implemented?")
+		}
+		output[i] = sourceRow[*sourceColIndex]
+		fmt.Printf("assigning output %d %v\n", i, sourceRow[*sourceColIndex])
+	}
 	for _, o := range e.Expressions {
-		name := o.Alias
 		if o.Expression.Func == nil && o.Expression.Column == nil {
 			panic("non-Column unimpl")
 		}
+		// TODO: functions should be evaluated in dependency order
 		if o.Expression.Func != nil {
-			*r = append(*r, o.Expression.Func.RowFunc(r))
-		} else if o.Expression.Column.All {
-		} else if name == "" {
-			name = o.Expression.Column.Term
-			panic("resolving specific column from schema unimpl")
+			for i := range e.Schema.Columns {
+				if output[i] == nil {
+					output[i] = o.Expression.Func.RowFunc(output)
+					break
+				}
+				if i == len(e.Schema.Columns) {
+					panic("could not find column for function result")
+				}
+			}
 		}
 	}
+	fmt.Printf("output: %+v\n", output)
+	*r = output
 }
 
 /*
@@ -82,13 +118,25 @@ func applyFromItems(e *Select, r *Row) {
 		r = append(r, cv)
 	}
 	return cb(&r)*/
-func enumerateRows(e *Select, baseRow Row, fromFromItem int, cb func(*Row) error) error {
+
+func enumerateRows(e *Select, fromItems *map[string]Row, fromFromItem int, cb func(*map[string]Row) error) error {
 	it := rowIteratorForFromItem(e, fromFromItem)
 	if it == nil {
-		return cb(&baseRow)
+		return cb(fromItems)
 	}
+	fmt.Printf("rowIteratorForFromItem(%d), fromItems:\n", fromFromItem)
+	for schemaName, row := range *fromItems {
+		fmt.Printf("\trow w/schemaName %s: ", schemaName)
+		for i := range row {
+			fmt.Printf("%v ", row[i])
+		}
+		fmt.Printf("\n")
+	}
+
+	i := 0
 	for {
-		row := baseRow
+		fmt.Printf("er %d row %d\n", fromFromItem, i)
+		i++
 		i, err := it.Next()
 		if err != nil {
 			return err
@@ -96,10 +144,18 @@ func enumerateRows(e *Select, baseRow Row, fromFromItem int, cb func(*Row) error
 		if i == nil {
 			return nil
 		}
-		row = append(row, (*i)...)
-		if err = enumerateRows(e, row, fromFromItem+1, cb); err != nil {
+		schemaName := it.GetSchema().Name
+		if _, schemaNameUsed := (*fromItems)[schemaName]; schemaNameUsed {
+			return fmt.Errorf("schema name is not unique: '%s'", schemaName)
+		}
+		(*fromItems)[schemaName] = *i
+		fmt.Printf("len(fromItems) = %d, name=%s\n", len(*fromItems), schemaName)
+		if err = enumerateRows(e, fromItems, fromFromItem+1, cb); err != nil {
+			fmt.Printf("badbad %v\n", err)
 			return err
 		}
+		delete(*fromItems, schemaName)
+		fmt.Printf("done, len(fromItems) = %d\n", len(*fromItems))
 	}
 }
 func rowIteratorForFromItem(s *Select, n int) RowIterator {
@@ -109,7 +165,7 @@ func rowIteratorForFromItem(s *Select, n int) RowIterator {
 			continue
 		}
 		if w.Values != nil {
-			return &rowArrayValueIterator{Rows: w.Values.Rows}
+			return &rowArrayValueIterator{Rows: w.Values.Rows, Schema: &w.Schema}
 		} else {
 			panic("rowIteratorForFromItem unimpl for subselect")
 		}
@@ -120,20 +176,19 @@ func rowIteratorForFromItem(s *Select, n int) RowIterator {
 			n--
 			continue
 		}
-		return &rowArrayValueIterator{Rows: v.Rows}
-	}
-	if s.Join != nil {
-		panic("child schema resolution unimpl for join")
+		return &rowArrayValueIterator{Rows: v.Rows, Schema: &v.Schema}
 	}
 	return nil
 }
 
 type rowArrayValueIterator struct {
-	Rows []Row
-	i    int
+	Rows   []Row
+	Schema *Schema
+	i      int
 }
 
 func (r *rowArrayValueIterator) Next() (*Row, error) {
+	fmt.Printf("ravi %p row %d\n", r, r.i)
 	if r.i == len(r.Rows) {
 		return nil, nil
 	}
@@ -141,6 +196,7 @@ func (r *rowArrayValueIterator) Next() (*Row, error) {
 	r.i++
 	return &res, nil
 }
+func (r *rowArrayValueIterator) GetSchema() *Schema { return r.Schema }
 
 /*
 func CURRENT_TIMESTAMP() RowIterator {

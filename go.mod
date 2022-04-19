@@ -7,7 +7,9 @@ require (
 	github.com/PuerkitoBio/goquery v1.7.1
 	github.com/andybalholm/cascadia v1.3.1 // indirect
 	github.com/apache/beam/sdks/v2 v2.34.0
+	github.com/araddon/qlbridge v0.0.2
 	github.com/aws/aws-sdk-go v1.43.18
+	github.com/go-sql-driver/mysql v1.6.0 // indirect
 	github.com/google/martian v2.1.1-0.20190517191504-25dcb96d9e51+incompatible // indirect
 	github.com/google/subcommands v1.2.0
 	github.com/gopherjs/gopherjs v0.0.0-20211111143520-d0d5ecc1a356 // indirect
