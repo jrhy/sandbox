@@ -13,30 +13,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type Expr struct {
-	Inputs map[string]struct{}
-	Eval   func(map[string]*sql.Schema, func(*sql.Row) error) error
-}
-
-func Parse(s string) (Expr, error) {
-	var cv sql.ColumnValue
+func Parse(s string) (Evaluator, error) {
+	var evaluator Evaluator
 	e := p.Parser{Remaining: s}
-	if !e.Match(binaryExpr(&cv)) {
-		return Expr{}, errors.New("parse: bad expression")
+	if !e.Match(binaryExpr(&evaluator)) {
+		return Evaluator{}, errors.New("parse: bad expression")
 	}
 
 	if e.Remaining != "" {
-		return Expr{}, errors.New("parse expression: at '" + e.Remaining + "'")
+		return Evaluator{}, errors.New("parse expression: at '" + e.Remaining + "'")
 	}
-	return Expr{
-		Eval: func(schemas map[string]*sql.Schema, cb func(*sql.Row) error) error {
-			cb(&sql.Row{cv})
-			return nil
-		},
-	}, nil
+	return evaluator, nil
 }
 
 func toInt(cv sql.ColumnValue) *int {
+	// TODO: sqlite equivalence: for arithmetic, parse strings to numbers
 	switch v := (cv).(type) {
 	case colval.Int:
 		i := int(v)
@@ -102,24 +93,47 @@ func precedence(op string) int {
 	}
 }
 
-type evaluatorFunc func() sql.ColumnValue
+type Evaluator struct {
+	// TODO want functions that can return ([][]sql.ColumnValue,error)
+	Func   func(map[string]sql.ColumnValue) sql.ColumnValue
+	Inputs map[string]struct{}
+}
 
-func binaryExpr(res *sql.ColumnValue) p.Func {
+func binaryExpr(res *Evaluator) p.Func {
 	var cv sql.ColumnValue
+	var name string
 	nextVal := p.SeqWS(sql.ColumnValueParser(&cv))
+	nextRef := p.SeqWS(sql.SQLName(&name))
+	nextValOrRef := p.OneOf(nextVal, nextRef)
 	return func(e *p.Parser) bool {
-		var valStack []evaluatorFunc
+		var valStack []Evaluator
 		var opStack []string
 		var precStack []int
 		var minPrecedence = 1
 		for {
-			if !e.Match(nextVal) {
+			name = ""
+			if !e.Match(nextValOrRef) {
 				fmt.Printf("NO MATCH\n")
 				return false
 			}
-			fmt.Printf("got cv: %v\n", cv)
-			cv := cv
-			valStack = append(valStack, func() sql.ColumnValue { return cv })
+			if name == "" {
+				fmt.Printf("got cv: %v\n", cv)
+				cv := cv
+				valStack = append(valStack, Evaluator{Func: func(_ map[string]sql.ColumnValue) sql.ColumnValue { return cv }})
+			} else {
+				name := name
+				valStack = append(valStack, Evaluator{
+					Func: func(inputs map[string]sql.ColumnValue) sql.ColumnValue {
+						fmt.Printf("deref! %s -> %v\n", name, inputs[name])
+						res, ok := inputs[name]
+						if !ok {
+							panic(fmt.Errorf("column reference missing in inputs: %s" + name))
+						}
+						return res
+					},
+					Inputs: map[string]struct{}{name: {}},
+				})
+			}
 			for {
 				fmt.Printf("input: %s\n", e.Remaining)
 				/*
@@ -192,7 +206,7 @@ func binaryExpr(res *sql.ColumnValue) p.Func {
 					continue
 				} else if len(valStack) == 1 {
 					fmt.Printf("DONE\n")
-					*res = valStack[0]()
+					*res = valStack[0]
 					return true
 				}
 				break
@@ -200,40 +214,59 @@ func binaryExpr(res *sql.ColumnValue) p.Func {
 		}
 	}
 }
-func static(cv sql.ColumnValue) evaluatorFunc {
-	return func() sql.ColumnValue { return cv }
-}
-func equal(inputs []evaluatorFunc) evaluatorFunc {
-	capture := []evaluatorFunc{inputs[0], inputs[1]}
-	return func() sql.ColumnValue {
-		col := []sql.ColumnValue{capture[0](), capture[1]()}
-		if isNull(col[0]) || isNull(col[1]) {
-			return colval.Null{}
-		}
-		if isText(col[0]) && isText(col[1]) {
-			return boolCV(col[0].(colval.Text) == col[1].(colval.Text))
-		}
-		if isBlob(col[0]) && isBlob(col[1]) {
-			return boolCV(bytes.Equal(col[0].(colval.Blob), col[1].(colval.Blob)))
-		}
-		if isInt(col[0]) {
-			if isInt(col[1]) {
-				return boolCV(col[0].(colval.Int) == col[1].(colval.Int))
-			}
-			if isReal(col[1]) {
-				return boolCV(float64(col[0].(colval.Int)) == float64(col[1].(colval.Real)))
-			}
-		}
-		if isReal(col[0]) {
-			if isInt(col[1]) {
-				return boolCV(float64(col[0].(colval.Real)) == float64(col[1].(colval.Int)))
-			}
-			if isReal(col[1]) {
-				return boolCV(col[0].(colval.Real) == col[1].(colval.Real))
-			}
-		}
-		return boolCV(false)
+
+func requireDimensions(x, y int, cv [][]sql.ColumnValue) error {
+	if len(cv) != y || y > 0 && len(cv[0]) != x {
+		return fmt.Errorf("require %dx%d dimensions", x, y)
 	}
+	return nil
+}
+
+func requireSingle(cv [][]sql.ColumnValue) error { return requireDimensions(1, 1, cv) }
+
+func combineInputs(evaluators []Evaluator) map[string]struct{} {
+	combined := make(map[string]struct{}, len(evaluators)*2)
+	for i := range evaluators {
+		for k := range evaluators[i].Inputs {
+			combined[k] = struct{}{}
+		}
+	}
+	return combined
+}
+
+func equal(inputs []Evaluator) Evaluator {
+	capture := []Evaluator{inputs[0], inputs[1]}
+	return Evaluator{
+		Inputs: combineInputs(capture),
+		Func: func(inputs map[string]sql.ColumnValue) sql.ColumnValue {
+			col := []sql.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
+			if isNull(col[0]) || isNull(col[1]) {
+				return colval.Null{}
+			}
+			if isText(col[0]) && isText(col[1]) {
+				return boolCV(col[0].(colval.Text) == col[1].(colval.Text))
+			}
+			if isBlob(col[0]) && isBlob(col[1]) {
+				return boolCV(bytes.Equal(col[0].(colval.Blob), col[1].(colval.Blob)))
+			}
+			if isInt(col[0]) {
+				if isInt(col[1]) {
+					return boolCV(col[0].(colval.Int) == col[1].(colval.Int))
+				}
+				if isReal(col[1]) {
+					return boolCV(float64(col[0].(colval.Int)) == float64(col[1].(colval.Real)))
+				}
+			}
+			if isReal(col[0]) {
+				if isInt(col[1]) {
+					return boolCV(float64(col[0].(colval.Real)) == float64(col[1].(colval.Int)))
+				}
+				if isReal(col[1]) {
+					return boolCV(col[0].(colval.Real) == col[1].(colval.Real))
+				}
+			}
+			return boolCV(false)
+		}}
 }
 func boolCV(b bool) sql.ColumnValue {
 	if b {
@@ -264,103 +297,119 @@ func isBlob(cv sql.ColumnValue) bool {
 	return isBlob
 }
 
-func or(inputs []evaluatorFunc) evaluatorFunc {
-	capture := []evaluatorFunc{inputs[0], inputs[1]}
-	return func() sql.ColumnValue {
-		col := []sql.ColumnValue{capture[0](), capture[1]()}
-		left := toBool(col[0])
-		if left != nil && *left {
-			return colval.Int(1)
-		}
-		right := toBool(col[1])
-		if right != nil && *right {
-			return colval.Int(1)
-		}
-		if left == nil || right == nil {
-			return colval.Null{}
-		}
-		return colval.Int(0)
-	}
+func or(inputs []Evaluator) Evaluator {
+	capture := []Evaluator{inputs[0], inputs[1]}
+	return Evaluator{
+		Inputs: combineInputs(capture),
+		Func: func(inputs map[string]sql.ColumnValue) sql.ColumnValue {
+			col := []sql.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
+			left := toBool(col[0])
+			if left != nil && *left {
+				return colval.Int(1)
+			}
+			right := toBool(col[1])
+			if right != nil && *right {
+				return colval.Int(1)
+			}
+			if left == nil || right == nil {
+				return colval.Null{}
+			}
+			return colval.Int(0)
+		}}
 }
 
-func add(inputs []evaluatorFunc) evaluatorFunc {
-	capture := []evaluatorFunc{inputs[0], inputs[1]}
-	return func() sql.ColumnValue {
-		col := []sql.ColumnValue{capture[0](), capture[1]()}
-		if _, isNull := col[0].(colval.Null); isNull {
-			return colval.Null{}
-		}
-		if _, isNull := col[1].(colval.Null); isNull {
-			return colval.Null{}
-		}
-		if isReal(col[0]) || isReal(col[1]) {
-			return colval.Real(*toReal(col[0]) + *toReal(col[1]))
-		}
-		left := *toInt(col[0])
-		right := *toInt(col[1])
-		// TODO overflow
-		return colval.Int(left + right)
-	}
+func add(inputs []Evaluator) Evaluator {
+	capture := []Evaluator{inputs[0], inputs[1]}
+	return Evaluator{
+		Inputs: combineInputs(capture),
+		Func: func(inputs map[string]sql.ColumnValue) sql.ColumnValue {
+			col := []sql.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
+			if _, isNull := col[0].(colval.Null); isNull {
+				return colval.Null{}
+			}
+			if _, isNull := col[1].(colval.Null); isNull {
+				return colval.Null{}
+			}
+			if isReal(col[0]) || isReal(col[1]) {
+				return colval.Real(*toReal(col[0]) + *toReal(col[1]))
+			}
+			left := *toInt(col[0])
+			right := *toInt(col[1])
+			// TODO overflow
+			return colval.Int(left + right)
+		}}
 }
 
-func mul(inputs []evaluatorFunc) evaluatorFunc {
-	capture := []evaluatorFunc{inputs[0], inputs[1]}
-	return func() sql.ColumnValue {
-		col := []sql.ColumnValue{capture[0](), capture[1]()}
-		if _, isNull := col[0].(colval.Null); isNull {
-			return colval.Null{}
-		}
-		if _, isNull := col[1].(colval.Null); isNull {
-			return colval.Null{}
-		}
-		if isReal(col[0]) || isReal(col[1]) {
-			return colval.Real(*toReal(col[0]) * *toReal(col[1]))
-		}
-		left := *toInt(col[0])
-		right := *toInt(col[1])
-		// TODO overflow
-		return colval.Int(left * right)
-	}
+func mul(inputs []Evaluator) Evaluator {
+	capture := []Evaluator{inputs[0], inputs[1]}
+	return Evaluator{
+		Inputs: combineInputs(capture),
+		Func: func(inputs map[string]sql.ColumnValue) sql.ColumnValue {
+			col := []sql.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
+			if _, isNull := col[0].(colval.Null); isNull {
+				return colval.Null{}
+			}
+			if _, isNull := col[1].(colval.Null); isNull {
+				return colval.Null{}
+			}
+			if isReal(col[0]) || isReal(col[1]) {
+				return colval.Real(*toReal(col[0]) * *toReal(col[1]))
+			}
+			left := *toInt(col[0])
+			right := *toInt(col[1])
+			// TODO overflow
+			return colval.Int(left * right)
+		}}
 }
 
 func TestExpr_Value(t *testing.T) {
 	t.Parallel()
-	e, err := Parse(`5`)
+	evaluator, err := Parse(`5`)
 	require.NoError(t, err)
-	var rows []sql.Row
-	err = e.Eval(nil, getRows(&rows))
+	rows := evaluator.Func(nil)
 	require.NoError(t, err)
-	require.Equal(t, "[[5]]", mustJSON(rows))
+	require.Equal(t, "5", mustJSON(rows))
 }
 
 func TestExpr_Equality(t *testing.T) {
 	t.Parallel()
 	e, err := Parse(`5=5`)
 	require.NoError(t, err)
-	var rows []sql.Row
-	err = e.Eval(nil, getRows(&rows))
+	rows := e.Func(nil)
 	require.NoError(t, err)
-	require.Equal(t, "[[1]]", mustJSON(rows))
+	require.Equal(t, "1", mustJSON(rows))
 }
 
 func TestExpr_3VL(t *testing.T) {
 	t.Parallel()
 	e, err := Parse(`null or 0`)
 	require.NoError(t, err)
-	var rows []sql.Row
-	err = e.Eval(nil, getRows(&rows))
+	rows := e.Func(nil)
 	require.NoError(t, err)
-	require.Equal(t, "[[{}]]", mustJSON(rows))
+	require.Equal(t, "{}", mustJSON(rows))
 }
 
 func TestExpr_Precedence(t *testing.T) {
 	t.Parallel()
 	e, err := Parse(`3+4*5+1`)
 	require.NoError(t, err)
-	var rows []sql.Row
-	err = e.Eval(nil, getRows(&rows))
+	rows := e.Func(nil)
 	require.NoError(t, err)
-	require.Equal(t, "[[24]]", mustJSON(rows))
+	require.Equal(t, "24", mustJSON(rows))
+}
+
+func TestExpr_ColumnReference(t *testing.T) {
+	t.Parallel()
+	e, err := Parse(`3+foo.bar`)
+	require.NoError(t, err)
+	require.Equal(t, e.Inputs, map[string]struct{}{
+		"foo.bar": {},
+	})
+	rows := e.Func(map[string]sql.ColumnValue{
+		"foo.bar": colval.Int(5),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "8", mustJSON(rows))
 }
 
 func getRows(rows *[]sql.Row) func(*sql.Row) error {

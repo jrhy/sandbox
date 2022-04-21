@@ -615,7 +615,7 @@ func name(res *string) parse.Func {
 	return func(b *parse.Parser) bool {
 		var name string
 		return b.Match(parse.SeqWS(
-			sqlName(&name), // TODO: '.' should be broken out into separate schema
+			SQLName(&name), // TODO: '.' should be broken out into separate schema
 		).Action(func() { *res = name }))
 	}
 }
@@ -624,7 +624,7 @@ func nameAs(cb func(name, as string)) parse.Func {
 	return func(b *parse.Parser) bool {
 		var name, as string
 		return b.Match(parse.SeqWS(
-			sqlName(&name),
+			SQLName(&name),
 			parse.Optional(As(&as)),
 		).Action(func() { cb(name, as) }))
 	}
@@ -632,7 +632,7 @@ func nameAs(cb func(name, as string)) parse.Func {
 
 var sqlNameRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z_0-9-\.]*`)
 
-func sqlName(res *string) parse.Func {
+func SQLName(res *string) parse.Func {
 	return parse.RE(sqlNameRE, func(s []string) bool {
 		*res = s[0]
 		return true
