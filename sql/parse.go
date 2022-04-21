@@ -9,122 +9,22 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jrhy/sandbox/parse"
 	"github.com/jrhy/sandbox/sql/colval"
-	"github.com/jrhy/sandbox/sql/parse"
+	"github.com/jrhy/sandbox/sql/types"
 )
 
-type Expression struct {
-	Parser parse.Parser
-	Select *Select `json:",omitempty"`
-	Values *Values `json:",omitempty"`
-	Errors []error
-}
+var StringValueRE = regexp.MustCompile(`^('(([^']|'')*)'|"([^"]*)")`)
+var IntValueRE = regexp.MustCompile(`^\d+`)
+var RealValueRE = regexp.MustCompile(`^(((\+|-)?([0-9]+)(\.[0-9]+)?)|((\+|-)?\.?[0-9]+))([Ee]\d+)?`)
 
-type Schema struct {
-	Name    string             `json:",omitempty"`
-	Sources map[string]*Schema `json:",omitempty"` // functions/tables
-	Columns []SchemaColumn     `json:",omitempty"`
-	//GetRowIterator func() RowIterator
-}
-
-type SchemaColumn struct {
-	Source       string `json:",omitempty"`
-	SourceColumn string `json:",omitempty"`
-	Name         string `json:",omitempty"`
-	DefaultType  string `json:",omitempty"`
-}
-
-type Select struct {
-	With        []With             `json:",omitempty"` // TODO generalize With,Values,Tables to FromItems
-	Expressions []OutputExpression `json:",omitempty"`
-	Tables      []Table            `json:",omitempty"`
-	Values      []Values           `json:",omitempty"`
-	Where       []Condition        `json:",omitempty"`
-	Join        *Join              `json:",omitempty"`
-	SetOp       *SetOp             `json:",omitempty"`
-	Schema      Schema             `json:",omitempty"`
-	Errors      []error            // schema errors
-}
-
-type JoinType int
-
-const (
-	InnerJoin = JoinType(iota)
-	LeftJoin
-	OuterJoin
-)
-
-type Join struct {
-	JoinType JoinType `json:",omitempty"`
-	Right    string   `json:",omitempty"`
-	Using    string   `json:",omitempty"`
-	Alias    string   `json:",omitempty"`
-	//On Condition
-}
-
-type Values struct {
-	Rows   []Row  `json:",omitempty"`
-	Schema Schema `json:",omitempty"`
-	Errors []error
-}
-
-type Row []ColumnValue
-
-func (r Row) String() string {
-	res := ""
-	for i := range r {
-		if i > 0 {
-			res += " "
-		}
-		res += r[i].String()
-	}
-	return res
-}
-
-type ColumnValue interface {
-	String() string
-}
-
-type OutputExpression struct {
-	Expression SelectExpression `json:",omitempty"`
-	Alias      string           `json:",omitempty"`
-}
-
-type SelectExpression struct {
-	Column *Column `json:",omitempty"`
-	Func   *Func   `json:",omitempty"`
-}
-
-type Column struct {
-	//Family Family
-	Term string
-	All  bool
-}
-
-type Func struct {
-	Aggregate bool
-	Name      string
-	RowFunc   func(Row) ColumnValue
-	//Expression OutputExpression //TODO: should maybe SelectExpression+*
-}
-
-type Table struct {
-	Schema string `json:",omitempty"`
-	Table  string `json:",omitempty"`
-	Alias  string `json:",omitempty"`
-}
-
-var stringValueRE = regexp.MustCompile(`^'([^']*)'`)
-var intValueRE = regexp.MustCompile(`^\d+`)
-var realValueRE = regexp.MustCompile(`^(((\+|-)?([0-9]+)(\.[0-9]+)?)|((\+|-)?\.?[0-9]+))`)
-
-func values(v *Values) parse.Func {
-	addCol := func(cv ColumnValue) {
+func values(v *types.Values) parse.Func {
+	addCol := func(cv colval.ColumnValue) {
 		n := len(v.Rows) - 1
 		v.Rows[n] = append(v.Rows[n], cv)
 		if n == 0 {
 			v.Schema.Columns = append(v.Schema.Columns,
-				SchemaColumn{Name: fmt.Sprintf("column%d", len(v.Schema.Columns)+1)})
+				types.SchemaColumn{Name: fmt.Sprintf("column%d", len(v.Schema.Columns)+1)})
 		}
 	}
 	return parse.SeqWS(
@@ -136,7 +36,7 @@ func values(v *Values) parse.Func {
 			parse.Delimited(
 				parse.SeqWS(
 					func(e *parse.Parser) bool {
-						var cv ColumnValue
+						var cv colval.ColumnValue
 						return e.Match(ColumnValueParser(&cv).Action(func() {
 							addCol(cv)
 						}))
@@ -152,21 +52,28 @@ func values(v *Values) parse.Func {
 			parse.Exact(",")),
 	)
 }
-func ColumnValueParser(cv *ColumnValue) parse.Func {
+
+func ColumnValueParser(cv *colval.ColumnValue) parse.Func {
 	return parse.OneOf(
-		parse.RE(stringValueRE, func(s []string) bool {
-			*cv = colval.Text(s[1])
-			return true
-		}),
-		parse.RE(intValueRE, func(s []string) bool {
-			i, err := strconv.ParseInt(s[0], 0, 64)
-			if err != nil {
-				return false
+		parse.RE(StringValueRE, func(s []string) bool {
+			if len(s[2]) > 0 {
+				*cv = colval.Text(strings.ReplaceAll(s[2], `''`, `'`))
+			} else {
+				*cv = colval.Text(s[4])
 			}
-			*cv = colval.Int(i)
 			return true
 		}),
-		parse.RE(realValueRE, func(s []string) bool {
+		parse.RE(RealValueRE, func(s []string) bool {
+			if !strings.ContainsAny(s[0], ".eE") {
+				fmt.Printf("parsing as int...\n")
+				i, err := strconv.ParseInt(s[0], 0, 64)
+				fmt.Printf("the int: %d, conversion error: %v\n", i, err)
+				if err == nil {
+					*cv = colval.Int(i)
+					return true
+				}
+				// too big or whatever, try again as real
+			}
 			f, err := strconv.ParseFloat(s[0], 64)
 			if err != nil {
 				return false
@@ -180,9 +87,9 @@ func ColumnValueParser(cv *ColumnValue) parse.Func {
 	)
 }
 
-func (b *Expression) Parse() bool {
-	var s Select
-	var v Values
+func ParseSQLStatement(b *types.Expression) bool {
+	var s types.Select
+	var v types.Values
 	return b.Parser.Match(parse.SeqWS(
 		parse.OneOf(
 			parse.SeqWS(parse.Optional(parse.SeqWS(parse.CI("with"), with(&s.With))),
@@ -198,7 +105,7 @@ func (b *Expression) Parse() bool {
 	}))
 }
 
-func ParseSelect(s *Select) parse.Func {
+func ParseSelect(s *types.Select) parse.Func {
 	return parse.SeqWS(
 		parse.CI("select"),
 		outputExpressions(&s.Expressions),
@@ -219,7 +126,7 @@ func ParseSelect(s *Select) parse.Func {
 				}
 			}
 			if s.Schema.Sources == nil {
-				s.Schema.Sources = make(map[string]*Schema)
+				s.Schema.Sources = make(map[string]*types.Schema)
 			}
 			for i := range s.With {
 				w := &s.With[i]
@@ -268,19 +175,19 @@ func ParseSelect(s *Select) parse.Func {
 				}
 			}
 			for _, o := range s.Expressions {
-				name := o.Alias
+				var name string
 				if o.Expression.Func == nil && o.Expression.Column == nil {
 					panic("non-Column unimpl")
 				}
 				if o.Expression.Func != nil {
 					if o.Alias != "" {
-						s.Schema.Columns = append(s.Schema.Columns, SchemaColumn{Name: o.Alias})
+						s.Schema.Columns = append(s.Schema.Columns, types.SchemaColumn{Name: o.Alias})
 					} else {
-						s.Schema.Columns = append(s.Schema.Columns, SchemaColumn{Name: o.Expression.Func.Name})
+						s.Schema.Columns = append(s.Schema.Columns, types.SchemaColumn{Name: o.Expression.Func.Name})
 					}
 				} else if o.Expression.Column.All {
 					for _, t := range s.Tables {
-						var schema *Schema
+						var schema *types.Schema
 						var name string
 						var found bool
 						{
@@ -302,19 +209,19 @@ func ParseSelect(s *Select) parse.Func {
 					}
 				} else {
 					name = o.Expression.Column.Term
-					var col *SchemaColumn
-					var rs *Schema
-					err := s.Schema.resolveColumnRef(name, &rs, &col)
+					var col *types.SchemaColumn
+					var rs *types.Schema
+					err := ResolveColumnRef(&s.Schema, name, &rs, &col)
 					if err != nil {
 						s.Errors = append(s.Errors, fmt.Errorf("select %s: %w", name, err))
-					} else if s.Schema.findColumn(col.Name) != nil {
+					} else if findColumn(&s.Schema, col.Name) != nil {
 						s.Errors = append(s.Errors, fmt.Errorf("select %s: already selected", name))
 					} else {
 						name := col.Name
 						if o.Alias != "" {
 							name = o.Alias
 						}
-						col := SchemaColumn{
+						col := types.SchemaColumn{
 							Source:       rs.Name,
 							SourceColumn: col.Name,
 							Name:         name,
@@ -326,22 +233,22 @@ func ParseSelect(s *Select) parse.Func {
 		}))
 }
 
-func (s *Schema) resolveColumnRef(name string, schema **Schema, columnRes **SchemaColumn) error {
-	var resolvedSchema *Schema
+func ResolveColumnRef(s *types.Schema, name string, schema **types.Schema, columnRes **types.SchemaColumn) error {
+	var resolvedSchema *types.Schema
 	parts := strings.Split(name, ".")
 	if len(parts) > 2 {
 		return fmt.Errorf("nested schema reference unimplemented: %s", name)
 	}
-	var column *SchemaColumn
+	var column *types.SchemaColumn
 	if len(parts) == 2 {
 		var found bool
 		s, found = s.Sources[parts[0]]
 		if !found {
 			return fmt.Errorf("schema not found: %s", name)
 		}
-		column = s.findColumn(parts[1])
+		column = findColumn(s, parts[1])
 	} else {
-		resolvedSchema, column = s.resolveUnqualifiedColumnReference(parts[0])
+		resolvedSchema, column = resolveUnqualifiedColumnReference(s, parts[0])
 		if resolvedSchema != nil {
 			s = resolvedSchema
 		}
@@ -358,26 +265,26 @@ func (s *Schema) resolveColumnRef(name string, schema **Schema, columnRes **Sche
 	return nil
 }
 
-func (s *Schema) findColumn(name string) *SchemaColumn {
+func findColumn(s *types.Schema, name string) *types.SchemaColumn {
 	for _, c := range s.Columns {
-		if strings.ToLower(c.Name) == strings.ToLower(name) {
+		if strings.EqualFold(c.Name, name) {
 			return &c
 		}
 	}
 	return nil
 }
-func (s *Schema) FindColumnIndex(name string) *int {
+func FindColumnIndex(s *types.Schema, name string) *int {
 	for i, c := range s.Columns {
-		if strings.ToLower(c.Name) == strings.ToLower(name) {
+		if strings.EqualFold(c.Name, name) {
 			return &i
 		}
 	}
 	return nil
 }
 
-func (s *Schema) resolveUnqualifiedColumnReference(name string) (*Schema, *SchemaColumn) {
+func resolveUnqualifiedColumnReference(s *types.Schema, name string) (*types.Schema, *types.SchemaColumn) {
 	for _, c := range s.Sources {
-		if res := c.findColumn(name); res != nil {
+		if res := findColumn(c, name); res != nil {
 			return c, res
 		}
 	}
@@ -390,58 +297,31 @@ type Condition struct {
 	Op    string `json:",omitempty"`
 }
 
-func where(conditions *[]Condition) parse.Func {
+func where(evaluator **types.Evaluator) parse.Func {
 	return func(b *parse.Parser) bool {
-		var c *Condition
 		return b.Match(parse.SeqWS(
 			parse.CI("where"),
-			parse.Delimited(parse.SeqWS(
-				condition(&c).Action(func() {
-					*conditions = append(*conditions, *c)
-				})),
-				parse.CI("and")),
+			Expression(evaluator),
 		))
 	}
-}
-func condition(c **Condition) parse.Func {
-	return func(b *parse.Parser) bool {
-		var left, right, op string
-		return b.Match(parse.OneOf(
-			// TODO: functions, fix sqlFunc, refactor w/SelectExpression
-			parse.SeqWS(name(&left), binaryOp(&op), name(&right)).Action(func() {
-				*c = &Condition{Left: left, Right: right, Op: op}
-			}),
-		))
-	}
-}
-func binaryOp(res *string) parse.Func {
-	var Exact = func(s string, res *string) parse.Func {
-		return parse.Exact(s).Action(func() { *res = s })
-	}
-	return parse.OneOf(
-		Exact("==", res),
-		Exact("=", res),
-		Exact("!=", res),
-		Exact("<>", res),
-	)
 }
 
-func join(j **Join) parse.Func {
+func join(j **types.Join) parse.Func {
 	return func(b *parse.Parser) bool {
-		var joinType JoinType = LeftJoin
+		var joinType types.JoinType = types.LeftJoin
 		var using, tableName string
 		return b.Match(parse.SeqWS(
 			parse.Optional(parse.OneOf(
-				parse.CI("outer").Action(func() { joinType = OuterJoin }),
-				parse.CI("inner").Action(func() { joinType = InnerJoin }),
-				parse.CI("left").Action(func() { joinType = LeftJoin }))),
+				parse.CI("outer").Action(func() { joinType = types.OuterJoin }),
+				parse.CI("inner").Action(func() { joinType = types.InnerJoin }),
+				parse.CI("left").Action(func() { joinType = types.LeftJoin }))),
 			parse.CI("join"),
 			name(&tableName),
 			parse.OneOf(
 				parse.SeqWS(parse.CI("using"), parse.Exact("("), name(&using), parse.Exact(")")),
 				//SeqWS(CI("on"), condition),
 			)).Action(func() {
-			*j = &Join{
+			*j = &types.Join{
 				JoinType: joinType,
 				Right:    tableName,
 				Using:    using,
@@ -450,33 +330,19 @@ func join(j **Join) parse.Func {
 	}
 }
 
-type SetOpType int
-
-const (
-	Union = SetOpType(iota)
-	Intersect
-	Except
-)
-
-type SetOp struct {
-	Op    SetOpType `json:",omitempty"`
-	All   bool      `json:",omitempty"`
-	Right *Select   `json:",omitempty"`
-}
-
-func setOp(s **SetOp) parse.Func {
+func setOp(s **types.SetOp) parse.Func {
 	return func(b *parse.Parser) bool {
-		var operation SetOpType
+		var operation types.SetOpType
 		var all bool
-		var right Select
+		var right types.Select
 		return b.Match(parse.SeqWS(
 			parse.OneOf(
-				parse.CI("union").Action(func() { operation = Union }),
-				parse.CI("intersect").Action(func() { operation = Intersect }),
-				parse.CI("except").Action(func() { operation = Except })),
+				parse.CI("union").Action(func() { operation = types.Union }),
+				parse.CI("intersect").Action(func() { operation = types.Intersect }),
+				parse.CI("except").Action(func() { operation = types.Except })),
 			parse.Optional(parse.CI("all").Action(func() { all = true })),
 			ParseSelect(&right).Action(func() {
-				*s = &SetOp{
+				*s = &types.SetOp{
 					Op:    operation,
 					All:   all,
 					Right: &right,
@@ -485,18 +351,10 @@ func setOp(s **SetOp) parse.Func {
 	}
 }
 
-type With struct {
-	Name   string `json:",omitempty"`
-	Schema Schema
-	Values *Values `json:",omitempty"`
-	Select *Select `json:",omitempty"`
-	Errors []error
-}
-
-func with(with *[]With) parse.Func {
+func with(with *[]types.With) parse.Func {
 	return parse.Delimited(func(e *parse.Parser) bool {
-		var w With
-		var v Values
+		var w types.With
+		var v types.Values
 		return e.Match(parse.SeqWS(
 			parse.RE(sqlNameRE, func(s []string) bool {
 				w.Name = s[0]
@@ -506,7 +364,7 @@ func with(with *[]With) parse.Func {
 				parse.Exact("("),
 				parse.Delimited(
 					parse.SeqWS(parse.RE(sqlNameRE, func(s []string) bool {
-						w.Schema.Columns = append(w.Schema.Columns, SchemaColumn{Name: s[0]})
+						w.Schema.Columns = append(w.Schema.Columns, types.SchemaColumn{Name: s[0]})
 						return true
 					})),
 					parse.Exact(","),
@@ -521,7 +379,7 @@ func with(with *[]With) parse.Func {
 				if w.Schema.Columns == nil {
 					w.Schema.Columns = v.Schema.Columns
 				}
-				if len(v.Schema.Columns) != len(v.Schema.Columns) {
+				if len(v.Schema.Columns) != len(w.Schema.Columns) {
 					w.Errors = append(w.Errors, errors.New("values mismatch with schema"))
 				}
 				w.Errors = append(w.Errors, v.Errors...)
@@ -534,9 +392,9 @@ func with(with *[]With) parse.Func {
 		parse.Exact(","))
 }
 
-func outputExpressions(expressions *[]OutputExpression) parse.Func {
+func outputExpressions(expressions *[]types.OutputExpression) parse.Func {
 	return func(b *parse.Parser) bool {
-		var e OutputExpression
+		var e types.OutputExpression
 		return b.Match(parse.Delimited(
 			parse.SeqWS(outputExpression(&e).Action(func() {
 				*expressions = append(*expressions, e)
@@ -544,32 +402,32 @@ func outputExpressions(expressions *[]OutputExpression) parse.Func {
 			parse.Exact(",")))
 	}
 }
-func outputExpression(e *OutputExpression) parse.Func {
+func outputExpression(e *types.OutputExpression) parse.Func {
 	return func(b *parse.Parser) bool {
 		var as string
-		var f Func
+		var f types.Func
 		return b.Match(parse.OneOf(
 			parse.SeqWS(sqlFunc(&f), parse.Optional(As(&as))).Action(func() {
-				*e = OutputExpression{Expression: SelectExpression{Func: &f}, Alias: as}
+				*e = types.OutputExpression{Expression: types.SelectExpression{Func: &f}, Alias: as}
 			}),
 			nameAs(func(name, as string) {
-				*e = OutputExpression{Expression: SelectExpression{Column: &Column{Term: name}}, Alias: as}
+				*e = types.OutputExpression{Expression: types.SelectExpression{Column: &types.Column{Term: name}}, Alias: as}
 			}),
 			parse.Exact("*").Action(func() {
-				*e = OutputExpression{Expression: SelectExpression{Column: &Column{All: true}}}
+				*e = types.OutputExpression{Expression: types.SelectExpression{Column: &types.Column{All: true}}}
 			}),
 		))
 	}
 }
 
-func sqlFunc(f *Func) parse.Func {
+func sqlFunc(f *types.Func) parse.Func {
 	return func(b *parse.Parser) bool {
 		//	var name string
 		//	var e OutputExpression
 		return b.Match(parse.OneOf(
 			parse.SeqWS(parse.CI("current_timestamp")).Action(func() {
-				*f = Func{Name: "current_timestamp",
-					RowFunc: func(_ Row) ColumnValue {
+				*f = types.Func{Name: "current_timestamp",
+					RowFunc: func(_ types.Row) colval.ColumnValue {
 						return colval.Text(time.Now().UTC().Format("2006-01-02 15:04:05"))
 					}}
 			}),
@@ -591,14 +449,14 @@ func sqlFunc(f *Func) parse.Func {
 	}
 }
 
-func fromItems(s *Select) parse.Func {
+func fromItems(s *types.Select) parse.Func {
 	return parse.SeqWS(
 		parse.Delimited(parse.OneOf(
 			nameAs(func(name, as string) {
-				s.Tables = append(s.Tables, Table{Table: name, Alias: as})
+				s.Tables = append(s.Tables, types.Table{Table: name, Alias: as})
 			}),
 			func(e *parse.Parser) bool {
-				var v Values
+				var v types.Values
 				return e.Match(parse.SeqWS(
 					parse.Exact("("),
 					values(&v),
@@ -648,9 +506,9 @@ func As(as *string) parse.Func {
 		}))
 }
 
-func Parse(s string) (*Expression, error) {
-	e := &Expression{Parser: parse.Parser{Remaining: s, LastReject: s}}
-	if !e.Parse() {
+func Parse(s string) (*types.Expression, error) {
+	e := &types.Expression{Parser: parse.Parser{Remaining: s, LastReject: s}}
+	if !ParseSQLStatement(e) {
 		if e.Parser.Remaining != "" {
 			return nil, errors.New("parse error at " + e.Parser.Remaining)
 		}

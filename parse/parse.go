@@ -16,7 +16,7 @@ func (b *Parser) Copy() *Parser {
 	return &ne
 }
 
-func (b *Parser) ExactWS() bool {
+func (b *Parser) SkipWS() bool {
 	b.Remaining = strings.TrimLeft(b.Remaining, " \t\r\n")
 	return true
 }
@@ -52,14 +52,14 @@ func SeqWS(fns ...Func) Func {
 	return func(b *Parser) bool {
 		e := b.Copy()
 		for _, f := range fns {
-			e.ExactWS()
+			e.SkipWS()
 			if !f(e) {
 				if len(e.Remaining) < len(b.LastReject) {
 					b.LastReject = e.Remaining
 				}
 				return false
 			}
-			e.ExactWS()
+			e.SkipWS()
 		}
 		*b = *e
 		return true

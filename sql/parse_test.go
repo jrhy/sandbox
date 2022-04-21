@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/jrhy/sandbox/sql"
+	"github.com/jrhy/sandbox/sql/colval"
+	"github.com/jrhy/sandbox/sql/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,7 +19,7 @@ func TestSchema_MixedQualified(t *testing.T) {
 		`with foo(a,b) as (values(1,2),(3,4)) select bar.a,b from foo as bar`)
 	require.NoError(t, err)
 	require.NotNil(t, s.Select)
-	require.Equal(t, []sql.SchemaColumn{{
+	require.Equal(t, []types.SchemaColumn{{
 		Source:       "foo",
 		SourceColumn: "a",
 		Name:         "a",
@@ -26,15 +28,15 @@ func TestSchema_MixedQualified(t *testing.T) {
 		SourceColumn: "b",
 		Name:         "b",
 	}}, s.Select.Schema.Columns)
-	require.Equal(t, &sql.Schema{
+	require.Equal(t, &types.Schema{
 		Name: "foo",
-		Columns: []sql.SchemaColumn{{
+		Columns: []types.SchemaColumn{{
 			Name: "a"}, {Name: "b"}},
 	},
 		s.Select.Schema.Sources["bar"])
-	require.Equal(t, []sql.OutputExpression{
-		{Expression: sql.SelectExpression{Column: &sql.Column{Term: "bar.a"}}},
-		{Expression: sql.SelectExpression{Column: &sql.Column{Term: "b"}}},
+	require.Equal(t, []types.OutputExpression{
+		{Expression: types.SelectExpression{Column: &types.Column{Term: "bar.a"}}},
+		{Expression: types.SelectExpression{Column: &types.Column{Term: "b"}}},
 	}, s.Select.Expressions)
 }
 
@@ -48,13 +50,22 @@ func TestSelectWithoutFrom(t *testing.T) {
 func TestValues(t *testing.T) {
 	t.Parallel()
 	s, err := sql.Parse(`values('1',2,null,340282366920938463463374607431768211456),
-		(3,4)`)
+		(3,4,3e2,3.1e2),(1)`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.NotNil(t, s.Values)
-	assert.Equal(t, 2, len(s.Values.Rows))
+	assert.Equal(t, 3, len(s.Values.Rows))
+	assert.Equal(t, colval.Text("1"), s.Values.Rows[0][0])
+	assert.Equal(t, colval.Int(2), s.Values.Rows[0][1])
+	assert.Equal(t, colval.Null{}, s.Values.Rows[0][2])
+	assert.Equal(t, colval.Real(3.402823669209385e38), s.Values.Rows[0][3])
+	assert.Equal(t, colval.Int(3), s.Values.Rows[1][0])
+	assert.Equal(t, colval.Int(4), s.Values.Rows[1][1])
+	assert.Equal(t, colval.Real(300.0), s.Values.Rows[1][2])
+	assert.Equal(t, colval.Real(310.0), s.Values.Rows[1][3])
 	assert.NotNil(t, s.Values.Schema)
 	assert.Equal(t, 4, len(s.Values.Schema.Columns))
+	// TODO: this should fail since the third row has a different number of cols
 	if t.Failed() {
 		t.Logf("%v\n", s)
 	}

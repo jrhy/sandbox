@@ -3,28 +3,31 @@ package sql
 import (
 	"errors"
 	"fmt"
+
+	"github.com/jrhy/sandbox/sql/colval"
+	"github.com/jrhy/sandbox/sql/types"
 )
 
 type Resolver interface {
-	Resolve(name string, schemas map[string]*Schema) (RowIterator, error)
+	Resolve(name string, schemas map[string]*types.Schema) (RowIterator, error)
 }
 
 type RowIterator interface {
-	Next() (*Row, error)
-	GetSchema() *Schema
+	Next() (*types.Row, error)
+	GetSchema() *types.Schema
 }
 
-func Eval(e *Expression, schemas map[string]*Schema, cb func(*Row) error) error {
+func Eval(e *types.Expression, schemas map[string]*types.Schema, cb func(*types.Row) error) error {
 	switch {
 	case e.Select != nil:
 		return evalSelect(e.Select, schemas, cb)
 	}
 	return errors.New("unimplemented SQL")
 }
-func evalSelect(e *Select, schemas map[string]*Schema, cb func(*Row) error) error {
-	var fromItems map[string]Row = make(map[string]Row)
-	err := enumerateRows(e, &fromItems, 0, func(fromItems *map[string]Row) error {
-		var r *Row = &Row{}
+func evalSelect(e *types.Select, schemas map[string]*types.Schema, cb func(*types.Row) error) error {
+	var fromItems map[string]types.Row = make(map[string]types.Row)
+	err := enumerateRows(e, &fromItems, 0, func(fromItems *map[string]types.Row) error {
+		var r *types.Row = &types.Row{}
 		if false {
 			fmt.Printf("cb: want to apply output expressions for these %d fromItems:\n",
 				len(*fromItems))
@@ -50,15 +53,36 @@ func evalSelect(e *Select, schemas map[string]*Schema, cb func(*Row) error) erro
 	return nil
 }
 
-func evaluateConditions(e *Select, fromItems *map[string]Row, r *Row) bool {
+func evaluateConditions(e *types.Select, fromItems *map[string]types.Row, r *types.Row) bool {
 	if e.Where == nil {
 		return true
 	}
-	panic("unimpl")
+	inputs := make(map[string]colval.ColumnValue)
+	for name := range e.Where.Inputs {
+		var col *types.SchemaColumn
+		var rs *types.Schema
+
+		err := ResolveColumnRef(&e.Schema, name, &rs, &col)
+		if err != nil {
+			// XXX TODO this validation should be done in where()
+			fmt.Printf("evaluateConditions: %v\n", err)
+			return false
+		}
+		sourceRow := (*fromItems)[rs.Name]
+		sourceColIndex := FindColumnIndex(rs, col.Name)
+		inputs[name] = sourceRow[*sourceColIndex]
+	}
+	res := toBool(e.Where.Func(inputs))
+	if res == nil {
+		fmt.Printf("condition evaluated to null\n")
+	} else {
+		fmt.Printf("condition evaluated to %v\n", *res)
+	}
+	return res != nil && *res
 }
 
-func applyOutputExpressions(e *Select, fromItems *map[string]Row, r *Row) {
-	var output Row = make(Row, len(e.Schema.Columns))
+func applyOutputExpressions(e *types.Select, fromItems *map[string]types.Row, r *types.Row) {
+	var output types.Row = make(types.Row, len(e.Schema.Columns))
 	fmt.Printf("AOE going through %d schema columns\n", len(e.Schema.Columns))
 	for i, c := range e.Schema.Columns {
 		if c.Source == "" {
@@ -67,7 +91,7 @@ func applyOutputExpressions(e *Select, fromItems *map[string]Row, r *Row) {
 		}
 		sourceSchema := e.Schema.Sources[c.Source]
 		sourceRow := (*fromItems)[c.Source]
-		sourceColIndex := sourceSchema.FindColumnIndex(c.SourceColumn)
+		sourceColIndex := FindColumnIndex(sourceSchema, c.SourceColumn)
 		if sourceColIndex == nil {
 			panic("sourceColIndex nil, aliases not implemented?")
 		}
@@ -119,7 +143,7 @@ func applyOutputExpressions(e *Select, fromItems *map[string]Row, r *Row) {
 	}
 	return cb(&r)*/
 
-func enumerateRows(e *Select, fromItems *map[string]Row, fromFromItem int, cb func(*map[string]Row) error) error {
+func enumerateRows(e *types.Select, fromItems *map[string]types.Row, fromFromItem int, cb func(*map[string]types.Row) error) error {
 	it := rowIteratorForFromItem(e, fromFromItem)
 	if it == nil {
 		return cb(fromItems)
@@ -158,7 +182,7 @@ func enumerateRows(e *Select, fromItems *map[string]Row, fromFromItem int, cb fu
 		fmt.Printf("done, len(fromItems) = %d\n", len(*fromItems))
 	}
 }
-func rowIteratorForFromItem(s *Select, n int) RowIterator {
+func rowIteratorForFromItem(s *types.Select, n int) RowIterator {
 	for _, w := range s.With {
 		if n != 0 {
 			n--
@@ -182,21 +206,21 @@ func rowIteratorForFromItem(s *Select, n int) RowIterator {
 }
 
 type rowArrayValueIterator struct {
-	Rows   []Row
-	Schema *Schema
+	Rows   []types.Row
+	Schema *types.Schema
 	i      int
 }
 
-func (r *rowArrayValueIterator) Next() (*Row, error) {
+func (r *rowArrayValueIterator) Next() (*types.Row, error) {
 	fmt.Printf("ravi %p row %d\n", r, r.i)
 	if r.i == len(r.Rows) {
 		return nil, nil
 	}
-	res := Row(r.Rows[r.i])
+	res := types.Row(r.Rows[r.i])
 	r.i++
 	return &res, nil
 }
-func (r *rowArrayValueIterator) GetSchema() *Schema { return r.Schema }
+func (r *rowArrayValueIterator) GetSchema() *types.Schema { return r.Schema }
 
 /*
 func CURRENT_TIMESTAMP() RowIterator {
