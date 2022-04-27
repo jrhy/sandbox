@@ -71,10 +71,7 @@ func TestExpr_And(t *testing.T) {
 
 func TestExpr_AndOrprecedence(t *testing.T) {
 	t.Parallel()
-	checkExpr(t, `1`, `1 and 1 or 0 and 0`)
-	checkExpr(t, `0`, `1 and 0 or 0 and 1`)
-	checkExpr(t, `1`, `0 and 0 or 1 and 1`)
-	checkExpr(t, `1`, `1 and 1 or 1 and 1`)
+	checkExpr(t, `0`, `0 and 1 or 1 and 0`)
 }
 
 func TestExpr_Precedence(t *testing.T) {
