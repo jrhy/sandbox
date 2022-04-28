@@ -52,7 +52,7 @@ func checkExprEquivSQLite(t *testing.T, expected, sql string) {
 			if _, sameType := i.(int64); !sameType {
 				t.Fatalf(`sqlite query "%s" produced %T, but sandbox produced %T`, sqliteQuery, i, x)
 			}
-			require.Equal(t, int64(cv.(colval.Int)), i.(int64))
+			require.Equal(t, int64(cv.(colval.Int)), i.(int64), "sqlite says %v", i)
 		case colval.Null:
 			if i != nil {
 				t.Fatalf(`sqlite query "%s" produced %T, but sandbox produced %T`, sqliteQuery, i, x)
@@ -61,7 +61,7 @@ func checkExprEquivSQLite(t *testing.T, expected, sql string) {
 			if _, sameType := i.(float64); !sameType {
 				t.Fatalf(`sqlite query "%s" produced %T, but sandbox produced %T`, sqliteQuery, i, x)
 			}
-			require.Equal(t, float64(cv.(colval.Real)), i.(float64))
+			require.Equal(t, float64(cv.(colval.Real)), i.(float64), "sqlite says %v", i)
 		default:
 			t.Fatalf("unhandled type %T", x)
 		}
@@ -141,6 +141,9 @@ func TestExpr_ArithmeticNull(t *testing.T) {
 func TestExpr_ArithmeticString(t *testing.T) {
 	t.Parallel()
 	checkExprEquivSQLite(t, `18.1`, `3+'4'+"5"+6.1`)
+	//TODO checkExprEquivSQLite(t, `9`, `'4hello'+5`)
+	checkExprEquivSQLite(t, `9.2`, `'4.1hello'+5.1`)
+	//TODO checkExprEquivSQLite(t, `45.0`, `'4e1hello'+5`)
 }
 
 func TestExpr_Subexpression(t *testing.T) {

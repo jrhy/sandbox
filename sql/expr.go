@@ -27,10 +27,7 @@ func toInt(cv colval.ColumnValue) *int64 {
 		i := int64(float64(v))
 		return &i
 	case colval.Text:
-		i, err := strconv.ParseInt(string(v), 0, 64)
-		if err != nil {
-			return nil
-		}
+		i, _ := strconv.ParseInt(string(v), 0, 64)
 		return &i
 	}
 	return nil
@@ -45,9 +42,14 @@ func toReal(cv colval.ColumnValue) *float64 {
 		f := float64(v)
 		return &f
 	case colval.Text:
-		f, err := strconv.ParseFloat(string(v), 64)
-		if err != nil {
-			return nil
+		matches := RealValueRE.FindStringSubmatch(string(v))
+		var f float64
+		if len(matches) > 0 {
+			var err error
+			f, err = strconv.ParseFloat(matches[1], 64)
+			if err != nil {
+				fmt.Printf("ERRRRRRRRR %v\n", err)
+			}
 		}
 		return &f
 	}
