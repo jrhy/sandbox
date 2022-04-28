@@ -234,7 +234,7 @@ func binaryExpr(res **types.Evaluator) p.Func {
 						valStack = append(valStack,
 							binaryArithmetic(vals,
 								func(a, b int64) (int64, bool) { return a % b, true },
-								func(a, b float64) float64 { return math.Remainder(a, b) }))
+								func(a, b float64) float64 { return math.Remainder(a, b) + b }))
 					case "!=", "<>":
 						valStack = append(valStack,
 							binaryComparison(vals,
@@ -421,13 +421,13 @@ func and(inputs []types.Evaluator) types.Evaluator {
 			col := []colval.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
 			left := toBool(col[0])
 			right := toBool(col[1])
-			if left == nil && right == nil {
-				return colval.Null{}
+			if left != nil && right != nil {
+				return boolCV(*left && *right)
 			}
-			if left != nil && right != nil && *left && *right {
-				return colval.Int(1)
+			if left != nil && !*left || right != nil && !*right {
+				return colval.Int(0)
 			}
-			return colval.Int(0)
+			return colval.Null{}
 		}}
 }
 
