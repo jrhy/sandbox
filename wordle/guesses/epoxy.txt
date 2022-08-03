@@ -1,0 +1,7 @@
+steal	..e
+choir	.....	..o
+##hypothetical gnome	....e	..o
+being	.e
+moved	.o.e
+#epoxy
+

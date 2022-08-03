@@ -1,0 +1,4 @@
+slate	...t	s.a
+start		sta
+mince
+

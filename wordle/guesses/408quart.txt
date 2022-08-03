@@ -1,0 +1,6 @@
+#wordle 408
+#word	yellow	green
+slate	...t	..a
+choir	....r
+tramp	tr	..a
+

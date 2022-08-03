@@ -1,0 +1,5 @@
+#wordle 405
+#word	yellow	green
+slate	s..te
+reset	..	..set
+

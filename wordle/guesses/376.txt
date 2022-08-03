@@ -1,0 +1,6 @@
+#wordle 376
+#
+#word	yellow	green
+steal	.t.	
+choir	ch...
+

@@ -1,0 +1,6 @@
+#wordle 405
+#word	yellow	green
+slate	..a	...t
+choir	.	.
+panty	.....	.a.ty
+

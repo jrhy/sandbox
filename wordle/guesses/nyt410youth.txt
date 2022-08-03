@@ -1,0 +1,4 @@
+slate		...t
+choir	.ho
+mouth		.outh
+

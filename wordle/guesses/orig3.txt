@@ -1,0 +1,4 @@
+steal	..ea
+crane		..a.e
+weave	w	..a.e
+

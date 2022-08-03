@@ -1,0 +1,6 @@
+#word	yellow	green
+adieu
+storm	....m
+cycle	.....	.y
+#pygmy	p..m.
+

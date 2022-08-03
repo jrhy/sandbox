@@ -1,0 +1,4 @@
+steal	.t.a
+choir	ch
+hatch	.....	.atch
+

@@ -1,0 +1,5 @@
+#wordle 399
+#word	yellow	green
+slate		....e
+choir	...i
+

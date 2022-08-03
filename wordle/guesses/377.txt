@@ -1,0 +1,6 @@
+#wordle 377
+#word	yellow	green
+steal	.t
+thrum	t
+piton	..ton	pi
+

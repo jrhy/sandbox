@@ -1,0 +1,4 @@
+#egret
+steal	.te
+choir	....r
+brute	.r.te

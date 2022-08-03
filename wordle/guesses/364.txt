@@ -1,0 +1,7 @@
+#wordle 364
+#
+#word	yellow	green
+zzzzz
+choir	..o	c
+
+
