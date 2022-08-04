@@ -249,7 +249,10 @@ func findCandidates(guesses []Guess, colours [][]int) ([]map[rune]struct{}, stri
 			letter := rune(word[j])
 			switch c {
 			case 0:
-				if alreadyApplied(word, letter) {
+				if alreadyApplied(word[:j+1], letter) {
+					if verbose {
+						fmt.Printf("%c was already applied before position %d\n", letter, j)
+					}
 					delete(candidates[j], letter)
 				} else {
 					for n, m := range candidates {
