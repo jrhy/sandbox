@@ -13,6 +13,7 @@ type Flags struct {
 	GuessFile  string   `short:"f"`
 	TargetWord string   `long:"target" short:"t"`
 	Guesses    []string `short:"g"`
+	Verbose    bool     `short:"v"`
 }
 
 func main() {
@@ -28,6 +29,9 @@ func main() {
 		fmt.Printf("usage: wordle -f <guessfile>\n")
 		fmt.Printf("usage: wordle -t/--target word -g guess...\n")
 		os.Exit(1)
+	}
+	if f.Verbose {
+		wordle.Verbose = true
 	}
 	var guesses []wordle.Guess
 	if f.GuessFile != "" {

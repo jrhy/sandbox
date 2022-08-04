@@ -17,7 +17,7 @@ const (
 	YELLOW = 33
 )
 
-var verbose = false
+var Verbose = false
 
 //go:embed 5letter_freq.txt
 //go:embed corncob_lowercase.txt
@@ -35,12 +35,12 @@ type Guess struct {
 }
 
 func GetCandidates(guesses []Guess) ([]Candidate, error) {
-	if verbose {
+	if Verbose {
 		fmt.Printf("\nCandidates:\n")
 	}
 	candidates, mustContain := findCandidates(guesses, ColourizeGuesses(guesses))
 	for i := range candidates {
-		if verbose {
+		if Verbose {
 			fmt.Printf("letter %d: ", i+1)
 		}
 		for k := 'A'; k <= 'Z'; k++ {
@@ -48,15 +48,15 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 			if _, ok := candidates[i][k]; ok {
 				c = k
 			}
-			if verbose {
+			if Verbose {
 				fmt.Printf("%c", c)
 			}
 		}
-		if verbose {
+		if Verbose {
 			fmt.Printf("\n")
 		}
 	}
-	if verbose {
+	if Verbose {
 		fmt.Printf("unknown position: %s\n", mustContain)
 	}
 	var regex string
@@ -72,7 +72,7 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 		}
 		regex += s
 	}
-	if verbose {
+	if Verbose {
 		fmt.Printf("searching corncob list for %s\n", regex)
 	}
 	corncobMatches := mustGrep(regexp.MustCompile(`^`+regex+`$`), "corncob_lowercase.txt")
@@ -80,7 +80,7 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 	for _, match := range corncobMatches {
 		if missingRequired(match, mustContain) {
 			continue
-		} else if verbose {
+		} else if Verbose {
 			fmt.Printf("corncob %s\n", match)
 		}
 		if len(regex) > 0 {
@@ -89,12 +89,12 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 		regex += match
 	}
 	if len(regex) == 0 {
-		if verbose {
+		if Verbose {
 			fmt.Printf("all matches eliminated\n")
 		}
 		return nil, nil
 	}
-	if verbose {
+	if Verbose {
 		fmt.Printf("searching 5letter_freq list for %s\n", regex)
 	}
 	freqMatches := mustGrep(regexp.MustCompile(regex), "5letter_freq.txt")
@@ -119,7 +119,7 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 func missingRequired(match, mustContain string) bool {
 	for _, c := range mustContain {
 		if !strings.Contains(match, strings.ToLower(string(c))) {
-			if verbose {
+			if Verbose {
 				fmt.Printf("kicking out %s due to lack of %s\n", match, string(c))
 			}
 			return true
@@ -250,20 +250,20 @@ func findCandidates(guesses []Guess, colours [][]int) ([]map[rune]struct{}, stri
 			switch c {
 			case 0:
 				if alreadyApplied(word[:j+1], letter) {
-					if verbose {
+					if Verbose {
 						fmt.Printf("%c was already applied before position %d\n", letter, j)
 					}
 					delete(candidates[j], letter)
 				} else {
 					for n, m := range candidates {
-						if verbose {
+						if Verbose {
 							fmt.Printf("removing %c for position %d\n", letter, n)
 						}
 						delete(m, letter)
 					}
 				}
 			case YELLOW:
-				if verbose {
+				if Verbose {
 					fmt.Printf("removing %c for position %d\n", letter, j)
 				}
 				delete(candidates[j], letter)
