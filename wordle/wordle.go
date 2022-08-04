@@ -317,3 +317,38 @@ func LoadGuesses(guessFile string) ([]Guess, error) {
 	}
 	return guesses, nil
 }
+
+func GuessesForTarget(word string, guesses []string) ([]Guess, error) {
+	res := make([]Guess, len(guesses))
+	word = strings.ToUpper(word)
+	for i, g := range guesses {
+		guess := Guess{
+			Word:   strings.ToUpper(g),
+			Green:  ".....",
+			Yellow: ".....",
+		}
+		couldBeYellow := make(map[byte]int)
+		for j := range g {
+			if guess.Word[j] == word[j] {
+				b := []byte(guess.Green)
+				b[j] = guess.Word[j]
+				guess.Green = string(b)
+			} else {
+				couldBeYellow[word[j]]++
+			}
+		}
+		for j := range g {
+			if guess.Word[j] == word[j] {
+				continue
+			}
+			if couldBeYellow[guess.Word[j]] > 0 {
+				b := []byte(guess.Yellow)
+				b[j] = guess.Word[j]
+				guess.Yellow = string(b)
+				couldBeYellow[guess.Word[j]]--
+			}
+		}
+		res[i] = guess
+	}
+	return res, nil
+}
