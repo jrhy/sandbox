@@ -1,6 +1,6 @@
 module github.com/jrhy/sandbox
 
-go 1.14
+go 1.16
 
 require (
 	cloud.google.com/go/iam v0.2.0 // indirect

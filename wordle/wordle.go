@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"embed"
 	"errors"
 	"fmt"
 	"os"
@@ -17,6 +18,10 @@ const (
 )
 
 var verbose = true
+
+//go:embed 5letter_freq.txt
+//go:embed corncob_lowercase.txt
+var content embed.FS
 
 func main() {
 	if len(os.Args) < 2 {
@@ -302,11 +307,11 @@ func allLetters() map[rune]struct{} {
 
 func mustGrep(exp *regexp.Regexp, path string) []string {
 	var res []string
-	f, err := os.Open(path)
+	f, err := content.ReadFile(path)
 	if err != nil {
-		panic(fmt.Errorf("%s: %w", path, err))
+		panic(fmt.Errorf("embedded %s: %w", path, err))
 	}
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(bytes.NewReader(f))
 	for scanner.Scan() {
 		word := scanner.Text()
 		if exp.MatchString(word) {
