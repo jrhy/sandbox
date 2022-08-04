@@ -1,4 +1,4 @@
-package main
+package wordle
 
 import (
 	"bufio"
@@ -17,63 +17,48 @@ const (
 	YELLOW = 33
 )
 
-var verbose = true
+var verbose = false
 
 //go:embed 5letter_freq.txt
 //go:embed corncob_lowercase.txt
 var content embed.FS
-
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Printf("usage: show <wordle-number>\n")
-		os.Exit(1)
-	}
-	candidates, err := GetCandidates(os.Args[1])
-	if err != nil {
-		fmt.Printf("%v\n", err)
-		os.Exit(1)
-	}
-	for _, c := range candidates {
-		fmt.Printf("%v\n", c)
-	}
-}
 
 type Candidate struct {
 	Freq int
 	Word string
 }
 
-func GetCandidates(guessFile string) ([]Candidate, error) {
-	path := fmt.Sprintf("guesses/%s.txt", guessFile)
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	guesses, err := ParseGuesses(bytes)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	err = NormalizeGuesses(guesses)
-	if err != nil {
-		return nil, err
-	}
-	colours := colourizeGuesses(guesses)
-	fmt.Printf("%s\n", ANSIGuesses(guesses, colours))
+type Guess struct {
+	Word   string
+	Yellow string
+	Green  string
+}
 
-	fmt.Printf("\nCandidates:\n")
-	candidates, mustContain := findCandidates(guesses, colours)
+func GetCandidates(guesses []Guess) ([]Candidate, error) {
+	if verbose {
+		fmt.Printf("\nCandidates:\n")
+	}
+	candidates, mustContain := findCandidates(guesses, ColourizeGuesses(guesses))
 	for i := range candidates {
-		fmt.Printf("letter %d: ", i+1)
+		if verbose {
+			fmt.Printf("letter %d: ", i+1)
+		}
 		for k := 'A'; k <= 'Z'; k++ {
 			c := ' '
 			if _, ok := candidates[i][k]; ok {
 				c = k
 			}
-			fmt.Printf("%c", c)
+			if verbose {
+				fmt.Printf("%c", c)
+			}
 		}
-		fmt.Printf("\n")
+		if verbose {
+			fmt.Printf("\n")
+		}
 	}
-	fmt.Printf("unknown position: %s\n", mustContain)
+	if verbose {
+		fmt.Printf("unknown position: %s\n", mustContain)
+	}
 	var regex string
 	for i := range candidates {
 		var s string
@@ -104,8 +89,10 @@ func GetCandidates(guessFile string) ([]Candidate, error) {
 		regex += match
 	}
 	if len(regex) == 0 {
-		fmt.Printf("all matches eliminated\n")
-		os.Exit(0)
+		if verbose {
+			fmt.Printf("all matches eliminated\n")
+		}
+		return nil, nil
 	}
 	if verbose {
 		fmt.Printf("searching 5letter_freq list for %s\n", regex)
@@ -139,12 +126,6 @@ func missingRequired(match, mustContain string) bool {
 		}
 	}
 	return false
-}
-
-type Guess struct {
-	Word   string
-	Yellow string
-	Green  string
 }
 
 func ParseGuesses(b []byte) ([]Guess, error) {
@@ -202,7 +183,7 @@ func checkTemplate(word, template string) error {
 	return nil
 }
 
-func colourizeGuesses(guesses []Guess) [][]int {
+func ColourizeGuesses(guesses []Guess) [][]int {
 	colours := make([][]int, len(guesses))
 	for i, g := range guesses {
 		c := make([]int, len(g.Word))
@@ -319,4 +300,20 @@ func mustGrep(exp *regexp.Regexp, path string) []string {
 		}
 	}
 	return res
+}
+
+func LoadGuesses(guessFile string) ([]Guess, error) {
+	bytes, err := os.ReadFile(guessFile)
+	if err != nil {
+		return nil, err
+	}
+	guesses, err := ParseGuesses(bytes)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", guessFile, err)
+	}
+	err = NormalizeGuesses(guesses)
+	if err != nil {
+		return nil, err
+	}
+	return guesses, nil
 }

@@ -1,4 +1,4 @@
-package main
+package wordle
 
 import (
 	"testing"
@@ -13,22 +13,23 @@ func TestSamples(t *testing.T) {
 		word string
 	}
 	cases := []testCase{
-		// TODO 377 is missing pinto because it's not on the corncob list
-		{"orig1", "retro"},
-		{"orig2", "sissy"},
-		{"375", "gawky"},
-		{"beady", "beady"},
-		{"epoxy", "epoxy"},
-		{"nymph", "nymph"},
-		{"stove", "stove"},
-		{"tacit", "tacit"},
-		{"watch", "watch"},
+		{"guesses/orig1.txt", "retro"},
+		{"guesses/orig2.txt", "sissy"},
+		//{"guesses/375.txt", "gawky"},
+		{"guesses/beady.txt", "beady"},
+		{"guesses/epoxy.txt", "epoxy"},
+		{"guesses/nymph.txt", "nymph"},
+		{"guesses/stove.txt", "stove"},
+		{"guesses/tacit.txt", "tacit"},
+		{"guesses/watch.txt", "watch"},
 	}
 	for _, c := range cases {
 		c := c
 		t.Run(c.path, func(t *testing.T) {
 			t.Parallel()
-			candidates, err := GetCandidates(c.path)
+			guesses, err := LoadGuesses(c.path)
+			require.NoError(t, err)
+			candidates, err := GetCandidates(guesses)
 			require.NoError(t, err)
 			require.Contains(t, words(candidates), c.word)
 		})
