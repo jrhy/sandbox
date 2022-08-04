@@ -1,3 +1,5 @@
+.DELETE_ON_ERROR:
+
 all: corncob_lowercase.txt 5letter_freq.txt
 
 corncob_lowercase.txt:
@@ -6,10 +8,16 @@ corncob_lowercase.txt:
 5letter_freq.txt: gwordlist/frequency-all.txt.gz
 	gzcat gwordlist/frequency-all.txt.gz | grep -i ' [a-z][a-z][a-z][a-z][a-z] ' | tr '[:upper:]' '[:lower:]' | awk '{print $$1,$$2}' > 5letter_freq.txt
 
-gwordlist/frequency-all.txt.gz:
-	git clone https://github.com/hackerb9/gwordlist
-	# don't care enough to switch to git-lfs
-	cd gwordlist ; git checkout e3296aaddc13e989eeae9895fcbb52696889ced4
+gwordlist/:
+	mkdir gwordlist
+
+gwordlist/.git: gwordlist/
+	cd gwordlist && git init
+	cd gwordlist && git remote add origin https://github.com/hackerb9/gwordlist
+	cd gwordlist && git fetch origin e3296aaddc13e989eeae9895fcbb52696889ced4
+	cd gwordlist && git reset --hard FETCH_HEAD
+
+gwordlist/frequency-all.txt.gz: gwordlist/.git
 
 foo: all
 	gzcat gwordlist/frequency-all.txt.gz  | cut -c12-25 
@@ -23,4 +31,6 @@ words.sqlite:
 	cat 5letter_freq.txt |  while read rank word ; do echo "insert into gwordlist(rank,word) values($$rank,\"$$word\");" ; done | tee /dev/tty | sqlite3 words
 
 
+clean:
+	rm -fr gwordlist
 
