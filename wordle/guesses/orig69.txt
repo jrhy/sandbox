@@ -1,0 +1,3 @@
+slate	.la
+choir	..o
+

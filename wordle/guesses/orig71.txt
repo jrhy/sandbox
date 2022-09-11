@@ -1,0 +1,4 @@
+slate	....e
+choir	..o	....r
+mowed	.o.e
+

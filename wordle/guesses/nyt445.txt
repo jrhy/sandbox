@@ -1,0 +1,5 @@
+slate	.l..e
+choir	....r
+gruel	.r.el
+#reply	r..l	.e..y
+
