@@ -6,7 +6,7 @@ corncob_lowercase.txt:
 	curl -LO http://www.mieliestronk.com/corncob_lowercase.txt
 
 5letter_freq.txt: gwordlist/frequency-all.txt.gz
-	gzcat gwordlist/frequency-all.txt.gz | grep -i ' [a-z][a-z][a-z][a-z][a-z] ' | tr '[:upper:]' '[:lower:]' | awk '{print $$1,$$2}' > 5letter_freq.txt
+	gzip -cd < gwordlist/frequency-all.txt.gz | grep -i ' [a-z][a-z][a-z][a-z][a-z] ' | tr '[:upper:]' '[:lower:]' | awk '{print $$1,$$2}' > 5letter_freq.txt
 
 gwordlist/:
 	mkdir gwordlist
@@ -20,7 +20,7 @@ gwordlist/.git: gwordlist/
 gwordlist/frequency-all.txt.gz: gwordlist/.git
 
 foo: all
-	gzcat gwordlist/frequency-all.txt.gz  | cut -c12-25 
+	gzip -cd < gwordlist/frequency-all.txt.gz  | cut -c12-25 
 	select * from gwordlist join corncob using(word) where word not like '%s' order by rank desc limit 100;
 
 
