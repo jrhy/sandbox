@@ -27,8 +27,12 @@ func init() {
 
 func parseExpr(s string) (*types.Evaluator, error) {
 	var evaluator *types.Evaluator
-	if !(&p.Parser{Remaining: s}).Match(sql.Expression(&evaluator)) {
+	parser := &p.Parser{Remaining: s}
+	if !parser.Match(sql.Expression(&evaluator)) {
 		return nil, errors.New("parse failed")
+	}
+	if parser.Remaining != "" {
+		return nil, errors.New(`parse error at "` + parser.Remaining + `"`)
 	}
 	return evaluator, nil
 }
@@ -62,11 +66,51 @@ func checkExprEquivSQLite(t *testing.T, expected, sql string) {
 				t.Fatalf(`sqlite query "%s" produced %T, but sandbox produced %T`, sqliteQuery, i, x)
 			}
 			require.Equal(t, float64(cv.(colval.Real)), i.(float64), "sqlite says %v", i)
+		case colval.Text:
+			if _, sameType := i.(string); !sameType {
+				t.Fatalf(`sqlite query "%s" produced %T, but sandbox produced %T`, sqliteQuery, i, x)
+			}
+			require.Equal(t, string(cv.(colval.Text)), i.(string), "sqlite says %v", i)
 		default:
 			t.Fatalf("unhandled type %T", x)
 		}
 
 		require.Equal(t, expected, cv.String())
+	})
+}
+
+func checkEquivSQLite(t *testing.T, expected, stmt string) {
+	checkEquivSQLiteNamed(t, expected, stmt, stmt)
+}
+func checkEquivSQLiteNamed(t *testing.T, expected, stmt, name string) {
+	t.Run(name, func(t *testing.T) {
+		t.Parallel()
+		e, err := sql.Parse(nil, stmt)
+		require.NoError(t, err)
+
+		sqliteResult, err := db.Query(stmt)
+		require.NoError(t, err, "sqlite "+stmt)
+		sqliteColumns, err := sqliteResult.Columns()
+		require.NoError(t, err)
+		var sqliteRows [][]interface{}
+		for sqliteResult.Next() {
+			sqliteRow := make([]interface{}, len(sqliteColumns))
+			for i := range sqliteRow {
+				var q interface{}
+				sqliteRow[i] = &q
+			}
+			err = sqliteResult.Scan(sqliteRow...)
+			require.NoError(t, err, "sqlite scan")
+			sqliteRows = append(sqliteRows, sqliteRow)
+		}
+
+		// fmt.Printf("sandbox expression: %s\n", mustJSON(e))
+		var sandboxRows []types.Row
+		err = sql.Eval(e, nil, getRows(&sandboxRows))
+		require.NoError(t, err)
+		fmt.Printf("sqliteRows: %s\n", mustJSON(sqliteRows))
+		fmt.Printf("sandboxRows: %s\n", mustJSON(sandboxRows))
+		require.Equal(t, mustJSON(sqliteRows), mustJSON(sql.RowsToGo(sandboxRows)))
 	})
 }
 
@@ -89,6 +133,7 @@ func TestExpr_Or(t *testing.T) {
 	t.Parallel()
 	checkExprEquivSQLite(t, `NULL`, `null or 0`)
 	checkExprEquivSQLite(t, `1`, `null or 1`)
+	checkExprEquivSQLite(t, `1`, `1 or null`)
 	checkExprEquivSQLite(t, `NULL`, `0 or null`)
 	checkExprEquivSQLite(t, `NULL`, `null or null`)
 	checkExprEquivSQLite(t, `1`, `1 or 0`)
@@ -99,11 +144,11 @@ func TestExpr_Or(t *testing.T) {
 
 func TestExpr_And(t *testing.T) {
 	t.Parallel()
-	checkExprEquivSQLite(t, `NULL`, `null and null`)
 	checkExprEquivSQLite(t, `0`, `null and 0`)
 	checkExprEquivSQLite(t, `NULL`, `null and 1`)
-	checkExprEquivSQLite(t, `0`, `0 and null`)
 	checkExprEquivSQLite(t, `NULL`, `1 and null`)
+	checkExprEquivSQLite(t, `0`, `0 and null`)
+	checkExprEquivSQLite(t, `NULL`, `null and null`)
 	checkExprEquivSQLite(t, `0`, `0 and 0`)
 	checkExprEquivSQLite(t, `0`, `1 and 0`)
 	checkExprEquivSQLite(t, `0`, `0 and 1`)
@@ -241,4 +286,12 @@ func TestExpr_GreaterThanOrEqual(t *testing.T) {
 	checkExprEquivSQLite(t, `1`, `6>=5`)
 	checkExprEquivSQLite(t, `1`, `5>=5`)
 	checkExprEquivSQLite(t, `0`, `4>=5`)
+}
+
+func TestExpr_StringConcat(t *testing.T) {
+	t.Parallel()
+	checkExprEquivSQLite(t, `hellothere`, `'hello' || 'there'`)
+	checkExprEquivSQLite(t, `9.0there`, `(5+4.0) || 'there'`)
+	checkExprEquivSQLite(t, `NULL`, `null || 'there'`)
+	checkExprEquivSQLite(t, `NULL`, `'hello' || null`)
 }

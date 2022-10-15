@@ -2,6 +2,7 @@ package parse
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 )
@@ -135,6 +136,16 @@ func AtLeastOne(f Func) Func {
 	}
 }
 
+func Multiple(f Func) Func {
+	return func(b *Parser) bool {
+		e := b.Copy()
+		for e.Match(f) {
+		}
+		*b = *e
+		return true
+	}
+}
+
 func RE(re *regexp.Regexp, submatchcb func([]string) bool) Func {
 	if !strings.HasPrefix(re.String(), "^") {
 		panic("regexp missing ^ restriction: " + re.String())
@@ -142,6 +153,9 @@ func RE(re *regexp.Regexp, submatchcb func([]string) bool) Func {
 	return func(b *Parser) bool {
 		s := re.FindStringSubmatch(b.Remaining)
 		if s != nil && submatchcb != nil && submatchcb(s) {
+			if !strings.HasPrefix(b.Remaining, s[0]) {
+				panic("pattern must restrict all alternatives to match at beginning: " + re.String())
+			}
 			b.Remaining = b.Remaining[len(s[0]):]
 			return true
 		}
@@ -154,11 +168,15 @@ func Delimited(
 	return func(e *Parser) bool {
 		terms := 0
 		for {
+			fmt.Printf("DBG delimited loop top, terms=%d, remaining: ```%s'''\n", terms, e.Remaining)
 			if !term(e) {
+				fmt.Printf("DBG delimited loop failed to match term, ending, remaining: ```%s'''\n", e.Remaining)
 				break
 			}
 			terms++
+			fmt.Printf("DBG delimited loop matched term pre-delimiter, terms=%d, remaining: ```%s'''\n", terms, e.Remaining)
 			if !delimiter(e) {
+				fmt.Printf("DBG delimited loop failed to match delimiter, ending, remaining: ```%s'''\n", e.Remaining)
 				break
 			}
 		}

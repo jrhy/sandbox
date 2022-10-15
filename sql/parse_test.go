@@ -12,9 +12,10 @@ import (
 
 // TODO: SELECT t1.*
 
-func TestSchema_MixedQualified(t *testing.T) {
+func TODOTestParseSchema_MixedQualified(t *testing.T) {
+	// don't know if this is relevant anymore. move to driver/expr
 	t.Parallel()
-	s, err := sql.Parse(
+	s, err := sql.Parse(nil,
 		// schema-qualified and unqualified column references
 		`with foo(a,b) as (values(1,2),(3,4)) select bar.a,b from foo as bar`)
 	require.NoError(t, err)
@@ -40,43 +41,43 @@ func TestSchema_MixedQualified(t *testing.T) {
 	}, s.Select.Expressions)
 }
 
-func TestSelectWithoutFrom(t *testing.T) {
+func TestParseSelectWithoutFrom(t *testing.T) {
 	t.Parallel()
-	s, err := sql.Parse(`select current_timestamp`)
+	s, err := sql.Parse(nil, `select current_timestamp`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
 }
 
-func TestValues(t *testing.T) {
+func TestParseValues(t *testing.T) {
 	t.Parallel()
-	s, err := sql.Parse(`values('1',2,null,340282366920938463463374607431768211456),
+	s, err := sql.Parse(nil, `values('1',2,null,340282366920938463463374607431768211456),
 		(3,4,3e2,3.1e2),(1)`)
 	require.NoError(t, err)
 	require.NotNil(t, s)
-	assert.NotNil(t, s.Values)
-	assert.Equal(t, 3, len(s.Values.Rows))
-	assert.Equal(t, colval.Text("1"), s.Values.Rows[0][0])
-	assert.Equal(t, colval.Int(2), s.Values.Rows[0][1])
-	assert.Equal(t, colval.Null{}, s.Values.Rows[0][2])
-	assert.Equal(t, colval.Real(3.402823669209385e38), s.Values.Rows[0][3])
-	assert.Equal(t, colval.Int(3), s.Values.Rows[1][0])
-	assert.Equal(t, colval.Int(4), s.Values.Rows[1][1])
-	assert.Equal(t, colval.Real(300.0), s.Values.Rows[1][2])
-	assert.Equal(t, colval.Real(310.0), s.Values.Rows[1][3])
-	assert.NotNil(t, s.Values.Schema)
-	assert.Equal(t, 4, len(s.Values.Schema.Columns))
+	assert.NotNil(t, s.Select.Values)
+	assert.Equal(t, 3, len(s.Select.Values.Rows))
+	assert.Equal(t, colval.Text("1"), s.Select.Values.Rows[0][0])
+	assert.Equal(t, colval.Int(2), s.Select.Values.Rows[0][1])
+	assert.Equal(t, colval.Null{}, s.Select.Values.Rows[0][2])
+	assert.Equal(t, colval.Real(3.402823669209385e38), s.Select.Values.Rows[0][3])
+	assert.Equal(t, colval.Int(3), s.Select.Values.Rows[1][0])
+	assert.Equal(t, colval.Int(4), s.Select.Values.Rows[1][1])
+	assert.Equal(t, colval.Real(300.0), s.Select.Values.Rows[1][2])
+	assert.Equal(t, colval.Real(310.0), s.Select.Values.Rows[1][3])
+	assert.NotNil(t, s.Select.Values.Schema)
+	assert.Equal(t, 4, len(s.Select.Values.Schema.Columns))
 	// TODO: this should fail since the third row has a different number of cols
 	if t.Failed() {
 		t.Logf("%v\n", s)
 	}
 }
-func TestSelectValues(t *testing.T) {
+func TestParseSelectValues(t *testing.T) {
 	t.Parallel()
-	s, err := sql.Parse(`select * from (values(1,2)),(values(3,4),(5,6));`)
+	s, err := sql.Parse(nil, `select * from (values(1,2)),(values(3,4),(5,6));`)
 	require.NoError(t, err)
 	require.NotNil(t, s.Select)
-	require.Equal(t, 1, len(s.Select.Values[0].Rows))
-	require.Equal(t, 2, len(s.Select.Values[1].Rows))
+	require.Equal(t, 1, len(s.Select.FromItems[0].Subquery.Values.Rows))
+	require.Equal(t, 2, len(s.Select.FromItems[1].Subquery.Values.Rows))
 	require.NotNil(t, s.Select.Schema)
 	require.Equal(t, 4, len(s.Select.Schema.Columns))
 	require.Equal(t, "column1", s.Select.Schema.Columns[0].Name)
@@ -84,9 +85,9 @@ func TestSelectValues(t *testing.T) {
 	require.Equal(t, "column1", s.Select.Schema.Columns[2].Name)
 	require.Equal(t, "column2", s.Select.Schema.Columns[3].Name)
 }
-func TODOTestSimulateOuterJoinLikeSqlite(t *testing.T) {
+func TODOTestParseSimulateOuterJoinLikeSqlite(t *testing.T) {
 	t.Parallel()
-	s, err := sql.Parse(
+	s, err := sql.Parse(nil,
 		`
 WITH left (employee,department_id) AS (
      VALUES ('bob', 1)
@@ -108,15 +109,16 @@ left join left using(department_id) where left.department_id is null
 	t.Logf("%v\n", s)
 }
 
-func TestSchema_UnlabelledWith(t *testing.T) {
+func TODOTestParseSchema_UnlabelledWith(t *testing.T) {
 	t.Parallel()
-	e, err := sql.Parse(
+	// move to driver/expr
+	e, err := sql.Parse(nil,
 		`with left as (values(0,1),(2,3)), right as (values(4,5),(6,7)) select * from left,right`)
 	require.NoError(t, err)
 	require.NotNil(t, e.Select.Schema)
 	require.Equal(t, 2, len(e.Select.With))
-	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[0].Values.Schema))
-	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[1].Values.Schema))
+	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[0].Select.Values.Schema))
+	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[1].Select.Values.Schema))
 	require.Equal(t, `[
   {
    "Source": "left",
@@ -141,15 +143,16 @@ func TestSchema_UnlabelledWith(t *testing.T) {
  ]`, mustJSON(e.Select.Schema.Columns))
 }
 
-func TestSchema_LabelledWith(t *testing.T) {
+func TODOTestParseSchema_LabelledWith(t *testing.T) {
+	// move to driver/expr
 	t.Parallel()
-	e, err := sql.Parse(
+	e, err := sql.Parse(nil,
 		`with left(la,lb) as (values(0,1),(2,3)), right(ra,rb) as (values(4,5),(6,7)) select * from left,right`)
 	require.NoError(t, err)
 	require.NotNil(t, e.Select.Schema)
 	require.Equal(t, 2, len(e.Select.With))
-	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[0].Values.Schema))
-	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[1].Values.Schema))
+	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[0].Select.Values.Schema))
+	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[1].Select.Values.Schema))
 	require.Equal(t, `{"Name":"left","Columns":[{"Name":"la"},{"Name":"lb"}]}`, mustJSON(e.Select.With[0].Schema))
 	require.Equal(t, `{"Name":"right","Columns":[{"Name":"ra"},{"Name":"rb"}]}`, mustJSON(e.Select.With[1].Schema))
 	require.Equal(t, `[
@@ -176,14 +179,15 @@ func TestSchema_LabelledWith(t *testing.T) {
  ]`, mustJSON(e.Select.Schema.Columns))
 }
 
-func TestSchema_RenamedWith(t *testing.T) {
+func TODOTestParseSchema_RenamedWith(t *testing.T) {
 	t.Parallel()
-	e, err := sql.Parse(
+	// this isn't a useful parse test anymore, should be moved to driver or expr.
+	e, err := sql.Parse(nil,
 		`with left(la,lb) as (values(0,1),(2,3)), right(ra,rb) as (values(4,5),(6,7)) select la as oa, lb as ob, ra as oc, rb as od from left,right`)
 	require.NoError(t, err)
 	require.NotNil(t, e.Select.Schema)
-	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[0].Values.Schema))
-	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[1].Values.Schema))
+	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[0].Select.Values.Schema))
+	require.Equal(t, `{"Columns":[{"Name":"column1"},{"Name":"column2"}]}`, mustJSON(e.Select.With[1].Select.Values.Schema))
 	require.Equal(t, `{"Name":"left","Columns":[{"Name":"la"},{"Name":"lb"}]}`, mustJSON(e.Select.With[0].Schema))
 	require.Equal(t, `{"Name":"right","Columns":[{"Name":"ra"},{"Name":"rb"}]}`, mustJSON(e.Select.With[1].Schema))
 	require.Equal(t, `[
@@ -208,4 +212,198 @@ func TestSchema_RenamedWith(t *testing.T) {
    "Name": "od"
   }
  ]`, mustJSON(e.Select.Schema.Columns))
+}
+
+func TestParse_From3(t *testing.T) {
+	t.Parallel()
+	e, err := sql.Parse(nil,
+		`with a as (values(0),(1)), b as (values(0),(1)), c as (values(0),(1)) 
+		select * from a, b, c`)
+	require.NoError(t, err)
+	require.NotNil(t, e.Select.Schema)
+	require.Equal(t, `[
+  {
+   "Source": "a",
+   "SourceColumn": "column1",
+   "Name": "column1"
+  },
+  {
+   "Source": "b",
+   "SourceColumn": "column1",
+   "Name": "column1"
+  },
+  {
+   "Source": "c",
+   "SourceColumn": "column1",
+   "Name": "column1"
+  }
+ ]`, mustJSON(e.Select.Schema.Columns))
+}
+
+func TestParse_3WayJoin(t *testing.T) {
+	t.Parallel()
+	// this isn't a useful parse test anymore, should be moved to driver or expr.
+	e, err := sql.Parse(nil,
+		`with a as (values(0),(1)), b as (values(0),(1)), c as (values(0),(1)) 
+		select * from a join b join c`)
+	require.NoError(t, err)
+	t.Logf("%s", mustJSON(e.Select))
+	require.NoError(t, err)
+	require.NotNil(t, e.Select.Schema)
+	require.Equal(t, `[
+  {
+   "Source": "a",
+   "SourceColumn": "column1",
+   "Name": "column1"
+  },
+  {
+   "Source": "b",
+   "SourceColumn": "column1",
+   "Name": "column1"
+  },
+  {
+   "Source": "c",
+   "SourceColumn": "column1",
+   "Name": "column1"
+  }
+ ]`, mustJSON(e.Select.Schema.Columns))
+}
+
+func TestParse_IndexesNotSupportedYet(t *testing.T) {
+	t.Parallel()
+	t.Run("ColumnConstraint", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a primary key)`)
+		require.Error(t, err, "PRIMARY KEY is not supported yet")
+	})
+	t.Run("TableConstraint", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a) primary key (a )   )`)
+		require.Error(t, err, "PRIMARY KEY is not supported yet")
+	})
+	t.Run("MultipleColumnsError", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a primary key, b primary key)`)
+		require.Error(t, err, "PRIMARY KEY is not supported yet")
+	})
+	t.Run("MixedConstraints", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a primary key, primary key(a))`)
+		require.Error(t, err, "PRIMARY KEY is not supported yet")
+	})
+}
+
+func TestParse_UniqueNotSupportedYet(t *testing.T) {
+	t.Parallel()
+	t.Run("ColumnConstraint", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a unique)`)
+		require.Error(t, err, "UNIQUE is not supported yet")
+	})
+	t.Run("TableConstraint", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a) unique (a )   )`)
+		require.Error(t, err, "UNIQUE is not supported yet")
+	})
+	t.Run("MixedConstraints", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`create table foo(a unique, unique(a))`)
+		require.Error(t, err, "UNIQUE is not supported yet")
+	})
+}
+
+func TestParse_CreateTableWithTypes(t *testing.T) {
+	t.Parallel()
+	e, err := sql.Parse(nil,
+		`create table foo(a text)`)
+	require.NoError(t, err)
+	require.Equal(t, e.Create.Schema.Columns[0].DefaultType, "text")
+}
+
+func TestParse_CreateTableWithColumnConstraints(t *testing.T) {
+	t.Parallel()
+	t.Run("NonNull", func(t *testing.T) {
+		s, err := sql.Parse(nil,
+			`create table foo(a text not null)`)
+		require.NoError(t, err)
+		require.True(t, s.Create.Schema.Columns[0].NotNull)
+	})
+	// t.Run("order1", func(t *testing.T) {
+	// _, err := sql.Parse(nil,
+	// `create table foo(a text unique not null)`)
+	// require.NoError(t, err)
+	// })
+	// t.Run("order2", func(t *testing.T) {
+	// _, err := sql.Parse(nil,
+	// `create table foo(a text not null unique)`)
+	// require.NoError(t, err)
+	// })
+}
+
+func TODOTestParseGroupBy(t *testing.T) {
+	t.Parallel()
+	t.Run("Happy", func(t *testing.T) {
+		_, err := sql.Parse(nil,
+			`select * from (values(1),(2)) group by distinct 1`)
+		require.NoError(t, err)
+	})
+
+}
+
+func TestParseOrderBy(t *testing.T) {
+	t.Parallel()
+	t.Run("Happy", func(t *testing.T) {
+		t.Parallel()
+		s, err := sql.Parse(nil,
+			`select * from (values(1),(2),(null)) order by 417 desc nulls first`)
+		require.NoError(t, err)
+		require.Equal(t, 1, len(s.Select.OrderBy))
+		require.Nil(t, s.Select.OrderBy[0].Expression)
+		require.Equal(t, 417, s.Select.OrderBy[0].OutputColumn)
+		require.Equal(t, true, s.Select.OrderBy[0].NullsFirst)
+		require.Equal(t, true, s.Select.OrderBy[0].Desc)
+	})
+}
+
+func TestParseCreateIndex(t *testing.T) {
+	t.Parallel()
+	t.Run("Happy", func(t *testing.T) {
+		t.Parallel()
+		s, err := sql.Parse(nil,
+			`create index foo_a on foo(a)`)
+		require.NoError(t, err)
+		require.NotNil(t, s.Create.Index)
+		require.Equal(t, "foo_a", s.Create.Schema.Name)
+		require.Equal(t, 1, len(s.Create.Schema.Columns))
+		require.Nil(t, s.Create.Index.Expr)
+	})
+	t.Run("Partial", func(t *testing.T) {
+		t.Parallel()
+		s, err := sql.Parse(nil,
+			`create index foo_a on foo(a) where a%2=0`)
+		require.NoError(t, err)
+		require.NotNil(t, s.Create.Index)
+		require.Equal(t, "foo_a", s.Create.Schema.Name)
+		require.Equal(t, 1, len(s.Create.Schema.Columns))
+		require.NotNil(t, s.Create.Index.Expr)
+	})
+	/* TODO
+	t.Run("Desc", func(t *testing.T) {
+		t.Parallel()
+		s, err := sql.Parse(nil,
+			`create index foo_a on foo(a desc)`)
+		require.NoError(t, err)
+	})
+	*/
+}
+
+func TestSelectLimit(t *testing.T) {
+	s, err := sql.Parse(nil,
+		`select * from (values (1),(2),(3),(4),(5)) limit -2--3 offset 1+-2;`)
+	require.NoError(t, err)
+	require.NotNil(t, s.Select)
+	require.NotNil(t, s.Select.Limit)
+	require.Equal(t, int64(1), *s.Select.Limit)
+	require.NotNil(t, s.Select.Offset)
+	require.Equal(t, int64(-1), *s.Select.Offset)
 }

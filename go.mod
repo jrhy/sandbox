@@ -3,36 +3,34 @@ module github.com/jrhy/sandbox
 go 1.16
 
 require (
-	cloud.google.com/go/iam v0.2.0 // indirect
-	github.com/PuerkitoBio/goquery v1.7.1
-	github.com/andybalholm/cascadia v1.3.1 // indirect
-	github.com/apache/beam/sdks/v2 v2.34.0
-	github.com/araddon/qlbridge v0.0.2
-	github.com/aws/aws-sdk-go v1.43.18
-	github.com/go-sql-driver/mysql v1.6.0 // indirect
+	cloud.google.com/go/iam v0.5.0 // indirect
+	cloud.google.com/go/storage v1.27.0 // indirect
+	github.com/PuerkitoBio/goquery v1.8.0
+	github.com/apache/beam/sdks/v2 v2.41.0
+	github.com/aws/aws-sdk-go v1.44.116
 	github.com/google/martian v2.1.1-0.20190517191504-25dcb96d9e51+incompatible // indirect
 	github.com/google/subcommands v1.2.0
-	github.com/gopherjs/gopherjs v0.0.0-20211111143520-d0d5ecc1a356 // indirect
+	github.com/googleapis/gax-go/v2 v2.6.0 // indirect
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/johncgriffin/overflow v0.0.0-20211019200055-46fa312c352c
-	github.com/jrhy/s3db v0.0.0-20220301055501-a68c2d195ceb
+	github.com/jrhy/mast v1.2.9
+	github.com/jrhy/s3db v0.0.0-20221015212520-953601c72fbc
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/mdp/qrterminal/v3 v3.0.0
-	github.com/pingcap/errors v0.11.4 // indirect
-	github.com/pingcap/parser v3.1.2+incompatible
-	github.com/pingcap/tipb v0.0.0-20220628092852-069ef6c8fc90 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
-	github.com/sirupsen/logrus v1.8.1 // indirect
+	github.com/segmentio/ksuid v1.0.4
 	github.com/stianeikeland/go-rpio v4.2.0+incompatible
 	github.com/stretchr/testify v1.7.0
-	golang.org/x/crypto v0.0.0-20220313003712-b769efc7c000
-	golang.org/x/net v0.0.0-20220127200216-cd36cc0744dd
-	golang.org/x/sys v0.0.0-20220310020820-b874c991c1a5 // indirect
-	golang.org/x/tools v0.1.8 // indirect
-	gonum.org/v1/gonum v0.0.0-20190331200053-3d26580ed485
-	gonum.org/v1/netlib v0.0.0-20190331212654-76723241ea4e // indirect
-	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
+	golang.org/x/crypto v0.0.0-20221012134737-56aed061732a
+	golang.org/x/exp v0.0.0-20221012211006-4de253d81b95 // indirect
+	golang.org/x/net v0.0.0-20221014081412-f15817d10f9b
+	golang.org/x/oauth2 v0.0.0-20221014153046-6fdb5e3db783 // indirect
+	golang.org/x/text v0.3.8 // indirect
+	gonum.org/v1/gonum v0.12.0
+	google.golang.org/api v0.99.0 // indirect
+	google.golang.org/genproto v0.0.0-20221014213838-99cd37c6964a // indirect
+	google.golang.org/grpc v1.50.1 // indirect
 	modernc.org/sqlite v1.17.0
 )

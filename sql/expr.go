@@ -13,6 +13,51 @@ import (
 	"github.com/jrhy/sandbox/sql/types"
 )
 
+var (
+	operatorPrecedence = make(map[string]int)
+	operatorMatchOrder []string
+	precedence         int
+)
+
+func init() {
+	nextPrecedence("or")
+	nextPrecedence("and")
+	nextPrecedence("not")
+	nextPrecedence("||")
+	nextPrecedence("=", "!=", "==", "<>")
+	nextPrecedence("<", "<=", ">", ">=")
+	nextPrecedence("+", "-")
+	nextPrecedence("*", "/", "%")
+	nextPrecedence("<<", ">>")
+	nextPrecedence("|")
+	nextPrecedence("&")
+	assignOperatorMatchOrder()
+}
+
+func nextPrecedence(s ...string) {
+	precedence = precedence + 1
+	for i := range s {
+		operatorPrecedence[s[i]] = precedence
+	}
+}
+
+func assignOperatorMatchOrder() {
+	var maxLength int
+	for k := range operatorPrecedence {
+		if len(k) > maxLength {
+			maxLength = len(k)
+		}
+	}
+	for l := maxLength; l > 0; l-- {
+		for k := range operatorPrecedence {
+			if len(k) != l {
+				continue
+			}
+			operatorMatchOrder = append(operatorMatchOrder, k)
+		}
+	}
+}
+
 func Expression(res **types.Evaluator) p.Func {
 	return binaryExpr(res)
 }
@@ -56,42 +101,6 @@ func toReal(cv colval.ColumnValue) *float64 {
 	return nil
 }
 
-func toBool(cv colval.ColumnValue) *bool {
-	switch v := (cv).(type) {
-	case colval.Int:
-		b := v != 0
-		return &b
-	case colval.Real:
-		b := v != 0.0
-		return &b
-	case colval.Null:
-		return nil
-	}
-	b := false
-	return &b
-}
-
-func precedence(op string) int {
-	switch op {
-	case "or":
-		return 1
-	case "and":
-		return 2
-	case "not":
-		return 3
-	case "=", "!=", "==", "<>":
-		return 4
-	case "<", "<=", ">", ">=":
-		return 5
-	case "+", "-":
-		return 6
-	case "*", "/", "%":
-		return 7
-	default:
-		panic(op)
-	}
-}
-
 func binaryExpr(res **types.Evaluator) p.Func {
 	var cv colval.ColumnValue
 	var name string
@@ -105,21 +114,16 @@ func binaryExpr(res **types.Evaluator) p.Func {
 		for {
 			name = ""
 			e.SkipWS()
-			unaryMinus := 0
+			unaryMinus := false
 			for {
 				if e.Exact("-") {
-					unaryMinus++
+					unaryMinus = !unaryMinus
 				} else if e.Exact("+") {
 
 				} else {
 					break
 				}
 				e.SkipWS()
-			}
-			if unaryMinus%2 == 1 {
-				valStack = append(valStack, types.Evaluator{Func: func(_ map[string]colval.ColumnValue) colval.ColumnValue { return colval.Int(0) }})
-				opStack = append(opStack, "-")
-				precStack = append(precStack, minPrecedence)
 			}
 			if e.Exact("(") {
 				var ev *types.Evaluator
@@ -150,14 +154,35 @@ func binaryExpr(res **types.Evaluator) p.Func {
 				fmt.Printf("NO EXPR MATCH\n")
 				return false
 			}
+			if unaryMinus {
+				vals := []types.Evaluator{
+					{
+						Func: func(_ map[string]colval.ColumnValue) colval.ColumnValue {
+							return colval.Int(0)
+						},
+					},
+					valStack[len(valStack)-1],
+				}
+
+				valStack = append(valStack[:len(valStack)-1],
+					binaryArithmetic(vals,
+						overflow.Sub64, func(a, b float64) float64 { return a - b }))
+				unaryMinus = false
+			}
+
 			e.SkipWS()
 			for {
 				fmt.Printf("input: %s\n", e.Remaining)
-				/*
+				if false {
 					fmt.Printf("valStack: ")
 					for i := range valStack {
-						fmt.Printf("%d ", valStack[i])
-					}*/
+						if len(valStack[i].Inputs) == 0 {
+							fmt.Printf("%v ", valStack[i].Func(nil))
+						} else {
+							fmt.Printf("%v ", valStack[i])
+						}
+					}
+				}
 				fmt.Printf("\nopStack: ")
 				for i := range opStack {
 					fmt.Printf("%s ", opStack[i])
@@ -168,47 +193,35 @@ func binaryExpr(res **types.Evaluator) p.Func {
 				}
 				fmt.Printf("\n")
 
-				matchWithPrecedence := func(op string) bool {
-					opPrecedence := precedence(op)
-					if minPrecedence > opPrecedence {
-						return false
+				matchWithPrecedence := func() bool {
+					for _, op := range operatorMatchOrder {
+						opPrecedence := operatorPrecedence[op]
+						if minPrecedence > opPrecedence {
+							continue
+						}
+						if !e.Exact(op) {
+							continue
+						}
+						fmt.Printf("pushing %s\n", op)
+						opStack = append(opStack, op)
+						precStack = append(precStack, minPrecedence)
+						if opPrecedence > minPrecedence {
+							fmt.Printf("upshift!\n")
+						}
+						minPrecedence = opPrecedence
+						return true
 					}
-					if !e.Exact(op) {
-						return false
-					}
-					fmt.Printf("pushing %s\n", op)
-					opStack = append(opStack, op)
-					precStack = append(precStack, minPrecedence)
-					if opPrecedence > minPrecedence {
-						fmt.Printf("upshift!\n")
-					}
-					minPrecedence = opPrecedence
-					return true
+					return false
 				}
-				if matchWithPrecedence("not") ||
-					matchWithPrecedence("and") ||
-					matchWithPrecedence("or") ||
-					matchWithPrecedence("==") ||
-					matchWithPrecedence("=") ||
-					matchWithPrecedence("!=") ||
-					matchWithPrecedence("<>") ||
-					matchWithPrecedence("<=") ||
-					matchWithPrecedence("<") ||
-					matchWithPrecedence(">=") ||
-					matchWithPrecedence(">") ||
-					matchWithPrecedence("+") ||
-					matchWithPrecedence("-") ||
-					matchWithPrecedence("*") ||
-					matchWithPrecedence("%") ||
-					matchWithPrecedence("/") {
+				if matchWithPrecedence() {
 					break
 				} else if len(valStack) >= 2 {
 					fmt.Printf("downshift!\n")
 					op := opStack[len(opStack)-1]
 					vals := valStack[len(valStack)-2:]
+					valStack = valStack[:len(valStack)-len(vals)]
 					minPrecedence = precStack[len(precStack)-1]
 					precStack = precStack[:len(precStack)-1]
-					valStack = valStack[:len(valStack)-2]
 					opStack = opStack[:len(opStack)-1]
 					fmt.Printf("vals: %v, op %s\n", vals, op)
 					switch op {
@@ -264,6 +277,8 @@ func binaryExpr(res **types.Evaluator) p.Func {
 								func(a, b float64) bool { return a >= b }))
 					case "=":
 						valStack = append(valStack, equal(vals))
+					case "||":
+						valStack = append(valStack, concat(vals))
 					default:
 						panic(op)
 					}
@@ -400,11 +415,11 @@ func or(inputs []types.Evaluator) types.Evaluator {
 		Inputs: combineInputs(capture),
 		Func: func(inputs map[string]colval.ColumnValue) colval.ColumnValue {
 			col := []colval.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
-			left := toBool(col[0])
+			left := col[0].ToBool()
 			if left != nil && *left {
 				return colval.Int(1)
 			}
-			right := toBool(col[1])
+			right := col[1].ToBool()
 			if right != nil && *right {
 				return colval.Int(1)
 			}
@@ -421,8 +436,8 @@ func and(inputs []types.Evaluator) types.Evaluator {
 		Inputs: combineInputs(capture),
 		Func: func(inputs map[string]colval.ColumnValue) colval.ColumnValue {
 			col := []colval.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
-			left := toBool(col[0])
-			right := toBool(col[1])
+			left := col[0].ToBool()
+			right := col[1].ToBool()
 			if left != nil && right != nil {
 				return boolCV(*left && *right)
 			}
@@ -502,4 +517,30 @@ func binaryComparison(
 			}
 			return boolCV(intFunc(*toInt(col[0]), *toInt(col[1])))
 		}}
+}
+
+func concat(
+	inputs []types.Evaluator,
+) types.Evaluator {
+	capture := []types.Evaluator{inputs[0], inputs[1]}
+	return types.Evaluator{
+		Inputs: combineInputs(capture),
+		Func: func(inputs map[string]colval.ColumnValue) colval.ColumnValue {
+			col := []colval.ColumnValue{capture[0].Func(inputs), capture[1].Func(inputs)}
+			if isNull(col[0]) || isNull(col[1]) {
+				return colval.Null{}
+			}
+			return colval.Text(col[0].String() + col[1].String())
+		}}
+}
+
+func ColumnValueLess(a, b colval.ColumnValue) bool {
+	if isNull(a) || isNull(b) {
+		return true
+	}
+	if isReal(a) || isRealText(a) || isReal(b) || isRealText(b) {
+		return *toReal(a) < *toReal(b)
+	}
+	return *toInt(a) < *toInt(b)
+
 }
