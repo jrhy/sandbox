@@ -23,6 +23,7 @@ require (
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stianeikeland/go-rpio v4.2.0+incompatible
 	github.com/stretchr/testify v1.7.0
+	go.riyazali.net/sqlite v0.0.0-20221009071723-df6a26c107b6 // indirect
 	golang.org/x/crypto v0.0.0-20221012134737-56aed061732a
 	golang.org/x/exp v0.0.0-20221012211006-4de253d81b95 // indirect
 	golang.org/x/net v0.0.0-20221014081412-f15817d10f9b
