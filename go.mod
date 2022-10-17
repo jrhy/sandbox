@@ -18,12 +18,15 @@ require (
 	github.com/jrhy/s3db v0.0.0-20221015212520-953601c72fbc
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/mdp/qrterminal/v3 v3.0.0
+	github.com/pingcap/errors v0.11.4 // indirect
+	github.com/pingcap/parser v3.1.2+incompatible
+	github.com/pingcap/tipb v0.0.0-20220825135535-d6f1aebebabd // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.8.1 // indirect
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stianeikeland/go-rpio v4.2.0+incompatible
 	github.com/stretchr/testify v1.7.0
-	go.riyazali.net/sqlite v0.0.0-20221009071723-df6a26c107b6 // indirect
+	go.riyazali.net/sqlite v0.0.0-20221009071723-df6a26c107b6
 	golang.org/x/crypto v0.0.0-20221012134737-56aed061732a
 	golang.org/x/exp v0.0.0-20221012211006-4de253d81b95 // indirect
 	golang.org/x/net v0.0.0-20221014081412-f15817d10f9b
