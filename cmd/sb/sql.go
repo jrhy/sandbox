@@ -38,11 +38,11 @@ func init() {
 			} else {
 				query = strings.Join(ra, " ")
 			}
-			s, err := sql.Parse(query)
+			s, err := sql.Parse(nil, query)
 			if err != nil {
 				die(fmt.Sprintf("parse: %v", err))
 			}
-			fmt.Printf("%s\n", s)
+			fmt.Printf("%+v\n", s)
 			return 0
 		},
 	}
