@@ -32,10 +32,14 @@ func (c *CsvModule) Connect(_ *sqlite.Conn, args []string, declare func(string) 
 		case "filename":
 			table.file, err = strconv.Unquote(s[1])
 			if err != nil {
-				return nil, fmt.Errorf("unquote: %w", err)
+				return nil, fmt.Errorf("unquote filename: %w", err)
 			}
 		case "header":
-			readHeader = s[1] == "yes"
+			lower, err := strconv.Unquote(s[1])
+			if err != nil {
+				return nil, fmt.Errorf("unquote header: %w", err)
+			}
+			readHeader = strings.EqualFold(lower, "yes")
 		default:
 			fmt.Printf("skipping arg %s\n", args[i])
 		}
@@ -57,6 +61,7 @@ func (c *CsvModule) Connect(_ *sqlite.Conn, args []string, declare func(string) 
 	table.columns = len(row)
 
 	var d string
+	fmt.Printf("READHEADER? %v\n", readHeader)
 	if readHeader {
 		table.skipHeader = true
 		d = strings.Join(row, ",")
@@ -106,8 +111,14 @@ func (c *CsvVirtualTable) Open() (_ sqlite.VirtualCursor, err error) {
 	}, nil
 }
 
-func (c *CsvVirtualTable) Disconnect() error { return nil }
-func (c *CsvVirtualTable) Destroy() error    { return c.Disconnect() }
+func (c *CsvVirtualTable) Disconnect() error {
+	fmt.Printf("DISCONNET\n")
+	return nil
+}
+func (c *CsvVirtualTable) Destroy() error {
+	fmt.Printf("DESTROY\n")
+	return c.Disconnect()
+}
 
 // CsvCursor is an instance of the csv file cursor. Only a full table scan is supported natively.
 type CsvCursor struct {
@@ -133,7 +144,9 @@ func (c *CsvCursor) Next() error {
 
 func (c *CsvCursor) Column(ctx *sqlite.VirtualTableContext, i int) error {
 	if i >= 0 && i < len(c.current) && c.current[i] != "" {
-		ctx.ResultText(c.current[i])
+		if !ctx.NoChange() {
+			ctx.ResultText(c.current[i])
+		}
 	}
 	return nil
 }
@@ -141,11 +154,16 @@ func (c *CsvCursor) Column(ctx *sqlite.VirtualTableContext, i int) error {
 func (c *CsvCursor) Filter(int, string, ...sqlite.Value) error { c.rowid = 0; return c.Next() }
 func (c *CsvCursor) Rowid() (int64, error)                     { return c.rowid, nil }
 func (c *CsvCursor) Eof() bool                                 { return c.rowid < 0 }
-func (c *CsvCursor) Close() error                              { return c.closer.Close() }
+func (c *CsvCursor) Close() error {
+	fmt.Printf("CLOSE\n")
+	return c.closer.Close()
+}
 
 func init() {
 	sqlite.Register(func(api *sqlite.ExtensionApi) (sqlite.ErrorCode, error) {
-		if err := api.CreateModule("csv", &CsvModule{}); err != nil {
+		if err := api.CreateModule("csv", &CsvModule{}, func(opts *sqlite.ModuleOptions) {
+			opts.ReadOnly = false
+		}); err != nil {
 			return sqlite.SQLITE_ERROR, err
 		}
 		return sqlite.SQLITE_OK, nil
@@ -153,3 +171,37 @@ func init() {
 }
 
 func main() {}
+
+func (c *CsvVirtualTable) Insert(values ...sqlite.Value) (int64, error) {
+	fmt.Printf("INSERT ")
+	for _, v := range values {
+		fmt.Printf("nochange=%v %s %+v\n", v.NoChange(), v.Type(), v.Text())
+	}
+	fmt.Printf("\n")
+	return 0, nil
+}
+
+func (c *CsvVirtualTable) Update(value sqlite.Value, values ...sqlite.Value) error {
+	fmt.Printf("UPDATE ")
+	fmt.Printf("nochange=%v %s %+v\n", value.NoChange(), value.Type(), value.Text())
+	for i, v := range values {
+		fmt.Printf("%d nochange=%v %s %+v\n", i, v.NoChange(), v.Type(), v.Text())
+	}
+	fmt.Printf("\n")
+	return nil
+}
+
+func (c *CsvVirtualTable) Replace(oldValue, newValue sqlite.Value, values ...sqlite.Value) error {
+	fmt.Printf("REPLACE ")
+	fmt.Printf("oldValue nochange=%v %s %+v\n", oldValue.NoChange(), oldValue.Type(), oldValue.Text())
+	fmt.Printf("newValue nochange=%v %s %+v\n", newValue.NoChange(), newValue.Type(), newValue.Text())
+	for i, v := range values {
+		fmt.Printf("%d nochange=%v %s %+v\n", i, v.NoChange(), v.Type(), v.Text())
+	}
+	return nil
+}
+func (c *CsvVirtualTable) Delete(value sqlite.Value) error {
+	fmt.Printf("DELETE ")
+	fmt.Printf("nochange=%v %s %+v\n", value.NoChange(), value.Type(), value.Text())
+	return nil
+}
