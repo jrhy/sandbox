@@ -1,0 +1,14 @@
+
+app = "jrhy2"
+
+[mounts]
+  destination = "/data"
+  source = "data"
+
+[[services]]
+  internal_port = 4000
+  protocol = "tcp"
+
+  [[services.ports]]
+    handlers = ["tls", "http"]
+    port = "443"
