@@ -153,7 +153,10 @@ func create(c *types.Create, sources map[string]types.Source) parse.Func {
 				parse.SeqWS(parse.CI("table"),
 					//TODO parse.Optional(parse.SeqWS(parse.CI("if"), parse.CI("not"), parse.CI("exists").Action(func() { ifNotExists = true }))),
 					SQLName(&name),
-					parse.Optional(schema(&c.Schema, &c.Errors).Action(func() {
+					parse.Optional(parse.SeqWS(
+						parse.Exact("("),
+						Schema(&c.Schema, &c.Errors),
+						parse.Exact(")")).Action(func() {
 						c.Schema.Name = name
 					})),
 					parse.Optional(createQuery(c, &name, sources)),
@@ -194,39 +197,12 @@ func createQuery(c *types.Create, schemaName *string, sources map[string]types.S
 	}
 }
 
-func schema(s *types.Schema, errs *[]error) parse.Func {
+func Schema(s *types.Schema, errs *[]error) parse.Func {
 	return func(b *parse.Parser) bool {
 		var col, coltype, name string
-		return b.Match(parse.SeqWS(
-			parse.Exact("("),
+		return b.Match(
 			parse.Delimited(
 				parse.OneOf(
-					parse.SeqWS(
-						SQLName(&col).
-							Action(func() { s.Columns = append(s.Columns, types.SchemaColumn{Name: col}) }),
-						parse.Optional(ColumnType(&coltype)).Action(func() {
-							s.Columns[len(s.Columns)-1].DefaultType =
-								strings.ToLower(coltype)
-						}),
-						parse.Multiple(
-							parse.OneOf(
-								parse.SeqWS(parse.CI("primary"), parse.CI("key")).
-									Action(func() {
-										if len(s.PrimaryKey) > 0 {
-											*errs = append(*errs, errors.New("PRIMARY KEY already specified"))
-										} else {
-											s.PrimaryKey = []string{col}
-											*errs = append(*errs, errors.New("PRIMARY KEY is not supported yet"))
-										}
-									}),
-								parse.CI("unique").Action(func() {
-									s.Columns[len(s.Columns)-1].Unique = true
-									*errs = append(*errs, errors.New("UNIQUE is not supported yet"))
-								}),
-								parse.SeqWS(parse.CI("not"), parse.CI("null")).Action(func() {
-									s.Columns[len(s.Columns)-1].NotNull = true
-								}),
-							))),
 					parse.SeqWS(
 						parse.CI("primary"), parse.CI("key"),
 						parse.Exact("(").
@@ -242,9 +218,33 @@ func schema(s *types.Schema, errs *[]error) parse.Func {
 										s.PrimaryKey = append(s.PrimaryKey, col)
 									})),
 							parse.Exact(",")),
-						parse.Exact(")"))),
-				parse.Exact(",")),
-			parse.Exact(")")).Action(func() { s.Name = name }))
+						parse.Exact(")")),
+					parse.SeqWS(
+						SQLName(&col).
+							Action(func() { s.Columns = append(s.Columns, types.SchemaColumn{Name: col}) }),
+						parse.Optional(ColumnType(&coltype)).Action(func() {
+							s.Columns[len(s.Columns)-1].DefaultType =
+								strings.ToLower(coltype)
+						}),
+						parse.Multiple(
+							parse.OneOf(
+								parse.SeqWS(parse.CI("primary"), parse.CI("key")).
+									Action(func() {
+										if len(s.PrimaryKey) > 0 {
+											*errs = append(*errs, errors.New("PRIMARY KEY already specified"))
+										} else {
+											s.PrimaryKey = []string{col}
+										}
+									}),
+								parse.CI("unique").Action(func() {
+									s.Columns[len(s.Columns)-1].Unique = true
+									*errs = append(*errs, errors.New("UNIQUE is not supported yet"))
+								}),
+								parse.SeqWS(parse.CI("not"), parse.CI("null")).Action(func() {
+									s.Columns[len(s.Columns)-1].NotNull = true
+								}),
+							)))),
+				parse.Exact(",")).Action(func() { s.Name = name }))
 	}
 }
 

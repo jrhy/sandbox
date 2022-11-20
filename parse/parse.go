@@ -2,7 +2,6 @@ package parse
 
 import (
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -168,15 +167,11 @@ func Delimited(
 	return func(e *Parser) bool {
 		terms := 0
 		for {
-			fmt.Printf("DBG delimited loop top, terms=%d, remaining: ```%s'''\n", terms, e.Remaining)
 			if !term(e) {
-				fmt.Printf("DBG delimited loop failed to match term, ending, remaining: ```%s'''\n", e.Remaining)
 				break
 			}
 			terms++
-			fmt.Printf("DBG delimited loop matched term pre-delimiter, terms=%d, remaining: ```%s'''\n", terms, e.Remaining)
 			if !delimiter(e) {
-				fmt.Printf("DBG delimited loop failed to match delimiter, ending, remaining: ```%s'''\n", e.Remaining)
 				break
 			}
 		}
