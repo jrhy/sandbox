@@ -6,20 +6,30 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"os"
 	"testing"
+	"time"
 
 	"github.com/jrhy/mast/persist/s3test"
+	"github.com/jrhy/sandbox/sqlitefun/sasqlite"
 	"github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
+
+	sasqlitev1 "github.com/jrhy/sandbox/sqlitefun/sasqlite/proto/v1"
 )
 
+const UsingLocalMinIO = false
+const UsingLoadableExtension = false
+
 func init() {
-	sql.Register("sqlite3_with_extensions", &sqlite3.SQLiteDriver{
-		ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+	driver := &sqlite3.SQLiteDriver{}
+	if UsingLoadableExtension {
+		driver.Extensions = []string{"../loadable/sasqlite"}
+	} else {
+		driver.ConnectHook = func(conn *sqlite3.SQLiteConn) error {
 			return conn.CreateModule("sasqlite", &Module{})
-		},
-	})
+		}
+	}
+	sql.Register("sqlite3_with_extensions", driver)
 }
 
 func mustJSON(i interface{}) string {
@@ -50,16 +60,10 @@ func getDBBucket() (*sql.DB, string, string) {
 	var s3Bucket string
 	var s3Endpoint string
 
-	os.Setenv("AWS_REGION", "dummy")
-	const UsingLocalMinIO = false
 	if UsingLocalMinIO {
-		os.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
-		os.Setenv("AWS_SECRET_ACCESS_KEY", "miniopassword")
 		s3Bucket = "bucket"
 		s3Endpoint = "http://127.0.0.1:9091"
 	} else {
-		os.Setenv("AWS_ACCESS_KEY_ID", "dummy")
-		os.Setenv("AWS_SECRET_ACCESS_KEY", "dummy")
 		c, bucketName, _ := s3test.Client()
 		s3Bucket = bucketName
 		s3Endpoint = c.Endpoint
@@ -103,8 +107,8 @@ schema='a primary key, b')`,
 	require.NoError(t, err)
 	_, err = db.Exec("insert into t1 values ('v1','v1b'),('v2','v2b'),('v3','v3b');")
 	require.NoError(t, err)
-	_, err = db.Exec("update t1 set a='v1c' where b='v1b';")
-	require.NoError(t, err)
+	//_, err = db.Exec("update t1 set a='v1c' where b='v1b';")
+	//require.NoError(t, err)
 	_, err = db.Exec("delete from t1 where b='v2b';")
 	require.NoError(t, err)
 	require.Equal(t,
@@ -312,4 +316,146 @@ schema='a')`,
 	require.Equal(t,
 		`[["null",null]]`,
 		mustQueryToJSON(db, `select typeof(a), a from nullval`))
+}
+
+func TestZeroInt(t *testing.T) {
+	db, s3Bucket, s3Endpoint := getDBBucket()
+	_, err := db.Exec(fmt.Sprintf(`create virtual table zerointval using sasqlite (
+s3_bucket='%s',
+s3_endpoint='%s',
+s3_prefix='zerointval',
+schema='a')`,
+		s3Bucket, s3Endpoint))
+	require.NoError(t, err)
+	_, err = db.Exec(`insert into zerointval values (0);`)
+	require.NoError(t, err)
+	require.Equal(t,
+		`[["integer",0]]`,
+		mustQueryToJSON(db, `select typeof(a), a from zerointval`))
+}
+
+func TestZeroReal(t *testing.T) {
+	db, s3Bucket, s3Endpoint := getDBBucket()
+	_, err := db.Exec(fmt.Sprintf(`create virtual table zerorealval using sasqlite (
+s3_bucket='%s',
+s3_endpoint='%s',
+s3_prefix='zerorealval',
+schema='a')`,
+		s3Bucket, s3Endpoint))
+	require.NoError(t, err)
+	_, err = db.Exec(`insert into zerorealval values (0.0);`)
+	require.NoError(t, err)
+	require.Equal(t,
+		`[["real",0]]`,
+		mustQueryToJSON(db, `select typeof(a), a from zerorealval`))
+}
+
+// possible discrepancy to sqlite / perhaps bug in go-sqlite3
+func TODOTestEmptyText(t *testing.T) {
+	db, s3Bucket, s3Endpoint := getDBBucket()
+	_, err := db.Exec(fmt.Sprintf(`create virtual table emptytextval using sasqlite (
+s3_bucket='%s',
+s3_endpoint='%s',
+s3_prefix='emptytextval',
+schema='a')`,
+		s3Bucket, s3Endpoint))
+	require.NoError(t, err)
+	_, err = db.Exec(`insert into emptytextval values ('');`)
+	require.NoError(t, err)
+	require.Equal(t,
+		`[["text",""]]`,
+		mustQueryToJSON(db, `select typeof(a), a from emptytextval`))
+}
+
+// possible discrepancy to sqlite / perhaps bug in go-sqlite3
+func TODOTestEmptyBlob(t *testing.T) {
+	db, s3Bucket, s3Endpoint := getDBBucket()
+	_, err := db.Exec(fmt.Sprintf(`create virtual table emptyblobval using sasqlite (
+s3_bucket='%s',
+s3_endpoint='%s',
+s3_prefix='emptyblobval',
+schema='a')`,
+		s3Bucket, s3Endpoint))
+	require.NoError(t, err)
+	_, err = db.Exec(`insert into emptyblobval values (x'');`)
+	require.NoError(t, err)
+	require.Equal(t,
+		`[["blob",""]]`,
+		mustQueryToJSON(db, `select typeof(a), a from emptyblobval`))
+}
+
+func TestInsertConflict(t *testing.T) {
+	db, s3Bucket, s3Endpoint := getDBBucket()
+	defer db.Close()
+
+	openTableWithWriteTime := func(t *testing.T, name, tm string) {
+		_, err := db.Exec(fmt.Sprintf(`create virtual table "%s" using sasqlite (
+s3_bucket='%s',
+s3_endpoint='%s',
+s3_prefix='%s',
+schema='a primary key, b',
+write_time='%s')`,
+			name, s3Bucket, s3Endpoint, t.Name(), tm))
+		require.NoError(t, err)
+	}
+
+	for i, openerWithLatestWriteTime := range []func(*testing.T) string{
+		func(t *testing.T) string {
+			openTableWithWriteTime(t, t.Name()+"1", "2006-01-01T00:00:00Z")
+			openTableWithWriteTime(t, t.Name()+"2", "2007-01-01T00:00:00Z")
+			return "two"
+		},
+		func(t *testing.T) (expected string) {
+			openTableWithWriteTime(t, t.Name()+"2", "2006-01-01T00:00:00Z")
+			openTableWithWriteTime(t, t.Name()+"1", "2007-01-01T00:00:00Z")
+			return "one"
+		},
+	} {
+
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			expected := openerWithLatestWriteTime(t)
+
+			_, err := db.Exec(fmt.Sprintf(`insert into "%s" values('row','one')`, t.Name()+"1"))
+			require.NoError(t, err)
+			_, err = db.Exec(fmt.Sprintf(`insert into "%s" values('row','two')`, t.Name()+"2"))
+			require.NoError(t, err)
+
+			openTableWithWriteTime(t, t.Name()+"read", "2008-01-01T00:00:00Z")
+			query := fmt.Sprintf(`select * from "%s"`, t.Name()+"read")
+			require.Equal(t,
+				fmt.Sprintf(`[["row","%s"]]`, expected),
+				mustQueryToJSON(db, query))
+		})
+	}
+}
+
+func mustParseTime(f, s string) time.Time {
+	t, err := time.Parse(f, s)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func TestMergeValues(t *testing.T) {
+	t1 := mustParseTime(time.RFC3339, "2006-01-01T00:00:00Z")
+	t2 := mustParseTime(time.RFC3339, "2007-01-01T00:00:00Z")
+	v1 := &sasqlitev1.Row{
+		ColumnValues: map[string]*sasqlitev1.ColumnValue{"b": sasqlite.ToColumnValue("one")},
+	}
+	v2 := &sasqlitev1.Row{
+		ColumnValues: map[string]*sasqlitev1.ColumnValue{"b": sasqlite.ToColumnValue("two")},
+	}
+	res := sasqlite.MergeRows(nil, t1, v1, t2, v2, t2)
+	require.Equal(t, time.Duration(0), res.DeleteUpdateOffset.AsDuration())
+	require.Equal(t, time.Duration(0), res.ColumnValues["b"].UpdateOffset.AsDuration())
+	res = sasqlite.MergeRows(nil, t2, v2, t1, v1, t1)
+	require.Equal(t, t2.Sub(t1), res.DeleteUpdateOffset.AsDuration())
+	require.Equal(t, t2.Sub(t1), res.ColumnValues["b"].UpdateOffset.AsDuration())
+	res = sasqlite.MergeRows(nil, t2, v2, t1, v1, t2)
+	require.Equal(t, time.Duration(0), res.DeleteUpdateOffset.AsDuration())
+	require.Equal(t, time.Duration(0), res.ColumnValues["b"].UpdateOffset.AsDuration())
+	res = sasqlite.MergeRows(nil, t1, v1, t2, v2, t1)
+	require.Equal(t, t2.Sub(t1), res.DeleteUpdateOffset.AsDuration())
+	require.Equal(t, t2.Sub(t1), res.ColumnValues["b"].UpdateOffset.AsDuration())
 }

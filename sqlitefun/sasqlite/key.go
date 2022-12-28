@@ -7,71 +7,74 @@ import (
 	"strconv"
 
 	"github.com/jrhy/mast"
+	sasqlitev1 "github.com/jrhy/sandbox/sqlitefun/sasqlite/proto/v1"
 )
 
 type Key struct {
-	Int  *int64   `json:"int,omitempty"`
-	Real *float64 `json:"real,omitempty"`
-	Text *string  `json:"text,omitempty"`
-	Blob *[]byte  `json:"blob,omitempty"`
+	*sasqlitev1.SQLiteValue
 }
+
+var _ mast.Key = &Key{}
 
 func NewKey(i interface{}) *Key {
 	switch x := i.(type) {
 	case int:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case int32:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case int16:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case int8:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case int64:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case uint:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case uint8:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case uint16:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case uint32:
 		var v int64 = int64(x)
-		return &Key{Int: &v}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_INT, Int: v}}
 	case float64:
-		return &Key{Real: &x}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_REAL, Real: x}}
 	case string:
-		return &Key{Text: &x}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_TEXT, Text: x}}
 	case []byte:
-		return &Key{Blob: &x}
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_BLOB, Blob: x}}
+	case nil:
+		return &Key{&sasqlitev1.SQLiteValue{Type: sasqlitev1.Type_NULL}}
 	default:
 		panic(fmt.Errorf("unhandled Key type %T", x))
 	}
 }
-
-var _ mast.Key = &Key{}
 
 var defaultLayer = mast.DefaultLayer(nil)
 
 func (k *Key) Layer(branchFactor uint) uint8 {
 	var layer uint8
 	var err error
-	switch {
-	case k.Int != nil:
-		layer, err = defaultLayer(*k.Int, branchFactor)
-	case k.Real != nil:
-		layer, err = defaultLayer(strconv.FormatFloat(*k.Real, 'b', -1, 64), branchFactor)
-	case k.Text != nil:
-		layer, err = defaultLayer(*k.Text, branchFactor)
-	case k.Blob != nil:
-		layer, err = defaultLayer(*k.Blob, branchFactor)
+	v := k.SQLiteValue
+	switch v.Type {
+	case sasqlitev1.Type_INT:
+		layer, err = defaultLayer(v.Int, branchFactor)
+	case sasqlitev1.Type_REAL:
+		layer, err = defaultLayer(strconv.FormatFloat(v.Real, 'b', -1, 64), branchFactor)
+	case sasqlitev1.Type_TEXT:
+		layer, err = defaultLayer(v.Text, branchFactor)
+	case sasqlitev1.Type_BLOB:
+		layer, err = defaultLayer(v.Blob, branchFactor)
+	case sasqlitev1.Type_NULL:
+		layer = 0
 	default:
 		panic("unhandled Key type")
 	}
@@ -82,7 +85,7 @@ func (k *Key) Layer(branchFactor uint) uint8 {
 }
 
 func (k *Key) IsNull() bool {
-	return k.Int == nil && k.Real == nil && k.Text == nil && k.Blob == nil
+	return k.Type == sasqlitev1.Type_NULL
 }
 
 func (k *Key) Order(o2 mast.Key) int {
@@ -90,76 +93,78 @@ func (k *Key) Order(o2 mast.Key) int {
 		return 1
 	}
 	k2 := o2.(*Key)
+	v := k.SQLiteValue
+	v2 := k2.SQLiteValue
 	var flip bool
-	k, k2, flip = orderType(k, k2)
-	if k.Int != nil {
-		if k2.Int != nil {
-			if *k.Int < *k2.Int {
+	v, v2, flip = orderType(v, v2)
+	if v.Type == sasqlitev1.Type_INT {
+		if v2.Type == sasqlitev1.Type_INT {
+			if v.Int < v2.Int {
 				return order(flip, -1)
-			} else if *k.Int > *k2.Int {
+			} else if v.Int > v2.Int {
 				return order(flip, 1)
 			}
 			return 0
 		}
-		if k2.Real != nil {
-			if float64(*k.Int) < *k2.Real {
+		if v2.Type == sasqlitev1.Type_REAL {
+			if float64(v.Int) < v2.Real {
 				return order(flip, -1)
-			} else if float64(*k.Int) > *k2.Real {
-				return order(flip, 1)
-			}
-			return 0
-		}
-		return order(flip, -1)
-	}
-	if k.Real != nil {
-		if k2.Real != nil {
-			if *k.Real < *k2.Real {
-				return order(flip, -1)
-			} else if *k.Real > *k2.Real {
+			} else if float64(v.Int) > v2.Real {
 				return order(flip, 1)
 			}
 			return 0
 		}
 		return order(flip, -1)
 	}
-	if k.Text != nil {
-		if k2.Text != nil {
-			if *k.Text < *k2.Text {
+	if v.Type == sasqlitev1.Type_REAL {
+		if v2.Type == sasqlitev1.Type_REAL {
+			if v.Real < v2.Real {
 				return order(flip, -1)
-			} else if *k.Text > *k2.Text {
+			} else if v.Real > v2.Real {
 				return order(flip, 1)
 			}
 			return 0
 		}
 		return order(flip, -1)
 	}
-	if k.Blob != nil {
-		if k2.Blob != nil {
-			return order(flip, bytes.Compare(*k.Blob, *k2.Blob))
+	if v.Type == sasqlitev1.Type_TEXT {
+		if v2.Type == sasqlitev1.Type_TEXT {
+			if v.Text < v2.Text {
+				return order(flip, -1)
+			} else if v.Text > v2.Text {
+				return order(flip, 1)
+			}
+			return 0
+		}
+		return order(flip, -1)
+	}
+	if v.Type == sasqlitev1.Type_BLOB {
+		if v2.Type == sasqlitev1.Type_BLOB {
+			return order(flip, bytes.Compare(v.Blob, v2.Blob))
 		}
 	}
 	panic(fmt.Errorf("key comparison %T, %T in unexpected order",
 		k.Value(), k2.Value()))
 }
 
-func orderType(k, k2 *Key) (*Key, *Key, bool) {
-	if typeIndex(k) <= typeIndex(k2) {
-		return k, k2, false
+func orderType(v, v2 *sasqlitev1.SQLiteValue) (*sasqlitev1.SQLiteValue, *sasqlitev1.SQLiteValue, bool) {
+	if typeIndex(v) <= typeIndex(v2) {
+		return v, v2, false
 	}
-	return k2, k, true
+	return v2, v, true
 }
 
-func typeIndex(k *Key) int {
-	if k.Int != nil {
+func typeIndex(v *sasqlitev1.SQLiteValue) int {
+	if v.Type == sasqlitev1.Type_INT {
 		return 0
 	}
-	if k.Real != nil {
+	if v.Type == sasqlitev1.Type_REAL {
 		return 1
 	}
-	if k.Text != nil {
+	if v.Type == sasqlitev1.Type_TEXT {
 		return 2
 	}
-	if k.Blob != nil {
+	if v.Type == sasqlitev1.Type_BLOB {
 		return 3
 	}
 	panic("unhandled key type")
@@ -173,22 +178,20 @@ func order(flip bool, cmp int) int {
 }
 
 func (k *Key) Value() interface{} {
-	if k.Int != nil {
-		return *k.Int
-	}
-	if k.Real != nil {
-		return *k.Real
-	}
-	if k.Text != nil {
-		return *k.Text
-	}
-	if k.Blob != nil {
-		return *k.Blob
+	switch k.Type {
+	case sasqlitev1.Type_INT:
+		return k.Int
+	case sasqlitev1.Type_TEXT:
+		return k.Text
+	case sasqlitev1.Type_REAL:
+		return k.Real
+	case sasqlitev1.Type_BLOB:
+		return k.Blob
 	}
 	return nil
 }
 
-func (k Key) String() string {
+func (k *Key) String() string {
 	return mustJSON(k)
 }
 

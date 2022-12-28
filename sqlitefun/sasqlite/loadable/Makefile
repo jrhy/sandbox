@@ -4,6 +4,10 @@ clean:
 	-rm -f $(LIBS)
 
 start-minio:
+	if ! which minio ; then \
+		go install -v github.com/minio/minio@latest ; \
+		go install -v github.com/minio/mc@latest ; \
+	fi
 	if ! pgrep minio ; then \
 		( MINIO_ROOT_USER=minioadmin \
 		MINIO_ROOT_PASSWORD=miniopassword \
@@ -31,7 +35,7 @@ run:
 
 
 	${ENV} sqlite3 \
-		-cmd '.load sasqlite' \
+		-cmd '.load ./sasqlite' \
 		-cmd "create virtual table t1 using sasqlite ( \
 		    s3_bucket='bucket', \
 		    s3_endpoint='http://127.0.0.1:9091', \

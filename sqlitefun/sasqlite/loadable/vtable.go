@@ -220,9 +220,9 @@ func (c *VirtualTable) Update(value sqlite.Value, values ...sqlite.Value) error 
 }
 
 func (c *VirtualTable) Replace(oldValue, newValue sqlite.Value, values ...sqlite.Value) error {
-	// fmt.Printf("REPLACE ")
-	// fmt.Printf("oldValue nochange=%v %s %+v  ", oldValue.NoChange(), oldValue.Type(), oldValue.Text())
-	// fmt.Printf("newValue nochange=%v %s %+v\n", newValue.NoChange(), newValue.Type(), newValue.Text())
+	fmt.Printf("REPLACE ")
+	fmt.Printf("oldValue nochange=%v %s %+v  ", oldValue.NoChange(), oldValue.Type(), oldValue.Text())
+	fmt.Printf("newValue nochange=%v %s %+v\n", newValue.NoChange(), newValue.Type(), newValue.Text())
 	var backup *s3db.DB
 	var err error
 	if newValue.NoChange() {

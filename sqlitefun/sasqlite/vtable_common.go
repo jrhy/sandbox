@@ -20,6 +20,11 @@ import (
 	"github.com/jrhy/sandbox/sql"
 	"github.com/jrhy/sandbox/sql/colval"
 	sqlTypes "github.com/jrhy/sandbox/sql/types"
+
+	"github.com/jrhy/mast"
+	sasqlitev1 "github.com/jrhy/sandbox/sqlitefun/sasqlite/proto/v1"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 var ErrSasqliteConstraintNotNull = errors.New("constraint: NOT NULL")
@@ -47,16 +52,6 @@ type VirtualTable struct {
 	writeTime         *time.Time
 
 	s3 s3Options
-}
-
-type Row struct {
-	ColumnValues     map[string]ColumnValue
-	Deleted          bool
-	DeleteUpdateTime time.Time
-}
-type ColumnValue struct {
-	UpdateTime time.Time
-	Value      interface{}
 }
 
 func unquoteAll(s string) string {
@@ -98,8 +93,9 @@ usage:
                                    optional S3 endpoint (if not using AWS region)
 [s3_prefix='/prefix',]             separate tables within a bucket
  schema='<colname> [type] [primary key] [not null]',
-                                   table schema`)
-		//write_time='19:33:11.413219'      attribute modification time, for idempotence, from request time
+                                   table schema
+[write_time='2006-01-02T15:04:05-07:00',]
+                                   value modification time, for idempotence, from request time`)
 	}
 	seen := map[string]struct{}{}
 	for i := range args {
@@ -127,6 +123,12 @@ usage:
 			if err != nil {
 				return nil, fmt.Errorf("schema: %w", err)
 			}
+		case "write_time":
+			t, err := time.Parse(time.RFC3339, unquoteAll(s[1]))
+			if err != nil {
+				return nil, fmt.Errorf("write_time: %w", err)
+			}
+			table.writeTime = &t
 		default:
 			dbg("skipping arg %s\n", args[i])
 		}
@@ -305,7 +307,7 @@ func (c *VirtualTable) BestIndex(input []IndexInput, order []OrderInput) (*Index
 }
 
 func (c *VirtualTable) Open() (*Cursor, error) {
-	dbg("OPEN\n")
+	dbg("OPEN CURSOR\n")
 	cursor, err := c.Tree.Root.Cursor(c.Ctx)
 	if err != nil {
 		return nil, err
@@ -335,7 +337,7 @@ func (c *VirtualTable) Disconnect() error {
 type Cursor struct {
 	t          *VirtualTable
 	currentKey *Key
-	currentRow *Row
+	currentRow *sasqlitev1.Row
 	cursor     *s3db.Cursor
 	desc       bool
 	eof        bool
@@ -388,7 +390,7 @@ func (c *Cursor) Next() error {
 				c.ltMax = false
 			}
 		}
-		if v.Value.(Row).Deleted {
+		if v.Value.(*sasqlitev1.Row).Deleted {
 			skip = true
 		}
 		if !c.desc {
@@ -406,25 +408,24 @@ func (c *Cursor) Next() error {
 			dbg("skip %+v\n", k)
 			continue
 		}
-		row := v.Value.(Row)
-		c.currentRow = &row
+		c.currentRow = v.Value.(*sasqlitev1.Row)
 		c.currentKey = k.(*Key)
 		return nil
 	}
 }
 
 func (c *Cursor) Column(i int) (interface{}, error) {
-	dbg("column %d\n", i)
 	if c.currentRow.Deleted {
 		return nil, fmt.Errorf("accessing deleted row")
 	}
+	var res interface{}
 	if i == c.t.keyCol {
-		return c.currentKey.Value(), nil
+		res = c.currentKey.Value()
+	} else if cv, ok := c.currentRow.ColumnValues[c.t.ColumnNameByIndex[i]]; ok {
+		res = fromSQLiteValue(cv.Value)
 	}
-	if cv, ok := c.currentRow.ColumnValues[c.t.ColumnNameByIndex[i]]; ok {
-		return cv.Value, nil
-	}
-	return nil, nil
+	dbg("column %d: %T %+v\n", i, res, res)
+	return res, nil
 }
 
 func (c *Cursor) Filter(idxStr string, val []interface{}) error {
@@ -487,7 +488,7 @@ func (c *Cursor) Filter(idxStr string, val []interface{}) error {
 	c.currentRow = nil
 	c.eof = false
 	res := c.Next()
-	dbg("FILTER RESET: err=%v\n", res)
+	dbg("CURSOR RESET: err=%v\n", res)
 	return res
 }
 
@@ -496,8 +497,23 @@ func (c *Cursor) Rowid() (int64, error) {
 }
 func (c *Cursor) Eof() bool { return c.eof }
 func (c *Cursor) Close() error {
-	dbg("CLOSE\n")
+	dbg("CLOSE CURSOR\n")
 	return nil
+}
+
+func getRow(c *VirtualTable, key *Key, row **sasqlitev1.Row, rowTime *time.Time) (bool, error) {
+	var crdtValue crdt.Value
+	ok, err := c.Tree.Root.Get(c.Ctx, key, &crdtValue)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		*row = crdtValue.Value.(*sasqlitev1.Row)
+		*rowTime = time.Unix(0, crdtValue.ModEpochNanos)
+	} else {
+		*row = &sasqlitev1.Row{}
+	}
+	return ok, nil
 }
 
 func (c *VirtualTable) Insert(values map[int]interface{}) (int64, error) {
@@ -520,31 +536,26 @@ func (c *VirtualTable) Insert(values map[int]interface{}) (int64, error) {
 		}
 	}
 	dbg("%T %+v\n", key, key)
-	var old, new Row
-	ok, err := c.Tree.Root.Get(c.Ctx, NewKey(key), &old)
+	var old *sasqlitev1.Row
+	var new sasqlitev1.Row
+	var ot time.Time
+	ok, err := getRow(c, NewKey(key), &old, &ot)
 	if err != nil {
 		return 0, fmt.Errorf("get: %w", err)
 	}
-	if ok && (!old.Deleted || !old.DeleteUpdateTime.Before(t)) {
+	if ok && (!old.Deleted || !ot.Add(old.DeleteUpdateOffset.AsDuration()).Before(t)) {
 		return 0, ErrSasqliteConstraintPrimaryKey
 	}
-	new.Deleted = false
-	new.DeleteUpdateTime = t
-	if new.ColumnValues == nil {
-		new.ColumnValues = make(map[string]ColumnValue)
-	}
+	new.ColumnValues = make(map[string]*sasqlitev1.ColumnValue)
 	for i, v := range values {
 		if i == c.keyCol {
 			continue
 		}
-		cv := ColumnValue{
-			Value:      v,
-			UpdateTime: t,
-		}
-		new.ColumnValues[c.ColumnNameByIndex[i]] = cv
+		colName := c.ColumnNameByIndex[i]
+		new.ColumnValues[colName] = &sasqlitev1.ColumnValue{Value: toSQLiteValue(v)}
 		dbg("SET %d %v=%v\n", i, key, v)
 	}
-	merged := mergeRows(key, old, new)
+	merged := MergeRows(key, ot, old, t, &new, t)
 	err = c.Tree.Root.Set(c.Ctx, t, NewKey(key), merged)
 	if err != nil {
 		return 0, fmt.Errorf("set: %w", err)
@@ -561,36 +572,26 @@ func (c *VirtualTable) Update(key interface{}, values map[int]interface{}) error
 		return errors.New("no key set")
 	}
 	t := c.updateTime()
-	var old, new Row
-	ok, err := c.Tree.Root.Get(c.Ctx, NewKey(key), &old)
+	var old *sasqlitev1.Row
+	var new sasqlitev1.Row
+	var ot time.Time
+	ok, err := getRow(c, NewKey(key), &old, &ot)
 	if err != nil {
 		return fmt.Errorf("get: %w", err)
 	}
 	if !ok || old.Deleted {
 		return nil
 	}
-	new.ColumnValues = make(map[string]ColumnValue)
-	colName := c.ColumnNameByIndex[c.keyCol]
-	cv := old.ColumnValues[colName]
-	if cv.UpdateTime.Before(t) {
-		cv.Value = key
-		cv.UpdateTime = t
-	}
-	new.ColumnValues[colName] = cv
+	new.ColumnValues = make(map[string]*sasqlitev1.ColumnValue)
 	for i, v := range values {
 		if i == c.keyCol {
 			continue
 		}
 		dbg("SET %d %v=%v\n", i, key, v)
 		colName := c.ColumnNameByIndex[i]
-		cv := old.ColumnValues[colName]
-		if cv.UpdateTime.Before(t) {
-			cv.Value = v
-			cv.UpdateTime = t
-		}
-		new.ColumnValues[colName] = cv
+		new.ColumnValues[colName] = ToColumnValue(v)
 	}
-	merged := mergeRows(key, old, new)
+	merged := MergeRows(key, ot, old, t, &new, t)
 	err = c.Tree.Root.Set(c.Ctx, t, NewKey(key), merged)
 	if err != nil {
 		return fmt.Errorf("set: %w", err)
@@ -608,15 +609,16 @@ func (c *VirtualTable) updateTime() time.Time {
 func (c *VirtualTable) Delete(key interface{}) error {
 	dbg("DELETE ")
 	dbg("nochange=%v %s %+v\n", key, key, key)
-	var old, new Row
-	_, err := c.Tree.Root.Get(c.Ctx, NewKey(key), &old)
+	var old *sasqlitev1.Row
+	var new sasqlitev1.Row
+	var ot time.Time
+	_, err := getRow(c, NewKey(key), &old, &ot)
 	if err != nil {
 		return fmt.Errorf("get: %w", err)
 	}
 	t := c.updateTime()
-	new.DeleteUpdateTime = t
 	new.Deleted = true
-	merged := mergeRows(key, old, new)
+	merged := MergeRows(key, ot, old, t, &new, t)
 	err = c.Tree.Root.Set(c.Ctx, t, NewKey(key), merged)
 	if err != nil {
 		return fmt.Errorf("set: %w", err)
@@ -676,9 +678,13 @@ func newS3DB(ctx context.Context, s3opts s3Options, subdir string) (*S3DB, error
 			BucketName:  s3opts.Bucket,
 			Prefix:      path,
 		},
-		KeysLike:    &Key{},
-		ValuesLike:  Row{},
-		CustomMerge: mergeValues,
+		KeysLike:                     &Key{},
+		ValuesLike:                   &sasqlitev1.Row{},
+		CustomMerge:                  mergeValues,
+		CustomMarshal:                marshalProto,
+		CustomUnmarshal:              unmarshalProto,
+		MastNodeFormat:               string(mast.V1Marshaler),
+		UnmarshalUsesRegisteredTypes: true,
 	}
 	s, err := s3db.Open(ctx, c, cfg, s3db.OpenOptions{}, time.Now())
 	if err != nil {
@@ -699,32 +705,53 @@ func mergeValues(_ interface{}, i1, i2 crdt.Value) crdt.Value {
 	}
 	resp := crdt.LastWriteWins(&i1, &i2)
 	res := *resp
-	res.Value = mergeRows(nil, i1.Value.(Row), i2.Value.(Row))
+	if i1.ModEpochNanos < i2.ModEpochNanos {
+		res.Value = MergeRows(nil,
+			time.Unix(0, i1.ModEpochNanos), i1.Value.(*sasqlitev1.Row),
+			time.Unix(0, i2.ModEpochNanos), i2.Value.(*sasqlitev1.Row),
+			time.Unix(0, i2.ModEpochNanos),
+		)
+	} else {
+		res.Value = MergeRows(nil,
+			time.Unix(0, i2.ModEpochNanos), i2.Value.(*sasqlitev1.Row),
+			time.Unix(0, i1.ModEpochNanos), i1.Value.(*sasqlitev1.Row),
+			time.Unix(0, i1.ModEpochNanos),
+		)
+	}
 	return res
 }
 
-func mergeRows(_ interface{}, r1, r2 Row) Row {
-	res := Row{
-		ColumnValues: map[string]ColumnValue{},
+func MergeRows(_ interface{},
+	t1 time.Time, r1 *sasqlitev1.Row,
+	t2 time.Time, r2 *sasqlitev1.Row,
+	outTime time.Time,
+) *sasqlitev1.Row {
+	res := sasqlitev1.Row{
+		ColumnValues: map[string]*sasqlitev1.ColumnValue{},
 	}
 	var resetValuesBefore time.Time
-	if r1.DeleteUpdateTime.Before(r2.DeleteUpdateTime) {
+	if t1.Add(r1.DeleteUpdateOffset.AsDuration()).Before(t2.Add(r2.DeleteUpdateOffset.AsDuration())) {
 		res.Deleted = r2.Deleted
-		res.DeleteUpdateTime = r2.DeleteUpdateTime
+		res.DeleteUpdateOffset = durationpb.New(t2.Add(r2.DeleteUpdateOffset.AsDuration()).Sub(outTime))
 		if r1.Deleted {
 			if !r2.Deleted {
-				resetValuesBefore = r2.DeleteUpdateTime
+				resetValuesBefore = t2.Add(r2.DeleteUpdateOffset.AsDuration())
 			}
 		}
 	} else {
 		res.Deleted = r1.Deleted
-		res.DeleteUpdateTime = r1.DeleteUpdateTime
+		res.DeleteUpdateOffset = durationpb.New(t1.Add(r1.DeleteUpdateOffset.AsDuration()).Sub(outTime))
 		if !r1.Deleted {
 			if r2.Deleted {
-				resetValuesBefore = r1.DeleteUpdateTime
+				resetValuesBefore = t1.Add(r1.DeleteUpdateOffset.AsDuration())
 			}
 		}
 	}
+
+	if res.Deleted {
+		return &res
+	}
+
 	allKeys := make(map[string]struct{})
 	for k := range r1.ColumnValues {
 		allKeys[k] = struct{}{}
@@ -734,35 +761,41 @@ func mergeRows(_ interface{}, r1, r2 Row) Row {
 	}
 
 	for k := range allKeys {
-		if res.Deleted {
-			res.ColumnValues[k] = ColumnValue{UpdateTime: res.DeleteUpdateTime, Value: nil}
-			continue
-		}
 		v1, inR1 := r1.ColumnValues[k]
 		v2, inR2 := r2.ColumnValues[k]
-		if !inR1 {
-			res.ColumnValues[k] = hideDeletedValue(v2, resetValuesBefore)
-			continue
-		}
-		if !inR2 {
-			res.ColumnValues[k] = hideDeletedValue(v1, resetValuesBefore)
-			continue
-		}
-		if v1.UpdateTime.Before(v2.UpdateTime) {
-			res.ColumnValues[k] = hideDeletedValue(v2, resetValuesBefore)
-		} else {
-			res.ColumnValues[k] = hideDeletedValue(v1, resetValuesBefore)
+		switch {
+		case !inR1:
+			if !hideDeletedValue(t2, v2, resetValuesBefore) {
+				res.ColumnValues[k] = adj(t2, v2, outTime)
+			}
+		case !inR2:
+			if !hideDeletedValue(t1, v1, resetValuesBefore) {
+				res.ColumnValues[k] = adj(t1, v1, outTime)
+			}
+		case UpdateTime(t1, v1).Before(UpdateTime(t2, v2)):
+			if !hideDeletedValue(t2, v2, resetValuesBefore) {
+				res.ColumnValues[k] = adj(t2, v2, outTime)
+			}
+		default:
+			if !hideDeletedValue(t1, v1, resetValuesBefore) {
+				res.ColumnValues[k] = adj(t1, v1, outTime)
+			}
 		}
 	}
-
-	return res
+	return &res
 }
 
-func hideDeletedValue(cv ColumnValue, resetValuesBefore time.Time) ColumnValue {
-	if cv.UpdateTime.Before(resetValuesBefore) {
-		return ColumnValue{UpdateTime: resetValuesBefore, Value: nil}
+func hideDeletedValue(inputTime time.Time, cv *sasqlitev1.ColumnValue, resetValuesBefore time.Time) bool {
+	return UpdateTime(inputTime, cv).Before(resetValuesBefore)
+}
+
+func adj(inTime time.Time, cv *sasqlitev1.ColumnValue, outTime time.Time) *sasqlitev1.ColumnValue {
+	if inTime.Equal(outTime) {
+		return cv
 	}
-	return cv
+	out := proto.Clone(cv).(*sasqlitev1.ColumnValue)
+	out.UpdateOffset = durationpb.New(UpdateTime(inTime, cv).Sub(outTime))
+	return out
 }
 
 func (c *VirtualTable) Begin() error {
@@ -799,5 +832,86 @@ func (c *VirtualTable) Rollback() error {
 func dbg(f string, v ...interface{}) {
 	if false {
 		fmt.Printf(f, v...)
+	}
+}
+
+func marshalProto(i interface{}) ([]byte, error) {
+	in := i.(mast.Node)
+	out := sasqlitev1.Node{
+		Key:   make([]*sasqlitev1.SQLiteValue, len(in.Key)),
+		Value: make([]*sasqlitev1.CRDTValue, len(in.Value)),
+		Link:  make([]string, len(in.Link)),
+	}
+	for i := range in.Key {
+		out.Key[i] = in.Key[i].(*Key).SQLiteValue
+	}
+	for i := range in.Value {
+		row := in.Value[i].(crdt.Value).Value.(*sasqlitev1.Row)
+		out.Value[i] = &sasqlitev1.CRDTValue{
+			ModEpochNanos:            in.Value[i].(crdt.Value).ModEpochNanos,
+			TombstoneSinceEpochNanos: in.Value[i].(crdt.Value).TombstoneSinceEpochNanos,
+			PreviousRoot:             in.Value[i].(crdt.Value).PreviousRoot,
+			Value:                    row,
+		}
+	}
+	for i := range in.Link {
+		if in.Link[i] == nil {
+			continue
+		}
+		out.Link[i] = in.Link[i].(string)
+	}
+	return proto.Marshal(&out)
+}
+
+func unmarshalProto(inBytes []byte, outi interface{}) error {
+	var in sasqlitev1.Node
+	err := proto.Unmarshal(inBytes, &in)
+	if err != nil {
+		return fmt.Errorf("proto: %w", err)
+	}
+	out := outi.(*mast.Node)
+	*out = mast.Node{
+		Key:   make([]interface{}, len(in.Key)),
+		Value: make([]interface{}, len(in.Value)),
+		Link:  make([]interface{}, len(in.Link)),
+	}
+	for i := range in.Key {
+		out.Key[i] = &Key{in.Key[i]}
+	}
+	for i := range in.Value {
+		out.Value[i] = crdt.Value{
+			ModEpochNanos:            in.Value[i].ModEpochNanos,
+			PreviousRoot:             in.Value[i].PreviousRoot,
+			TombstoneSinceEpochNanos: in.Value[i].TombstoneSinceEpochNanos,
+			Value:                    in.Value[i].Value,
+		}
+	}
+	for i := range in.Link {
+		out.Link[i] = in.Link[i]
+	}
+	return nil
+}
+
+func fromSQLiteValue(s *sasqlitev1.SQLiteValue) interface{} {
+	switch s.Type {
+	case sasqlitev1.Type_INT:
+		return s.Int
+	case sasqlitev1.Type_REAL:
+		return s.Real
+	case sasqlitev1.Type_TEXT:
+		return s.Text
+	case sasqlitev1.Type_BLOB:
+		return s.Blob
+	}
+	return nil
+}
+
+func toSQLiteValue(i interface{}) *sasqlitev1.SQLiteValue {
+	return NewKey(i).SQLiteValue
+}
+
+func ToColumnValue(i interface{}) *sasqlitev1.ColumnValue {
+	return &sasqlitev1.ColumnValue{
+		Value: toSQLiteValue(i),
 	}
 }

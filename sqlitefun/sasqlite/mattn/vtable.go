@@ -149,15 +149,27 @@ func (c *Cursor) Close() error { return toSqlite(c.common.Close()) }
 
 func (c *VirtualTable) Insert(key interface{}, values []interface{}) (int64, error) {
 	i, err := c.common.Insert(valuesToGo(values))
+	if err != nil {
+		return i, toSqlite(err)
+	}
+	err = c.common.Commit()
 	return i, toSqlite(err)
 }
 
 func (c *VirtualTable) Delete(key interface{}) error {
-	return toSqlite(c.common.Delete(key))
+	err := toSqlite(c.common.Delete(key))
+	if err != nil {
+		return err
+	}
+	return toSqlite(c.common.Commit())
 }
 
 func (c *VirtualTable) Update(key interface{}, values []interface{}) error {
-	return toSqlite(c.common.Update(key, valuesToGo(values)))
+	err := toSqlite(c.common.Update(key, valuesToGo(values)))
+	if err != nil {
+		return err
+	}
+	return toSqlite(c.common.Commit())
 }
 
 func valuesToGo(values []interface{}) map[int]interface{} {
