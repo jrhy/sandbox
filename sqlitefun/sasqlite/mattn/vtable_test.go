@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -18,12 +19,14 @@ import (
 )
 
 const UsingLocalMinIO = false
-const UsingLoadableExtension = false
 
 func init() {
 	driver := &sqlite3.SQLiteDriver{}
-	if UsingLoadableExtension {
+	if os.Getenv("VTABLE_TEST_LOADABLE_EXT") == "true" {
 		driver.Extensions = []string{"../loadable/sasqlite"}
+		if os.Getenv("AWS_REGION") == "" {
+			panic("set AWS_REGION environment, and the other AWS SDK variables, to dummy")
+		}
 	} else {
 		driver.ConnectHook = func(conn *sqlite3.SQLiteConn) error {
 			return conn.CreateModule("sasqlite", &Module{})
