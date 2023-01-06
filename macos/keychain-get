@@ -1,0 +1,49 @@
+#!/usr/bin/env swift
+
+import Darwin
+import Foundation
+import Security
+
+if CommandLine.arguments.count != 3 {
+       print("usage: keychain-get <server> <account>")
+       exit(1)
+}
+
+struct Credentials {
+    var username: String
+    var password: String
+}
+enum KeychainError: Error {
+    case noPassword
+    case unexpectedPasswordData
+    case unhandledError(status: OSStatus)
+}
+func getKey(server: String, account: String) throws -> String{
+	let query: [String: Any] = [kSecClass as String: kSecClassInternetPassword,
+				    kSecAttrServer as String: server,
+				    kSecAttrAccount as String: account,
+				    kSecMatchLimit as String: kSecMatchLimitOne,
+				    kSecReturnAttributes as String: true,
+				    kSecReturnData as String: true]
+	var item: CFTypeRef?
+	let status = SecItemCopyMatching(query as CFDictionary, &item)
+	guard status != errSecItemNotFound else { throw KeychainError.noPassword }
+	guard status == errSecSuccess else { throw KeychainError.unhandledError(status: status) }
+
+	guard let existingItem = item as? [String : Any],
+	    let passwordData = existingItem[kSecValueData as String] as? Data,
+	    let password = String(data: passwordData, encoding: String.Encoding.utf8)
+	else {
+	    throw KeychainError.unexpectedPasswordData
+	}
+	return password
+}
+
+do {
+    print(try getKey(server:CommandLine.arguments[1], account:CommandLine.arguments[2]))
+} catch KeychainError.noPassword {
+    exit(1)
+}  catch {
+    print("Unexpected error: \(error).")
+    exit(2)
+}

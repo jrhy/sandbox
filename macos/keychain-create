@@ -1,0 +1,35 @@
+#!/usr/bin/env swift
+
+import Darwin
+import Foundation
+import Security
+
+struct Credentials {
+    var username: String
+    var password: String
+}
+if CommandLine.arguments.count != 4 {
+	print("usage: keychain-create <server> <account> <password>")
+	exit(1)
+}
+
+let server = CommandLine.arguments[1]
+let credentials = Credentials ( username: CommandLine.arguments[2], password: CommandLine.arguments[3] )
+let account = credentials.username
+let password = credentials.password.data(using: String.Encoding.utf8)!
+var query: [String: Any] = [kSecClass as String: kSecClassInternetPassword,
+                            kSecAttrAccount as String: account,
+                            kSecAttrServer as String: server,
+                            kSecValueData as String: password]
+let status = SecItemAdd(query as CFDictionary, nil)
+switch status {
+	case errSecSuccess:
+	break;
+	case errSecDuplicateItem:
+	    print("duplicate")
+		exit(1)
+	default:
+    print(status)
+    exit(2)
+}
+
