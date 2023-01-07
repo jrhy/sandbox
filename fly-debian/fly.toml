@@ -1,0 +1,12 @@
+app = "fly-debian-372"
+
+[mounts]
+  destination = "/work"
+  source = "work"
+
+# somehow this makes health checks pass (vs. "critical") even if nothing is listening
+[[services]]
+  internal_port = 22
+  protocol = "tcp"
+  [[services.ports]]
+    port = 22
