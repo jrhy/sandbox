@@ -21,6 +21,7 @@ RUN \
   echo 'source ~/.nvimrc' > /root/.config/nvim/init.vim && \
   echo 'inoremap jk <esc>' > /root/.nvimrc
 COPY --chown=0 --chmod=444 root/.ssh/authorized_keys /root/.ssh/authorized_keys
+RUN curl -LO https://go.dev/dl/go1.19.4.linux-amd64.tar.gz && rm -rf /usr/local/go && tar -C /usr/local -xzf go1.19.4.linux-amd64.tar.gz && rm go1.19.4.linux-amd64.tar.gz 
 SHELL ["/bin/bash", "-o", "vi", "-c"]
 CMD dd if=/dev/zero of=/swapfile bs=1024k count=2048 && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && mkdir -p /run/sshd && chown work /work && /usr/sbin/sshd -D
 
