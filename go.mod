@@ -8,6 +8,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/apache/beam/sdks/v2 v2.41.0
 	github.com/aws/aws-sdk-go v1.44.168
+	github.com/dimchansky/pi-gen-go v0.1.0
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/martian v2.1.1-0.20190517191504-25dcb96d9e51+incompatible // indirect
 	github.com/google/subcommands v1.2.0
