@@ -1,4 +1,4 @@
-package main
+package iax
 
 import (
 	"bytes"
@@ -11,21 +11,23 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 )
 
+type CallAction int
+
 const (
-	_ = iota
-	ModeEcho
-	ModeBusy
-	ModeReject
+	_ = CallAction(iota)
+	callAccept
+	CallReject
 )
 
-const mode = ModeReject
+type Callee interface {
+	AcceptOrReject() CallAction
+}
 
 // Frame types
 const (
@@ -123,48 +125,36 @@ const (
 
 const ackLimit = 5
 
+type Server struct {
+	Address string
+}
+
+type User struct {
+	Username string
+	Password string
+}
+
+type Source uint16
+
 type Peer struct {
-	server             Server
+	Server             Server
+	Debug              func(string, ...interface{})
 	conn               net.Conn
 	user               User
 	registrationSource Source
 	callMutex          sync.Mutex
 	call               map[Source]*Call
 	callByDest         map[Source]*Call
+	Callee             Callee
 }
 
-type Source uint16
-
-func main() {
-	endpoint := os.Getenv("IAX_ENDPOINT")
-	if endpoint == "" {
-		endpoint = "vancouver2.voip.ms:4569"
-	}
-	u := User{os.Getenv("IAX_USER"), os.Getenv("IAX_PASSWORD")}
-	if u.username == "" || u.password == "" {
-		fmt.Printf("set IAX_USER, IAX_PASSWORD, IAX_ENDPOINT\n")
-		os.Exit(1)
-	}
-	p := Peer{
-		server:     Server{endpoint},
-		user:       u,
+func NewPeer(addr string, user User) *Peer {
+	return &Peer{
+		Server:     Server{Address: addr},
+		user:       user,
 		call:       map[Source]*Call{},
 		callByDest: map[Source]*Call{},
 	}
-	err := p.RegisterAndServe()
-	if err != nil {
-		fmt.Printf("error: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("\n")
-}
-
-type Server struct {
-	Address string
-}
-type User struct {
-	username string
-	password string
 }
 
 type InformationElement struct {
@@ -346,7 +336,7 @@ func (p *Peer) sendFrame(f FullFrame) error {
 	}
 
 	if f.F {
-		fmt.Printf(">>>>> %v\n", f)
+		p.debug(">>>>> %v\n", f)
 	}
 	_, err = p.conn.Write(pb.Bytes())
 	if err != nil {
@@ -415,9 +405,9 @@ func NewControlFrame(subclass uint8) FullFrame {
 func (p *Peer) RegisterAndServe() error {
 	var err error
 
-	p.conn, err = net.Dial("udp", p.server.Address)
+	p.conn, err = net.Dial("udp", p.Server.Address)
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", p.server.Address, err)
+		return fmt.Errorf("dial %s: %w", p.Server.Address, err)
 	}
 	defer p.conn.Close()
 
@@ -437,7 +427,7 @@ func (p *Peer) RegisterAndServe() error {
 		ff, err := c.transmitUntilReply(NewIAXFrame(
 			IAXSubclassREGREQ,
 			IAXFramePart{
-				Username: p.user.username,
+				Username: p.user.Username,
 				Refresh:  300,
 			}))
 		if err != nil {
@@ -454,7 +444,7 @@ func (p *Peer) RegisterAndServe() error {
 			return errors.New("got REGAUTH with no challenge")
 		}
 
-		if string(ff.IAX.Username) != c.peer.user.username {
+		if string(ff.IAX.Username) != c.peer.user.Username {
 			return fmt.Errorf("server replied for another user '%s'", ff.IAX.Username)
 		}
 		if ff.IAX.AuthMethods&0x02 == 0 {
@@ -466,7 +456,7 @@ func (p *Peer) RegisterAndServe() error {
 		if err != nil {
 			return fmt.Errorf("challenge writeString: %w", err)
 		}
-		_, err = io.WriteString(h, c.peer.user.password)
+		_, err = io.WriteString(h, c.peer.user.Password)
 		if err != nil {
 			return fmt.Errorf("challenge writeString: %w", err)
 		}
@@ -475,7 +465,7 @@ func (p *Peer) RegisterAndServe() error {
 		ff, err = c.transmitUntilReply(NewIAXFrame(
 			IAXSubclassREGREQ,
 			IAXFramePart{
-				Username:  p.user.username,
+				Username:  p.user.Username,
 				MD5Result: md5Result,
 				Refresh:   300,
 			}))
@@ -495,7 +485,7 @@ func (p *Peer) RegisterAndServe() error {
 		case err = <-readErr:
 			return err
 		case <-time.After(c.GetRefresh()):
-			fmt.Printf("time to register\n")
+			p.debug("time to register\n")
 			continue
 		}
 	}
@@ -698,11 +688,11 @@ func (p *Peer) readPackets(readErr chan error) {
 		}
 		ff, err = decodeFullFrame(rep[:i])
 		if err != nil {
-			fmt.Printf("%05d decode full frame: %v\n", n, err)
+			p.debug("%05d decode full frame: %v\n", n, err)
 			continue
 		}
 		if ff.F {
-			fmt.Printf("%05d %v\n", n, ff)
+			p.debug("%05d %v\n", n, ff)
 		}
 		p.callMutex.Lock()
 		var call *Call
@@ -713,7 +703,7 @@ func (p *Peer) readPackets(readErr chan error) {
 		}
 		if call == nil {
 			if ff.FrameType != FrameTypeIAX || ff.Subclass != IAXSubclassNEW {
-				fmt.Printf("%05d sending INVAL reply for unknown call\n", n)
+				p.debug("%05d sending INVAL reply for unknown call\n", n)
 				p.callMutex.Unlock()
 				p.sendFrame(FullFrame{
 					FullFrameHeader: FullFrameHeader{
@@ -735,7 +725,7 @@ func (p *Peer) readPackets(readErr chan error) {
 			}
 			p.call[c.source] = &c
 			p.callByDest[Source(c.dest)] = &c
-			fmt.Printf("added call for source 0x%x\n", c.source)
+			p.debug("added call for source 0x%x\n", c.source)
 			p.callMutex.Unlock()
 			go handleIncomingCall(n, ff, &c)
 			continue
@@ -747,19 +737,19 @@ func (p *Peer) readPackets(readErr chan error) {
 				call.mutex.Unlock()
 				if call.OSeqno == call.lastACK.FullFrameHeader.OSeqno+1 {
 					if call.ackTries > ackLimit {
-						fmt.Printf("%05d not retransmitting ACK (limit reached)\n", n)
+						p.debug("%05d not retransmitting ACK (limit reached)\n", n)
 						continue
 					}
 					if call.ackTries > 0 {
-						fmt.Printf("%05d retransmitting ACK\n", n)
+						p.debug("%05d retransmitting ACK\n", n)
 					} else {
-						fmt.Printf("%05d %v\n", n, call.lastACK)
+						p.debug("%05d %v\n", n, call.lastACK)
 					}
 					p.sendFrame(call.lastACK)
 					call.ackTries++
 					continue
 				}
-				fmt.Printf("%05d skipping reply for already-received frame\n", n)
+				p.debug("%05d skipping reply for already-received frame\n", n)
 				continue
 			}*/
 		if call.dest == 0 {
@@ -768,7 +758,7 @@ func (p *Peer) readPackets(readErr chan error) {
 		if ff.OSeqno >= call.ISeqno+1 {
 			// we lost something; await retransmission
 			call.mutex.Unlock()
-			fmt.Printf("we lost someting; await retransmission\n")
+			p.debug("we lost someting; await retransmission\n")
 			continue
 		}
 		if ff.F && (ff.FrameType != FrameTypeIAX || ff.Subclass != IAXSubclassACK) {
@@ -786,10 +776,10 @@ func (c *Call) checkRefresh(s uint16) {
 	c.mutex.Lock()
 	proposedRefresh := time.Now().Add(time.Duration(s) * time.Second)
 	if c.refreshBefore.IsZero() {
-		fmt.Printf("setting refresh time to %d\n", s)
+		c.peer.debug("setting refresh time to %d\n", s)
 		c.refreshBefore = proposedRefresh
 	} else if c.refreshBefore.After(proposedRefresh) {
-		fmt.Printf("updating refresh time to sooner time, %d\n", s)
+		c.peer.debug("updating refresh time to sooner time, %d\n", s)
 		c.refreshBefore = proposedRefresh
 	}
 	c.mutex.Unlock()
@@ -976,7 +966,7 @@ const IAXMediaFormatMuLaw = uint32(0x00000004)
 
 func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 	defer func() {
-		fmt.Printf("taking down mapping for call with source %04x\n", c.source)
+		c.peer.debug("taking down mapping for call with source %04x\n", c.source)
 		c.peer.callMutex.Lock()
 		close(c.replies)
 		delete(c.peer.call, c.source)
@@ -987,7 +977,7 @@ func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 	}()
 
 	if ff.IAX.CalledNumber != "s" {
-		fmt.Printf("%05d rejecting call to \"%s\"\n", n, ff.IAX.CalledNumber)
+		c.peer.debug("%05d rejecting call to \"%s\"\n", n, ff.IAX.CalledNumber)
 		c.transmitUntilReply(NewIAXFrame(IAXSubclassREJECT, IAXFramePart{}))
 		return
 	}
@@ -1028,9 +1018,9 @@ func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 				}
 
 			case FrameTypeControl, FrameTypeDTMF:
-				fmt.Printf("got async, ACK\n")
+				c.peer.debug("got async, ACK\n")
 				c.ACKIAX(f)
-				fmt.Printf("done ACK\n")
+				c.peer.debug("done ACK\n")
 			case FrameTypeVoice:
 				if f.F {
 					c.ACKIAX(f)
@@ -1038,7 +1028,7 @@ func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 				c.sendVoice(f.Voice)
 
 			default:
-				fmt.Printf("replying UNSUPPORT\n")
+				c.peer.debug("replying UNSUPPORT\n")
 				ff := NewIAXFrame(IAXSubclassUNSUPPORT, IAXFramePart{})
 				ff.FullFrameHeader = c.sequenceFF(ff.FullFrameHeader)
 				ff.Timestamp = f.Timestamp
@@ -1048,50 +1038,57 @@ func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 	}()
 	if false {
 		if _, err := c.transmitUntilReply(NewControlFrame(ControlRINGING)); err != nil {
-			fmt.Printf("call error: %v\n", err)
+			c.peer.debug("call error: %v\n", err)
 			return
 		}
 	}
-	if mode == ModeReject {
-		go notifyGateOpened_push()
+
+	action := CallReject
+	if c.peer.Callee != nil {
+		action = c.peer.Callee.AcceptOrReject()
+	}
+
+	switch action {
+	case callAccept:
+		if _, err := c.transmitUntilReplyChan(NewIAXFrame(IAXSubclassACCEPT, IAXFramePart{
+			Format: IAXMediaFormatMuLaw}), sync); err != nil {
+			c.peer.debug("call error: %v\n", err)
+			return
+		}
+	case CallReject:
 		if _, err := c.transmitUntilReplyChan(NewIAXFrame(IAXSubclassREJECT, IAXFramePart{}), sync); err != nil {
-			fmt.Printf("call error: %v\n", err)
+			c.peer.debug("call error: %v\n", err)
 			return
 		}
-		return
-	} else if mode != ModeEcho {
-		if _, err := c.transmitUntilReplyChan(NewIAXFrame(IAXSubclassACCEPT, IAXFramePart{
-			Format: IAXMediaFormatMuLaw}), sync); err != nil {
-			fmt.Printf("call error: %v\n", err)
-			return
-		}
-		if _, err := c.transmitUntilReply(NewControlFrame(ControlBUSY)); err != nil {
-			fmt.Printf("call error: %v\n", err)
-			return
-		}
-		/*
-			if _, err := c.transmitUntilReply(NewIAXFrame(IAXSubclassHANGUP, IAXFramePart{
-				HangupCauseCode: HangupCauseBUSY,
-			})); err != nil {
-				fmt.Printf("call error: %v\n", err)
-				return
-			}
-		*/
-		//for {
-		//	<-c.replies
-		//}
-	} else {
-		if _, err := c.transmitUntilReplyChan(NewIAXFrame(IAXSubclassACCEPT, IAXFramePart{
-			Format: IAXMediaFormatMuLaw}), sync); err != nil {
-			fmt.Printf("call error: %v\n", err)
-			return
-		}
-		if _, err := c.transmitUntilReplyChan(NewControlFrame(ControlANSWER), sync); err != nil {
-			fmt.Printf("call error: %v\n", err)
-			return
-		}
-		ignoreACK = true
 	}
+	//} else if mode != ModeEcho {
+	//if _, err := c.transmitUntilReply(NewControlFrame(ControlBUSY)); err != nil {
+	//fmt.Printf("call error: %v\n", err)
+	//return
+	//}
+	/*
+		if _, err := c.transmitUntilReply(NewIAXFrame(IAXSubclassHANGUP, IAXFramePart{
+			HangupCauseCode: HangupCauseBUSY,
+		})); err != nil {
+			c.peer.debug("call error: %v\n", err)
+			return
+		}
+	*/
+	//for {
+	//	<-c.replies
+	//}
+	//} else //{
+	//if _, err := c.transmitUntilReplyChan(NewIAXFrame(IAXSubclassACCEPT, IAXFramePart{
+	//Format: IAXMediaFormatMuLaw}), sync); err != nil {
+	//fmt.Printf("call error: %v\n", err)
+	//return
+	//}
+	//if _, err := c.transmitUntilReplyChan(NewControlFrame(ControlANSWER), sync); err != nil {
+	//fmt.Printf("call error: %v\n", err)
+	//return
+	//}
+	//ignoreACK = true
+	//}
 	<-done
 	fmt.Printf("DONE CALL\n")
 }
@@ -1132,4 +1129,11 @@ func (c *Call) GetRefresh() time.Duration {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	return c.refreshBefore.Sub(time.Now())
+}
+
+func (p *Peer) debug(format string, args ...interface{}) {
+	if p.Debug == nil {
+		return
+	}
+	p.Debug(format, args...)
 }
