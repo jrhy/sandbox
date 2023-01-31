@@ -484,7 +484,7 @@ func (p *Peer) RegisterAndServe() error {
 		select {
 		case err = <-readErr:
 			return err
-		case <-time.After(c.GetRefresh()):
+		case <-time.After(c.TTL()):
 			p.debug("time to register\n")
 			continue
 		}
@@ -766,20 +766,20 @@ func (p *Peer) readPackets(readErr chan error) {
 		}
 		call.mutex.Unlock()
 		if ff.IAX.Refresh != 0 {
-			call.checkRefresh(ff.IAX.Refresh)
+			call.scheduleRefresh(ff.IAX.Refresh)
 		}
 		call.replies <- ff
 	}
 }
 
-func (c *Call) checkRefresh(s uint16) {
+func (c *Call) scheduleRefresh(s uint16) {
 	c.mutex.Lock()
 	proposedRefresh := time.Now().Add(time.Duration(s) * time.Second)
 	if c.refreshBefore.IsZero() {
 		c.peer.debug("setting refresh time to %d\n", s)
 		c.refreshBefore = proposedRefresh
 	} else if c.refreshBefore.After(proposedRefresh) {
-		c.peer.debug("updating refresh time to sooner time, %d\n", s)
+		c.peer.debug("remote requested sooner refresh time, %d\n", s)
 		c.refreshBefore = proposedRefresh
 	}
 	c.mutex.Unlock()
@@ -795,7 +795,7 @@ func (c *Call) transmitUntilReplyChan(ff FullFrame, replies chan FullFrame) (Ful
 	}
 	ff.FullFrameHeader = c.sequenceFF(ff.FullFrameHeader)
 	if ff.IAX.Refresh != 0 {
-		c.checkRefresh(ff.IAX.Refresh)
+		c.scheduleRefresh(ff.IAX.Refresh)
 	}
 	err := c.peer.sendFrame(ff)
 	if err != nil {
@@ -1125,10 +1125,10 @@ func (c *Call) sendVoice(data []byte) error {
 	return nil
 }
 
-func (c *Call) GetRefresh() time.Duration {
+func (c *Call) TTL() time.Duration {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
-	return c.refreshBefore.Sub(time.Now())
+	return c.refreshBefore.Sub(time.Now().Add(-5 * time.Second))
 }
 
 func (p *Peer) debug(format string, args ...interface{}) {
