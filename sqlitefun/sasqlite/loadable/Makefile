@@ -57,8 +57,3 @@ run:
 		    schema='a, b')" \
 		-cmd "insert into foo values ('a',current_timestamp);"
 
-vacuum:
-	${ENV} s3db --bucket=bucket --prefix=t1/sasqlite-columns delete-history --older-than=1h
-dump:
-	${ENV} s3db --bucket=bucket --prefix=t1/sasqlite-columns show
-

@@ -28,9 +28,16 @@ func init() {
 			panic("set AWS_REGION environment, and the other AWS SDK variables, to dummy")
 		}
 	} else {
-		driver.ConnectHook = func(conn *sqlite3.SQLiteConn) error {
-			return conn.CreateModule("sasqlite", &Module{})
-		}
+		driver.ConnectHook = ConnectHook
+	}
+	if !UsingLocalMinIO {
+		os.Setenv("AWS_SECRET_ACCESS_KEY", "dummy")
+		os.Setenv("AWS_REGION", "dummy ")
+		os.Setenv("AWS_ACCESS_KEY_ID", "dummy")
+	} else {
+		os.Setenv("AWS_SECRET_ACCESS_KEY", "miniopassword")
+		os.Setenv("AWS_REGION", "dummy ")
+		os.Setenv("AWS_ACCESS_KEY_ID", "minioadmin")
 	}
 	sql.Register("sqlite3_with_extensions", driver)
 }
@@ -392,41 +399,43 @@ func TestInsertConflict(t *testing.T) {
 	defer db.Close()
 
 	openTableWithWriteTime := func(t *testing.T, name, tm string) {
-		_, err := db.Exec(fmt.Sprintf(`create virtual table "%s" using sasqlite (
+		mustParseTime(sasqlite.SQLiteTimeFormat, tm)
+		stmt := fmt.Sprintf(`create virtual table "%s" using sasqlite (
 s3_bucket='%s',
 s3_endpoint='%s',
 s3_prefix='%s',
 schema='a primary key, b',
 write_time='%s')`,
-			name, s3Bucket, s3Endpoint, t.Name(), tm))
+			name, s3Bucket, s3Endpoint, t.Name(), tm)
+		_, err := db.Exec(stmt)
 		require.NoError(t, err)
 	}
 
 	for i, openerWithLatestWriteTime := range []func(*testing.T) string{
-		func(t *testing.T) string {
-			openTableWithWriteTime(t, t.Name()+"1", "2006-01-01T00:00:00Z")
-			openTableWithWriteTime(t, t.Name()+"2", "2007-01-01T00:00:00Z")
+		func(t *testing.T) (expectedWinner string) {
+			openTableWithWriteTime(t, t.Name()+"1", "2006-01-01 00:00:00")
+			openTableWithWriteTime(t, t.Name()+"2", "2007-01-01 00:00:00")
 			return "two"
 		},
-		func(t *testing.T) (expected string) {
-			openTableWithWriteTime(t, t.Name()+"2", "2006-01-01T00:00:00Z")
-			openTableWithWriteTime(t, t.Name()+"1", "2007-01-01T00:00:00Z")
+		func(t *testing.T) (expectedWinner string) {
+			openTableWithWriteTime(t, t.Name()+"2", "2006-01-01 00:00:00")
+			openTableWithWriteTime(t, t.Name()+"1", "2007-01-01 00:00:00")
 			return "one"
 		},
 	} {
 
 		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
-			expected := openerWithLatestWriteTime(t)
+			expectedWinner := openerWithLatestWriteTime(t)
 
 			_, err := db.Exec(fmt.Sprintf(`insert into "%s" values('row','one')`, t.Name()+"1"))
 			require.NoError(t, err)
 			_, err = db.Exec(fmt.Sprintf(`insert into "%s" values('row','two')`, t.Name()+"2"))
 			require.NoError(t, err)
 
-			openTableWithWriteTime(t, t.Name()+"read", "2008-01-01T00:00:00Z")
+			openTableWithWriteTime(t, t.Name()+"read", "2008-01-01 00:00:00")
 			query := fmt.Sprintf(`select * from "%s"`, t.Name()+"read")
 			require.Equal(t,
-				fmt.Sprintf(`[["row","%s"]]`, expected),
+				fmt.Sprintf(`[["row","%s"]]`, expectedWinner),
 				mustQueryToJSON(db, query))
 		})
 	}
@@ -441,8 +450,8 @@ func mustParseTime(f, s string) time.Time {
 }
 
 func TestMergeValues(t *testing.T) {
-	t1 := mustParseTime(time.RFC3339, "2006-01-01T00:00:00Z")
-	t2 := mustParseTime(time.RFC3339, "2007-01-01T00:00:00Z")
+	t1 := mustParseTime(sasqlite.SQLiteTimeFormat, "2006-01-01 00:00:00")
+	t2 := mustParseTime(sasqlite.SQLiteTimeFormat, "2007-01-01 00:00:00")
 	v1 := &sasqlitev1.Row{
 		ColumnValues: map[string]*sasqlitev1.ColumnValue{"b": sasqlite.ToColumnValue("one")},
 	}
@@ -461,4 +470,41 @@ func TestMergeValues(t *testing.T) {
 	res = sasqlite.MergeRows(nil, t1, v1, t2, v2, t1)
 	require.Equal(t, t2.Sub(t1), res.DeleteUpdateOffset.AsDuration())
 	require.Equal(t, t2.Sub(t1), res.ColumnValues["b"].UpdateOffset.AsDuration())
+}
+
+func TestVacuum(t *testing.T) {
+	db, s3Bucket, s3Endpoint := getDBBucket()
+	defer db.Close()
+
+	openTableWithWriteTime := func(t *testing.T, name, tm string) {
+		mustParseTime(sasqlite.SQLiteTimeFormat, tm)
+		stmt := fmt.Sprintf(`create virtual table "%s" using sasqlite (
+s3_bucket='%s',
+s3_endpoint='%s',
+s3_prefix='%s',
+schema='a primary key, b',
+write_time='%s')`,
+			name, s3Bucket, s3Endpoint, t.Name(), tm)
+		_, err := db.Exec(stmt)
+		require.NoError(t, err)
+	}
+
+	openTableWithWriteTime(t, "v1", "2006-01-01 00:00:00")
+	_, err := db.Exec(`insert into v1 values(2006,0)`)
+	require.NoError(t, err)
+	_, err = db.Exec(`delete from v1`)
+	require.NoError(t, err)
+	require.Equal(t, `null`, mustQueryToJSON(db, `select * from v1`))
+
+	openTableWithWriteTime(t, "v2", "2007-01-01 00:00:00")
+	_, err = db.Exec(`insert into v2 values(2007,0)`)
+	require.NoError(t, err)
+	require.Equal(t, `[[2007,0]]`, mustQueryToJSON(db, `select * from v2`))
+
+	openTableWithWriteTime(t, "vacuumv1", "2008-01-01 00:00:00")
+	require.Equal(t,
+		`[[null]]`,
+		mustQueryToJSON(db, "select * from sasqlite_vacuum('vacuumv1','2007-01-01 00:00:00');"))
+	openTableWithWriteTime(t, "readv2", "2009-01-01 00:00:00")
+	require.Equal(t, `[[2007,0]]`, mustQueryToJSON(db, `select * from readv2`))
 }

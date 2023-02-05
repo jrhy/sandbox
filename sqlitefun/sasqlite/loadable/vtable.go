@@ -13,11 +13,11 @@ import (
 
 type Module struct{}
 
-func (c *Module) Connect(_ *sqlite.Conn, args []string, declare func(string) error) (sqlite.VirtualTable, error) {
+func (c *Module) Connect(conn *sqlite.Conn, args []string,
+	declare func(string) error) (sqlite.VirtualTable, error) {
 
-	tableName := args[0]
 	args = args[2:]
-	table, err := sasqlite.New(tableName, args)
+	table, err := sasqlite.New(args)
 	if err != nil {
 		return nil, err
 	}
@@ -27,7 +27,9 @@ func (c *Module) Connect(_ *sqlite.Conn, args []string, declare func(string) err
 		return nil, fmt.Errorf("declare: %w", err)
 	}
 
-	return &VirtualTable{common: table}, nil
+	vt := &VirtualTable{common: table}
+
+	return vt, nil
 }
 
 func (c *Module) Create(conn *sqlite.Conn, args []string, declare func(string) error) (sqlite.VirtualTable, error) {
@@ -103,8 +105,13 @@ func (c *VirtualTable) Open() (sqlite.VirtualCursor, error) {
 }
 
 func (c *VirtualTable) Disconnect() error {
-	return toSqlite(c.common.Disconnect())
+	if err := toSqlite(c.common.Disconnect()); err != nil {
+		return err
+	}
+
+	return nil
 }
+
 func (c *VirtualTable) Destroy() error {
 	return c.Disconnect()
 }
@@ -164,10 +171,19 @@ func init() {
 		if err != nil {
 			return sqlite.SQLITE_ERROR, err
 		}
+		err = api.CreateModule("sasqlite_vacuum", &VacuumModule{},
+			func(opts *sqlite.ModuleOptions) {
+				opts.ReadOnly = true
+				opts.EponymousOnly = true
+			})
+		if err != nil {
+			return sqlite.SQLITE_ERROR, err
+		}
 		return sqlite.SQLITE_OK, nil
 	})
 }
 
+// placeholder for c-shared
 func main() {}
 
 func valuesToGo(values []sqlite.Value) map[int]interface{} {

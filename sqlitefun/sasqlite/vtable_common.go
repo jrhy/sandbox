@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -31,6 +32,15 @@ var ErrSasqliteConstraintNotNull = errors.New("constraint: NOT NULL")
 var ErrSasqliteConstraintPrimaryKey = errors.New("constraint: key not unique")
 var ErrSasqliteConstraintUnique = errors.New("constraint: not unique")
 
+var (
+	tableLock sync.Mutex
+	tables    map[string]*VirtualTable
+)
+
+func init() {
+	tables = make(map[string]*VirtualTable)
+}
+
 type S3DB struct {
 	Root   *s3db.DB
 	closer func()
@@ -39,6 +49,7 @@ type S3DB struct {
 type Module struct{}
 
 type VirtualTable struct {
+	Name              string
 	Ctx               context.Context
 	cancelFunc        func()
 	SchemaString      string
@@ -77,10 +88,20 @@ func unquoteAll(s string) string {
 	return res
 }
 
-func New(tableName string, args []string) (*VirtualTable, error) {
+const SQLiteTimeFormat = "2006-01-02 15:04:05"
+
+func New(args []string) (*VirtualTable, error) {
 	var err error
 
-	var table = &VirtualTable{}
+	if len(args) == 0 || len(args[0]) == 0 {
+		return nil, errors.New("missing table name")
+	}
+
+	tableName := args[0]
+	args = args[1:]
+	var table = &VirtualTable{
+		Name: tableName,
+	}
 
 	dbg("CONNECT\n")
 	table.Ctx = context.Background()
@@ -94,7 +115,7 @@ usage:
 [s3_prefix='/prefix',]             separate tables within a bucket
  schema='<colname> [type] [primary key] [not null]',
                                    table schema
-[write_time='2006-01-02T15:04:05-07:00',]
+[write_time='2006-01-02 15:04:05',]
                                    value modification time, for idempotence, from request time`)
 	}
 	seen := map[string]struct{}{}
@@ -124,7 +145,7 @@ usage:
 				return nil, fmt.Errorf("schema: %w", err)
 			}
 		case "write_time":
-			t, err := time.Parse(time.RFC3339, unquoteAll(s[1]))
+			t, err := time.Parse(SQLiteTimeFormat, unquoteAll(s[1]))
 			if err != nil {
 				return nil, fmt.Errorf("write_time: %w", err)
 			}
@@ -134,8 +155,7 @@ usage:
 		}
 	}
 
-	table.Tree, err = newS3DB(table.Ctx, table.s3,
-		fmt.Sprintf("%s-columns", tableName))
+	table.Tree, err = newS3DB(table.Ctx, table.s3, "s3db-rows")
 	if err != nil {
 		return nil, fmt.Errorf("s3db: %w", err)
 	}
@@ -143,6 +163,14 @@ usage:
 	if table.SchemaString == "" {
 		return nil, errors.New(`unspecified: schema='colname [type] [primary key] [not null], ...'`)
 	}
+
+	tableLock.Lock()
+	defer tableLock.Unlock()
+	if _, ok := tables[table.Name]; ok {
+		return nil, fmt.Errorf("table already exists: %s", table.Name)
+	}
+	tables[table.Name] = table
+
 	return table, nil
 }
 
@@ -331,6 +359,13 @@ func (c *VirtualTable) Disconnect() error {
 	}
 	c.Ctx = nil
 
+	tableLock.Lock()
+	defer tableLock.Unlock()
+	if _, ok := tables[c.Name]; !ok {
+		panic("table not found")
+	}
+	delete(tables, c.Name)
+
 	return nil
 }
 
@@ -390,7 +425,7 @@ func (c *Cursor) Next() error {
 				c.ltMax = false
 			}
 		}
-		if v.Value.(*sasqlitev1.Row).Deleted {
+		if v.Value == nil || v.Value.(*sasqlitev1.Row) == nil || v.Value.(*sasqlitev1.Row).Deleted {
 			skip = true
 		}
 		if !c.desc {
@@ -508,7 +543,7 @@ func getRow(c *VirtualTable, key *Key, row **sasqlitev1.Row, rowTime *time.Time)
 		return false, err
 	}
 	if ok {
-		*row = crdtValue.Value.(*sasqlitev1.Row)
+		*row, _ = crdtValue.Value.(*sasqlitev1.Row)
 		*rowTime = time.Unix(0, crdtValue.ModEpochNanos)
 	} else {
 		*row = &sasqlitev1.Row{}
@@ -730,7 +765,7 @@ func MergeRows(_ interface{},
 		ColumnValues: map[string]*sasqlitev1.ColumnValue{},
 	}
 	var resetValuesBefore time.Time
-	if t1.Add(r1.DeleteUpdateOffset.AsDuration()).Before(t2.Add(r2.DeleteUpdateOffset.AsDuration())) {
+	if !t1.Add(r1.DeleteUpdateOffset.AsDuration()).After(t2.Add(r2.DeleteUpdateOffset.AsDuration())) {
 		res.Deleted = r2.Deleted
 		res.DeleteUpdateOffset = durationpb.New(t2.Add(r2.DeleteUpdateOffset.AsDuration()).Sub(outTime))
 		if r1.Deleted {
@@ -846,7 +881,7 @@ func marshalProto(i interface{}) ([]byte, error) {
 		out.Key[i] = in.Key[i].(*Key).SQLiteValue
 	}
 	for i := range in.Value {
-		row := in.Value[i].(crdt.Value).Value.(*sasqlitev1.Row)
+		row, _ := in.Value[i].(crdt.Value).Value.(*sasqlitev1.Row)
 		out.Value[i] = &sasqlitev1.CRDTValue{
 			ModEpochNanos:            in.Value[i].(crdt.Value).ModEpochNanos,
 			TombstoneSinceEpochNanos: in.Value[i].(crdt.Value).TombstoneSinceEpochNanos,
@@ -914,4 +949,72 @@ func ToColumnValue(i interface{}) *sasqlitev1.ColumnValue {
 	return &sasqlitev1.ColumnValue{
 		Value: toSQLiteValue(i),
 	}
+}
+
+func GetTable(name string) *VirtualTable {
+	tableLock.Lock()
+	defer tableLock.Unlock()
+	return tables[name]
+}
+
+func Vacuum(tableName string, beforeTime time.Time) error {
+	table := GetTable(tableName)
+	if table == nil {
+		return fmt.Errorf("table not found: %s", tableName)
+	}
+
+	db, err := table.Tree.Root.Clone(table.Ctx)
+	if err != nil {
+		return fmt.Errorf("clone: %w", err)
+	}
+	defer func() {
+		if db != nil {
+			db.Cancel()
+		}
+	}()
+	tc, err := db.Cursor(table.Ctx)
+	if err != nil {
+		return fmt.Errorf("cursor: %w", err)
+	}
+	err = tc.Min(table.Ctx)
+	if err != nil {
+		return fmt.Errorf("min: %w", err)
+	}
+	for {
+		k, v, ok := tc.Get()
+		if !ok {
+			break
+		}
+		if !v.Tombstoned() {
+			row := v.Value.(*sasqlitev1.Row)
+			rowTime := time.Unix(0, v.ModEpochNanos)
+			if row.Deleted && rowTime.Add(row.DeleteUpdateOffset.AsDuration()).Before(beforeTime) {
+				err = db.Tombstone(table.Ctx, time.Time{}, k)
+				if err != nil {
+					return fmt.Errorf("tombstone %v: %w", k, err)
+				}
+			}
+		}
+		err = tc.Forward(table.Ctx)
+		if err != nil {
+			return fmt.Errorf("cursor forward: %w", err)
+		}
+	}
+	err = db.RemoveTombstones(table.Ctx, beforeTime)
+	if err != nil {
+		return fmt.Errorf("s3db commit tombstones: %w", err)
+	}
+	_, err = db.Commit(table.Ctx)
+	if err != nil {
+		return fmt.Errorf("s3db commit tombstones: %w", err)
+	}
+	table.Tree.Root = db
+	db = nil
+
+	err = s3db.DeleteHistoricVersions(table.Ctx, table.Tree.Root, beforeTime)
+	if err != nil {
+		return fmt.Errorf("s3db vacuum: %w", err)
+	}
+
+	return nil
 }

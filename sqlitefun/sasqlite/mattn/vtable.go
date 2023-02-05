@@ -9,12 +9,19 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
+func ConnectHook(conn *sqlite3.SQLiteConn) error {
+	err := conn.CreateModule("sasqlite", &Module{})
+	if err != nil {
+		return err
+	}
+	return conn.CreateModule("sasqlite_vacuum", &VacuumModule{})
+}
+
 type Module struct{}
 
 func (m *Module) Create(c *sqlite3.SQLiteConn, args []string) (sqlite3.VTab, error) {
-	tableName := args[0]
 	args = args[2:]
-	table, err := sasqlite.New(tableName, args)
+	table, err := sasqlite.New(args)
 	if err != nil {
 		return nil, err
 	}
