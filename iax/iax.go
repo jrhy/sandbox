@@ -633,7 +633,7 @@ func decodeFullFrame(b []byte) (FullFrame, error) {
 }
 
 func newSource() Source {
-	return Source(randUint16() & 0x7fff)
+	return Source(randUint16()&0x7ffe + 1)
 }
 
 func randUint16() uint16 {
@@ -976,11 +976,6 @@ func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 		c.peer.callMutex.Unlock()
 	}()
 
-	if ff.IAX.CalledNumber != "s" {
-		c.peer.debug("%05d rejecting call to \"%s\"\n", n, ff.IAX.CalledNumber)
-		c.transmitUntilReply(NewIAXFrame(IAXSubclassREJECT, IAXFramePart{}))
-		return
-	}
 	sync := make(chan FullFrame, 1)
 	done := make(chan struct{}, 1)
 	var ignoreACK bool
@@ -1060,6 +1055,7 @@ func handleIncomingCall(n uint32, ff FullFrame, c *Call) {
 			c.peer.debug("call error: %v\n", err)
 			return
 		}
+		return
 	}
 	//} else if mode != ModeEcho {
 	//if _, err := c.transmitUntilReply(NewControlFrame(ControlBUSY)); err != nil {
