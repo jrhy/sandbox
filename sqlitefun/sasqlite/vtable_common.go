@@ -133,6 +133,18 @@ usage:
 			}
 			t := time.Now().Add(d)
 			table.Ctx, table.cancelFunc = context.WithDeadline(context.Background(), t)
+		case "entries_per_node":
+			i, err := strconv.ParseInt(s[1], 0, 32)
+			if err != nil {
+				return nil, fmt.Errorf("arg: %w", err)
+			}
+			table.s3.EntriesPerNode = int(i)
+		case "node_cache_entries":
+			i, err := strconv.ParseInt(s[1], 32, 0)
+			if err != nil {
+				return nil, fmt.Errorf("arg: %w", err)
+			}
+			table.s3.NodeCacheEntries = int(i)
 		case "s3_bucket":
 			table.s3.Bucket = unquoteAll(s[1])
 		case "s3_endpoint":
@@ -665,6 +677,9 @@ type s3Options struct {
 	Bucket   string
 	Endpoint string
 	Prefix   string
+
+	EntriesPerNode   int
+	NodeCacheEntries int
 }
 
 func getS3(endpoint string) (*s3.S3, error) {
@@ -720,6 +735,12 @@ func newS3DB(ctx context.Context, s3opts s3Options, subdir string) (*S3DB, error
 		CustomUnmarshal:              unmarshalProto,
 		MastNodeFormat:               string(mast.V1Marshaler),
 		UnmarshalUsesRegisteredTypes: true,
+	}
+	if s3opts.NodeCacheEntries > 0 {
+		cfg.NodeCache = mast.NewNodeCache(s3opts.NodeCacheEntries)
+	}
+	if s3opts.EntriesPerNode > 0 {
+		cfg.BranchFactor = uint(s3opts.EntriesPerNode)
 	}
 	s, err := s3db.Open(ctx, c, cfg, s3db.OpenOptions{}, time.Now())
 	if err != nil {

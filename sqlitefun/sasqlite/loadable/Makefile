@@ -34,11 +34,11 @@ run:
 		-cmd "delete from t1 where b='v2b';" \
 
 
-	${ENV} sqlite3 \
+	export ${ENV} ; sqlite3 \
 		-cmd '.load ./sasqlite' \
 		-cmd "create virtual table t1 using sasqlite ( \
 		    s3_bucket='bucket', \
-		    s3_endpoint='http://127.0.0.1:9091', \
+		    s3_endpoint='$$S3_ENDPOINT', \
 		    s3_prefix='t1', \
 		    schema='a primary key, b')" \
 		-cmd ".mode box" \
@@ -46,7 +46,7 @@ run:
 		-cmd "select * from t1;" \
 		-cmd "create virtual table t2 using sasqlite ( \
 		    s3_bucket='bucket', \
-		    s3_endpoint='http://127.0.0.1:9091', \
+		    s3_endpoint='$$S3_ENDPOINT', \
 		    s3_prefix='t2', \
 		    schema='a primary key, b')"
 	false && echo \
