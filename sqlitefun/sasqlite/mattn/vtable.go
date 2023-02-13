@@ -159,8 +159,8 @@ func (c *VirtualTable) Insert(key interface{}, values []interface{}) (int64, err
 	if err != nil {
 		return i, toSqlite(err)
 	}
-	err = c.common.Commit()
-	return i, toSqlite(err)
+	// go-sqlite3 doesn't yet support transactions, so commit immediately
+	return 0, toSqlite(c.common.Commit())
 }
 
 func (c *VirtualTable) Delete(key interface{}) error {
@@ -168,6 +168,7 @@ func (c *VirtualTable) Delete(key interface{}) error {
 	if err != nil {
 		return err
 	}
+	// go-sqlite3 doesn't yet support transactions, so commit immediately
 	return toSqlite(c.common.Commit())
 }
 
@@ -176,6 +177,7 @@ func (c *VirtualTable) Update(key interface{}, values []interface{}) error {
 	if err != nil {
 		return err
 	}
+	// go-sqlite3 doesn't yet support transactions, so commit immediately
 	return toSqlite(c.common.Commit())
 }
 
