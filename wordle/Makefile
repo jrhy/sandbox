@@ -25,10 +25,10 @@ foo: all
 
 
 words.sqlite:
-	echo "create table corncob(word);" | sqlite3 words
-	cat corncob_lowercase.txt | grep '^.....\r$$' | tr -d '\r' | sed 's/\(.*\)/insert into corncob values("\1");/' | sqlite3 words
-	echo "create table gwordlist(rank,word);" | sqlite3 words
-	cat 5letter_freq.txt |  while read rank word ; do echo "insert into gwordlist(rank,word) values($$rank,\"$$word\");" ; done | tee /dev/tty | sqlite3 words
+	echo "create table corncob(word);" | sqlite3 words.sqlite
+	cat corncob_lowercase.txt | grep '^.....\r$$' | tr -d '\r' | sed 's/\(.*\)/insert into corncob values("\1");/' | sqlite3 words.sqlite
+	echo "create table gwordlist(word,rank);" | sqlite3 words.sqlite
+	( cat 5letter_freq.txt |  while read rank word ; do echo "insert into gwordlist(word,rank) values(\"$$word\",$$rank);" ; done ; echo commit ) | sqlite3 words.sqlite -cmd begin
 
 
 clean:
