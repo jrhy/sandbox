@@ -82,9 +82,11 @@ func (c *VirtualTable) BestIndex(input *sqlite.IndexInfoInput) (*sqlite.IndexInf
 	}
 	used := make([]*sqlite.ConstraintUsage, len(indexIn))
 	for i := range indexOut.Used {
-		used[i] = &sqlite.ConstraintUsage{
-			ArgvIndex: i + 1,
-			Omit:      indexOut.Used[i],
+		if indexOut.Used[i] {
+			used[i] = &sqlite.ConstraintUsage{
+				ArgvIndex: i + 1,
+				//Omit: true, // no known cases where this doesn't work, but...
+			}
 		}
 	}
 	return &sqlite.IndexInfoOutput{
@@ -123,6 +125,7 @@ type Cursor struct {
 func (c *Cursor) Next() error {
 	return toSqlite(c.common.Next())
 }
+
 func (c *Cursor) Column(ctx *sqlite.VirtualTableContext, i int) error {
 	v, err := c.common.Column(i)
 	if err != nil {

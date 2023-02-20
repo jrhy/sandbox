@@ -228,6 +228,9 @@ func TestBestIndex(t *testing.T) {
 	t.Run("lt_desc", sqliteEquiv("where a<2 order by 1 desc", "[[1]]"))
 
 	t.Run("and_asc", sqliteEquiv("where a>1 and a<3", "[[2]]"))
+
+	t.Run("in_asc", sqliteEquiv("where a in (1,3)", "[[1],[3]]"))
+	t.Run("in_desc", sqliteEquiv("where a in (1,3) order by 1 desc", "[[3],[1]]"))
 }
 
 func dump(rows *sql.Rows) error {

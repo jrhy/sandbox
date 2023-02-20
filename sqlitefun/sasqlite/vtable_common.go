@@ -301,7 +301,6 @@ type IndexOutput struct {
 
 func (c *VirtualTable) BestIndex(input []IndexInput, order []OrderInput) (*IndexOutput, error) {
 	cost := float64(c.Tree.Root.Size())
-	dbg("BESTINDEX %+v\n = %f\n", input, cost)
 	out := &IndexOutput{
 		EstimatedCost: cost,
 		Used:          make([]bool, len(input)),
@@ -343,18 +342,14 @@ func (c *VirtualTable) BestIndex(input []IndexInput, order []OrderInput) (*Index
 	} else {
 		out.IdxStr = "asc  " + out.IdxStr
 	}
+	dbg("BESTINDEX %+v -> %s\n", input, out.IdxStr)
 	return out, nil
 }
 
 func (c *VirtualTable) Open() (*Cursor, error) {
 	dbg("OPEN CURSOR\n")
-	cursor, err := c.Tree.Root.Cursor(c.Ctx)
-	if err != nil {
-		return nil, err
-	}
 	return &Cursor{
 		t:      c,
-		cursor: cursor,
 	}, nil
 }
 
@@ -396,6 +391,7 @@ type Cursor struct {
 }
 
 func (c *Cursor) Next() error {
+	dbg("NEXT\n")
 	if c.eof {
 		dbg("NEXT EOF\n")
 		return nil
@@ -404,6 +400,7 @@ func (c *Cursor) Next() error {
 		k, v, ok := c.cursor.Get()
 		dbg("next got: %+v %+v %+v\n", k, v, ok)
 		if !ok {
+			dbg("next !ok\n")
 			c.eof = true
 			return nil
 		}
@@ -412,6 +409,7 @@ func (c *Cursor) Next() error {
 			if c.max != nil {
 				cmp := k.(*Key).Order(c.max)
 				if c.ltMax && cmp >= 0 || cmp > 0 {
+					dbg("next k=%v at c.max limit=%v\n", k, c.max)
 					c.eof = true
 					return nil
 				}
@@ -420,6 +418,7 @@ func (c *Cursor) Next() error {
 			if c.min != nil {
 				cmp := k.(*Key).Order(c.min)
 				if c.gtMin && cmp <= 0 || cmp < 0 {
+					dbg("next at c.min limit\n")
 					c.eof = true
 					return nil
 				}
@@ -428,24 +427,29 @@ func (c *Cursor) Next() error {
 		skip := false
 		if !c.desc {
 			if c.min != nil && c.gtMin && k.(*Key).Order(c.min) == 0 {
+				dbg("next skip\n")
 				skip = true
 				c.gtMin = false
 			}
 		} else {
 			if c.max != nil && c.ltMax && k.(*Key).Order(c.max) == 0 {
+				dbg("next skip\n")
 				skip = true
 				c.ltMax = false
 			}
 		}
 		if v.Value == nil || v.Value.(*sasqlitev1.Row) == nil || v.Value.(*sasqlitev1.Row).Deleted {
+			dbg("next skip2\n")
 			skip = true
 		}
 		if !c.desc {
+			dbg("next: cursor.Forward()\n")
 			err := c.cursor.Forward(c.t.Ctx)
 			if err != nil {
 				return fmt.Errorf("forward: %w", err)
 			}
 		} else {
+			dbg("next: cursor.Backward()\n")
 			err := c.cursor.Backward(c.t.Ctx)
 			if err != nil {
 				return fmt.Errorf("backward: %w", err)
@@ -457,6 +461,7 @@ func (c *Cursor) Next() error {
 		}
 		c.currentRow = v.Value.(*sasqlitev1.Row)
 		c.currentKey = k.(*Key)
+		dbg("next: returning nil, w/currentRow: %+v\n", c.currentRow)
 		return nil
 	}
 }
@@ -488,6 +493,8 @@ func (c *Cursor) Filter(idxStr string, val []interface{}) error {
 		return errors.New("malformed filter index string: " + idxStr)
 	}
 	idxStr = idxStr[5:]
+	c.max = nil
+	c.min = nil
 	for i, s := range strings.Split(idxStr, ",") {
 		if s == "" {
 			continue
@@ -497,7 +504,6 @@ func (c *Cursor) Filter(idxStr string, val []interface{}) error {
 			res := fmt.Errorf("parse op %s: %w", s, err)
 			return res
 		}
-		// TODO: how about a test using a > 3 OR a > 5, see which filters get used
 		op := Op(opInt)
 		c.ops[i] = op
 		c.operands[i] = NewKey(val[i])
@@ -515,6 +521,10 @@ func (c *Cursor) Filter(idxStr string, val []interface{}) error {
 		}
 	}
 	var err error
+	c.cursor, err = c.t.Tree.Root.Cursor(c.t.Ctx)
+	if err != nil {
+		return fmt.Errorf("cursor: %w", err)
+	}
 	if !c.desc {
 		if c.min != nil {
 			err = c.cursor.Ceil(c.t.Ctx, c.min)
@@ -534,15 +544,19 @@ func (c *Cursor) Filter(idxStr string, val []interface{}) error {
 	c.currentKey = nil
 	c.currentRow = nil
 	c.eof = false
+	dbg("CURSOR RESETTING, now %+v before NEXT\n", c)
 	res := c.Next()
-	dbg("CURSOR RESET: err=%v\n", res)
+	dbg("CURSOR RESET: err=%v eof? %v\n", res, c.eof)
 	return res
 }
 
 func (c *Cursor) Rowid() (int64, error) {
 	return 0, errors.New("rowid: invalid for WITHOUT ROWID table")
 }
-func (c *Cursor) Eof() bool { return c.eof }
+func (c *Cursor) Eof() bool {
+	dbg("EOF CHECK: %v\n", c.eof)
+	return c.eof
+}
 func (c *Cursor) Close() error {
 	dbg("CLOSE CURSOR\n")
 	return nil
