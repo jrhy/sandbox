@@ -1,4 +1,4 @@
-all: vet test-mattn test-loadable
+all: vet test-loadable test-mattn
 
 vet:
 	go vet -tags sqlite_vtable
