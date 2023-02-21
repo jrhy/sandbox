@@ -105,7 +105,7 @@ func New(args []string) (*VirtualTable, error) {
 
 	dbg("CONNECT\n")
 	table.Ctx = context.Background()
-	if len(args) == 1 {
+	if len(args) == 0 {
 		return nil, errors.New(`
 usage:
  deadline='<N>[s,m,h,d]',          timeout operations if they take too long
@@ -167,13 +167,13 @@ usage:
 		}
 	}
 
+	if table.SchemaString == "" {
+		return nil, errors.New(`unspecified: schema='colname [type] [primary key] [not null], ...'`)
+	}
+
 	table.Tree, err = newS3DB(table.Ctx, table.s3, "s3db-rows")
 	if err != nil {
 		return nil, fmt.Errorf("s3db: %w", err)
-	}
-
-	if table.SchemaString == "" {
-		return nil, errors.New(`unspecified: schema='colname [type] [primary key] [not null], ...'`)
 	}
 
 	tableLock.Lock()
@@ -349,7 +349,7 @@ func (c *VirtualTable) BestIndex(input []IndexInput, order []OrderInput) (*Index
 func (c *VirtualTable) Open() (*Cursor, error) {
 	dbg("OPEN CURSOR\n")
 	return &Cursor{
-		t:      c,
+		t: c,
 	}, nil
 }
 

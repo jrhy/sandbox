@@ -7,7 +7,7 @@ require (
 	cloud.google.com/go/storage v1.27.0 // indirect
 	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/apache/beam/sdks/v2 v2.41.0
-	github.com/aws/aws-sdk-go v1.44.199
+	github.com/aws/aws-sdk-go v1.44.205
 	github.com/dimchansky/pi-gen-go v0.1.0
 	github.com/golang/protobuf v1.5.2 // indirect
 	github.com/google/martian v2.1.1-0.20190517191504-25dcb96d9e51+incompatible // indirect
@@ -16,8 +16,8 @@ require (
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/johncgriffin/overflow v0.0.0-20211019200055-46fa312c352c
-	github.com/jrhy/mast v1.2.20
-	github.com/jrhy/s3db v0.0.0-20230208062404-ef8277d87f3d
+	github.com/jrhy/mast v1.2.21
+	github.com/jrhy/s3db v0.0.0-20230213050918-a43ffdd08e89
 	github.com/kr/pretty v0.3.0 // indirect
 	github.com/mattn/go-sqlite3 v1.14.16
 	github.com/mdp/qrterminal/v3 v3.0.0
