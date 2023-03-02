@@ -38,8 +38,8 @@ sub encrypt {
 		$g = generate();
 		$c = $g ^ @bytes[$i];
 		printf("p=%d generate: 0x%x, enc=0x%x\n", @bytes[$i], $g, $c);
-		#push @res, $c;
-		@res[$i] = $g ^ @bytes[$i];
+		push @res, $c;
+		#@res[$i] = $g ^ @bytes[$i];
 	};
 	return @res;
 }
@@ -47,7 +47,7 @@ sub encrypt {
 ksa();
 my @res = encrypt("Plaintext");
 my @expected = (0xBB, 0xF3, 0x16, 0xE8, 0xD9, 0x40, 0xAF, 0x0A, 0xD3);
-if (@res == @expected) {
+if (equal((\@expected, \@res))) {
   print("yay!\n");
 } else {
   print("boo.\n");
@@ -55,4 +55,28 @@ if (@res == @expected) {
 		printf("%x ", @res[$i]);
 	};
 	printf("\n");
+	for (my $i = 0; $i < scalar @expected; $i++) {
+		printf("%x ", @expected[$i]);
+	};
+	printf("\n");
 };
+
+sub equal {
+  my (@left, @right) = (@{$_[0]}, @{$_[1]});
+printf("left:\n");
+	for (my $i = 0; $i < scalar @left; $i++) {
+		printf("%x ", @left[$i]);
+	};
+	printf("\n");
+printf("right:\n");
+	for (my $i = 0; $i < scalar @right; $i++) {
+		printf("%x ", @right[$i]);
+	};
+	printf("\n");
+  if (scalar @left != scalar @right) { return 0; }
+  for (my $i = 0; $i < scalar @left; $i++) {
+    printf("comparing %x %x\n", @left[$i], @right[$i]);
+    if (@left[$i] != @right[$i]) { return 0; };
+  }
+  return 1;
+}
