@@ -47,7 +47,12 @@ sub encrypt {
 ksa();
 my @res = encrypt("Plaintext");
 my @expected = (0xBB, 0xF3, 0x16, 0xE8, 0xD9, 0x40, 0xAF, 0x0A, 0xD3);
-if (equal((\@expected, \@res))) {
+my $expected_str = sprintf "%02x " x @expected, @expected;
+my $res_str = sprintf "%02x " x @res, @res;
+
+print("expected: $expected_str\n");
+print("got:      $res_str\n");
+if ($res_str eq $expected_str) {
   print("yay!\n");
 } else {
   print("boo.\n");
@@ -60,23 +65,3 @@ if (equal((\@expected, \@res))) {
 	};
 	printf("\n");
 };
-
-sub equal {
-  my (@left, @right) = (@{$_[0]}, @{$_[1]});
-printf("left:\n");
-	for (my $i = 0; $i < scalar @left; $i++) {
-		printf("%x ", @left[$i]);
-	};
-	printf("\n");
-printf("right:\n");
-	for (my $i = 0; $i < scalar @right; $i++) {
-		printf("%x ", @right[$i]);
-	};
-	printf("\n");
-  if (scalar @left != scalar @right) { return 0; }
-  for (my $i = 0; $i < scalar @left; $i++) {
-    printf("comparing %x %x\n", @left[$i], @right[$i]);
-    if (@left[$i] != @right[$i]) { return 0; };
-  }
-  return 1;
-}
