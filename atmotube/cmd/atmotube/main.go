@@ -4,18 +4,44 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/jrhy/sandbox/atmotube"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"tinygo.org/x/bluetooth"
+
+	"github.com/jrhy/sandbox/atmotube"
+	"github.com/jrhy/sandbox/atmotube/prom"
 )
 
 var adapter = bluetooth.DefaultAdapter
+var sampleTime time.Time
+var sampleMutex sync.Mutex
+
+func deadman() {
+	for {
+		lastDeadman := time.Now()
+		time.Sleep(2 * time.Minute)
+		sampleMutex.Lock()
+		if sampleTime.Before(lastDeadman) {
+			panic("deadman")
+		}
+		sampleMutex.Unlock()
+	}
+}
 
 func main() {
+
+	println("starting prometheus metrics on :2112")
+	http.Handle("/metrics", promhttp.Handler())
+	go http.ListenAndServe(":2112", nil)
+
+	go deadman()
+
 	// Enable BLE interface.
 	must("enable BLE stack", adapter.Enable())
 
@@ -46,44 +72,64 @@ func main() {
 	must("connect", err)
 	//uuid, err := bluetooth.ParseUUID("DB450001-8E9A-4818-ADD7-6ED94A328AB4")
 	// atmotube pro
-	svcuuid, err := bluetooth.ParseUUID("db450001-8e9a-4818-add7-6ed94a328ab4")
-	must("parse svc uuid", err)
-	pmchar, err := bluetooth.ParseUUID("db450005-8e9a-4818-add7-6ed94a328ab4")
-	must("parse pmchar uuid", err)
-	fmt.Printf("pmchar: %+v\n", pmchar)
+	svcuuid := mustParseUUID("db450001-8e9a-4818-add7-6ed94a328ab4")
 
+	var chars []bluetooth.DeviceCharacteristic
+	fmt.Printf("discover services %v...\n", svcuuid)
 	services, err := device.DiscoverServices([]bluetooth.UUID{svcuuid})
 	must("discover services", err)
-	for _, service := range services {
-		fmt.Printf("service: %+v\n", service)
-		chars, err := service.DiscoverCharacteristics([]bluetooth.UUID{})
-		must("discover characteristics", err)
-		for _, char := range chars {
-			fmt.Printf("char: %+v\n", char)
-			switch char.String() {
-			case "db450002-8e9a-4818-add7-6ed94a328ab4":
-				registerPM("sgpc3", char, func(b []byte) (interface{}, error) {
-					return atmotube.DecodeSGPC3(b)
-				})
-			case "db450004-8e9a-4818-add7-6ed94a328ab4":
-				registerPM("status", char, func(b []byte) (interface{}, error) {
-					return atmotube.DecodeStatus(b)
-				})
-			case "db450003-8e9a-4818-add7-6ed94a328ab4":
-				registerPM("bme280", char, func(b []byte) (interface{}, error) {
-					return atmotube.DecodeBME280(b)
-				})
-			case "db450005-8e9a-4818-add7-6ed94a328ab4":
-				registerPM("pm", char, func(b []byte) (interface{}, error) {
-					return atmotube.DecodePM(b)
-				})
-			}
-
+	service := services[0]
+	fmt.Printf("service: %+v\n", service)
+	chars, err = service.DiscoverCharacteristics([]bluetooth.UUID{
+		mustParseUUID("db450002-8e9a-4818-add7-6ed94a328ab4"),
+		mustParseUUID("db450003-8e9a-4818-add7-6ed94a328ab4"),
+		mustParseUUID("db450004-8e9a-4818-add7-6ed94a328ab4"),
+		mustParseUUID("db450005-8e9a-4818-add7-6ed94a328ab4"),
+	})
+	if err != nil {
+		panic(err)
+	}
+	for _, char := range chars {
+		fmt.Printf("char: %+v ", char)
+		switch char.String() {
+		case "db450002-8e9a-4818-add7-6ed94a328ab4":
+			fmt.Printf(" sgpc3\n")
+			registerPM("sgpc3", char, func(b []byte) (interface{}, error) {
+				d, err := atmotube.DecodeSGPC3(b)
+				if err == nil {
+					prom.MetricVOC(d)
+				}
+				return d, err
+			})
+		case "db450004-8e9a-4818-add7-6ed94a328ab4":
+			fmt.Printf(" status\n")
+			registerPM("status", char, func(b []byte) (interface{}, error) {
+				return atmotube.DecodeStatus(b)
+			})
+		case "db450003-8e9a-4818-add7-6ed94a328ab4":
+			fmt.Printf(" bme280\n")
+			registerPM("bme280", char, func(b []byte) (interface{}, error) {
+				d, err := atmotube.DecodeBME280(b)
+				if err == nil {
+					prom.MetricEnv(d)
+				}
+				return d, err
+			})
+		case "db450005-8e9a-4818-add7-6ed94a328ab4":
+			fmt.Printf(" pm\n")
+			registerPM("pm", char, func(b []byte) (interface{}, error) {
+				d, err := atmotube.DecodePM(b)
+				if err == nil {
+					prom.MetricPM(d)
+				}
+				return d, err
+			})
+		default:
+			fmt.Printf("???\n")
 		}
 	}
 	must("discover", err)
-	fmt.Printf("services: %+v\n", services)
-	sigint := make(chan os.Signal)
+	sigint := make(chan os.Signal, 1)
 	signal.Notify(sigint, os.Interrupt)
 	<-sigint
 	device.Disconnect()
@@ -102,6 +148,9 @@ func registerPM(name string, char bluetooth.DeviceCharacteristic, f func([]byte)
 }
 
 func logData(name string, value interface{}) {
+	sampleMutex.Lock()
+	sampleTime = time.Now()
+	sampleMutex.Unlock()
 	type Record struct {
 		Timestamp time.Time   `json:"timestamp"`
 		Type      string      `json:"type"`
@@ -123,4 +172,12 @@ func must(action string, err error) {
 	if err != nil {
 		panic("failed to " + action + ": " + err.Error())
 	}
+}
+
+func mustParseUUID(s string) bluetooth.UUID {
+	uuid, err := bluetooth.ParseUUID(s)
+	if err != nil {
+		panic(fmt.Errorf("parse uuid: %s: %w", s, err))
+	}
+	return uuid
 }
