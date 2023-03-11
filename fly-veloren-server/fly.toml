@@ -6,7 +6,7 @@ kill_timeout = 5
 processes = []
  
   [mounts]                                                                                                      
-    destination = "/opt/userdata"
+    destination = "/userdata"
     source = "data"
 
 [env]
