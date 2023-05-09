@@ -1,0 +1,3 @@
+slate	..a
+acorn	acor.
+
