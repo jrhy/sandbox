@@ -1,0 +1,5 @@
+slate	..a
+candy		.a..y
+fairy		.a..y
+happy		.a..y
+gawky		.a..y

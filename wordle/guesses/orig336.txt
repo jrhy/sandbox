@@ -1,0 +1,3 @@
+slate	s..t
+crust	....t	...s
+#tipsy
