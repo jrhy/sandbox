@@ -1,0 +1,5 @@
+set -o vi
+bind '"jk":vi-movement-mode'
+export PATH=$PATH:/usr/local/go/bin:$HOME/go/bin
+alias ls='ls -F'
+
