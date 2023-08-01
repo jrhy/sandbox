@@ -38,6 +38,7 @@ RUN git clone https://github.com/riyaz-ali/sqlite && \
     git clone https://github.com/mattn/go-sqlite3
 USER root
 WORKDIR /
+RUN apk add readline-dev
 RUN \
   cat /root/bashrc >> /root/.profile && \
   cat /root/bashrc >> /work/.bashrc && \
@@ -48,7 +49,8 @@ RUN \
   mkdir -p /work/.config/nvim && \
   echo 'source ~/.nvimrc' > /work/.config/nvim/init.vim && \
   echo 'inoremap jk <esc>' > /work/.nvimrc && \
-  echo 'permit nopass :wheel' > /etc/doas.d/doas.conf
+  echo 'permit nopass :wheel' > /etc/doas.d/doas.conf && \
+  echo 'set editing-mode vi' > /work/.inputrc
 USER work
 WORKDIR /work
 ENV SHELL /bin/bash
