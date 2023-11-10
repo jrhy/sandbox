@@ -6,6 +6,7 @@ require (
 	github.com/PuerkitoBio/goquery v1.8.0
 	github.com/aws/aws-sdk-go v1.44.205
 	github.com/dimchansky/pi-gen-go v0.1.0
+	github.com/gabriel-vasile/mimetype v1.4.3
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/subcommands v1.2.0
 	github.com/hashicorp/golang-lru v0.5.4
@@ -22,8 +23,8 @@ require (
 	github.com/stianeikeland/go-rpio v4.2.0+incompatible
 	github.com/stretchr/testify v1.8.1
 	go.riyazali.net/sqlite v0.0.0-20221229061135-0e640ca73f94
-	golang.org/x/crypto v0.6.0
-	golang.org/x/net v0.7.0
+	golang.org/x/crypto v0.14.0
+	golang.org/x/net v0.17.0
 	google.golang.org/protobuf v1.28.1
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	modernc.org/sqlite v1.17.0
