@@ -844,7 +844,7 @@ this.wordle = this.wordle || {}, this.wordle.bundle = function(e) {
             }
             return e
         }))),
-        wa = "gameState",
+        wa = "whordleGameState",
         xa = {
             boardState: null,
             evaluations: null,
