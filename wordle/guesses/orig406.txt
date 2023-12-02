@@ -1,0 +1,4 @@
+slate	..a
+acorn	...r	a
+array	.r	a
+
