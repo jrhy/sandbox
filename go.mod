@@ -15,6 +15,7 @@ require (
 	github.com/jrhy/mast v1.2.21
 	github.com/jrhy/s3db v0.0.0-20230213050918-a43ffdd08e89
 	github.com/kr/pretty v0.3.0 // indirect
+	github.com/matrix-org/gomatrix v0.0.0-20220926102614-ceba4d9f7530 // indirect
 	github.com/mattn/go-sqlite3 v1.14.16 // indirect
 	github.com/mdp/qrterminal/v3 v3.0.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
