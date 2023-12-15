@@ -1,0 +1,1 @@
+transformers torch torchvision torchaudio einops
