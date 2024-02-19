@@ -19,9 +19,9 @@ populate-local-s3db: start-minio-server .setup_s3db .key
 	${S3DB} -v -b s3db-rs-encrypted -k .key set foo=bar
 
 start-minio-server: .setup_minio
-	MINIO_ROOT_USER=admin MINIO_ROOT_PASSWORD=password minio server --address 127.0.0.1:9091 --console-address 127.0.0.1:9092 $$(cat .minio_dir) &
+	MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin minio server --address 127.0.0.1:9091 --console-address 127.0.0.1:9092 $$(cat .minio_dir) &
 	sleep 2
-	mc alias set myminio http://127.0.0.1:9091 admin password
+	mc alias set myminio http://127.0.0.1:9091 minioadmin minioadmin
 
 show-env:
 	echo export AWS_ACCESS_KEY_ID=minioadmin \
@@ -36,11 +36,13 @@ show-env:
 .key:
 	echo keykeykey > .key
 
-.setup_minio:
+.setup_minio: .minio_dir
 	go install -v github.com/minio/minio@latest
 	go install -v github.com/minio/mc@latest
-	mktemp -d /tmp/minio-XXXXXXXXXXX > .minio_dir
 	touch .setup_minio
+
+.minio_dir:
+	mktemp -d /tmp/minio-XXXXXXXXXXX > .minio_dir
 
 clean:
 	-pkill minio
