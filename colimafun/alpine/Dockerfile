@@ -38,7 +38,7 @@ RUN git clone https://github.com/riyaz-ali/sqlite && \
     git clone https://github.com/mattn/go-sqlite3
 USER root
 WORKDIR /
-RUN apk add readline-dev
+RUN apk add readline-dev linux-headers cmake git-lfs
 RUN \
   cat /root/bashrc >> /root/.profile && \
   cat /root/bashrc >> /work/.bashrc && \
