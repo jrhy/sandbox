@@ -23,6 +23,7 @@ func init() {
 				}
 				die(fmt.Sprintf("parse: %v", err))
 			}
+			mimetype.SetLimit(0)
 			if err := MimeType(files); err != nil {
 				fmt.Printf("%v\n", err)
 				return 1
