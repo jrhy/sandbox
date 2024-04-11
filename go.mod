@@ -9,6 +9,7 @@ require (
 	github.com/gabriel-vasile/mimetype v1.4.3
 	github.com/google/go-cmp v0.5.9 // indirect
 	github.com/google/subcommands v1.2.0
+	github.com/h2non/filetype v1.1.3 // indirect
 	github.com/hashicorp/golang-lru v0.5.4
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/johncgriffin/overflow v0.0.0-20211019200055-46fa312c352c
