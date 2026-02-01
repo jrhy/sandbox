@@ -1,0 +1,4 @@
+.pio/
+src/credentials.h
+platformio_override.ini
+NOTES.local.md
