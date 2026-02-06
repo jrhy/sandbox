@@ -106,17 +106,15 @@ func LoadMaps(s string, seedRange bool) Maps {
 	s = LoadMap("light-to-temperature", &m.LightToTemperature, s)
 	s = LoadMap("temperature-to-humidity", &m.TemperatureToHumidity, s)
 	s = LoadMap("humidity-to-location", &m.HumidityToLocation, s)
-	t2l := flatten(&m.TemperatureToHumidity, &m.HumidityToLocation)
-	l2l := flatten(&m.LightToTemperature, t2l)
+	_ = flatten(&m.TemperatureToHumidity, &m.HumidityToLocation)
+	_ = flatten(&m.LightToTemperature, &m.TemperatureToHumidity)
 	return m
 }
 
 func flatten(outer, inner *Remap) *Remap {
-	for _, o := range *outer {
-		o.
-		for _, i := range *inner {
-		}
-	}
+	// TODO: This was an unfinished helper; keep a stub so tests compile.
+	// Revisit if/when flattening logic is needed.
+	return inner
 }
 
 var mapBeginningRE = regexp.MustCompile(`^(.*) map:\n`)

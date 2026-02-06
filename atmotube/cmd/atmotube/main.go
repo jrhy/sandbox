@@ -47,11 +47,13 @@ func main() {
 
 	// Start scanning.
 	println("scanning...")
-	var addr bluetooth.Addresser
+	var addr bluetooth.Address
+	var found bool
 	err := adapter.Scan(func(adapter *bluetooth.Adapter, device bluetooth.ScanResult) {
-		println("found device:", device.Address.String(), device.RSSI, device.LocalName())
+		println("found device:", device.Address.MAC.String(), device.RSSI, device.LocalName())
 		if strings.Contains(device.LocalName(), "ATMO") {
 			addr = device.Address
+			found = true
 			adapter.StopScan()
 			return
 		}
@@ -59,12 +61,12 @@ func main() {
 		//must(device.Address.String(), err)
 	})
 	must("start scan", err)
-	if addr == nil {
+	if !found {
 		panic("no atmo found")
 	}
 
-	adapter.SetConnectHandler(func(device bluetooth.Addresser, connected bool) {
-		fmt.Printf("connected=%v device=%v\n", connected, device)
+	adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
+		fmt.Printf("connected=%v device=%v\n", connected, device.Address.MAC.String())
 	})
 
 	fmt.Printf("connecting to %v\n", addr)
