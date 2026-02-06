@@ -3,6 +3,8 @@
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
 #include <ArduinoOTA.h>
+#include <SPI.h>
+#include <ELECHOUSE_CC1101_SRC_DRV.h>
 #include "credentials.h"
 
 #ifndef WEB_USER
@@ -26,13 +28,64 @@ ESP8266WebServer server(80);
 const int PIN_LED = LED_BUILTIN; // GPIO2 on many ESP8266 boards; inverted
 const int PIN_GPIO0 = 0;
 const int PIN_GPIO2 = 2;
+const int PIN_CC1101_SCK = 14;  // D5
+const int PIN_CC1101_MISO = 12; // D6
+const int PIN_CC1101_MOSI = 13; // D7
+const int PIN_CC1101_CSN = 5;   // D1 (moved from D8)
+const int PIN_CC1101_GDO0 = 4;  // D2
+const int PIN_RELAY = 16;       // D0 (GPIO16) - no boot strap, no interrupt
 
-bool isLedInverted(int pin) {
-    return pin == LED_BUILTIN;
+const bool RELAY_ACTIVE_LOW = true;
+
+struct ScanHit {
+    float mhz;
+    int rssi;
+    unsigned long seenMs;
+};
+
+const int MAX_SCAN_HITS = 12;
+ScanHit scanHits[MAX_SCAN_HITS];
+int scanHitCount = 0;
+
+bool cc1101Ready = false;
+bool scanActive = false;
+bool captureActive = false;
+float scanStartMhz = 318.0f;
+float scanStopMhz = 318.6f;
+float scanStepMhz = 0.1f;
+int scanThreshold = -85;
+unsigned long scanDwellMs = 40;
+float scanCurrentMhz = 0.0f;
+unsigned long lastScanStep = 0;
+int lastScanRssi = 0;
+
+const int MAX_PULSES = 400;
+volatile unsigned long pulseDurations[MAX_PULSES];
+volatile int pulseCount = 0;
+volatile unsigned long lastEdgeMicros = 0;
+float captureFreqMhz = 318.0f;
+
+void ICACHE_RAM_ATTR onGdo0Change() {
+    unsigned long now = micros();
+    unsigned long delta = now - lastEdgeMicros;
+    lastEdgeMicros = now;
+    if (pulseCount < MAX_PULSES) {
+        pulseDurations[pulseCount++] = delta;
+    }
+}
+
+bool isPinInverted(int pin) {
+    if (pin == LED_BUILTIN) {
+        return true;
+    }
+    if (pin == PIN_RELAY && RELAY_ACTIVE_LOW) {
+        return true;
+    }
+    return false;
 }
 
 void writePin(int pin, int value) {
-    if (isLedInverted(pin)) {
+    if (isPinInverted(pin)) {
         digitalWrite(pin, value ? LOW : HIGH);
     } else {
         digitalWrite(pin, value ? HIGH : LOW);
@@ -41,7 +94,7 @@ void writePin(int pin, int value) {
 
 int readPin(int pin) {
     int v = digitalRead(pin);
-    if (isLedInverted(pin)) {
+    if (isPinInverted(pin)) {
         return v == LOW ? 1 : 0;
     }
     return v == HIGH ? 1 : 0;
@@ -95,6 +148,7 @@ void handleRoot() {
 
     struct PinInfo { int pin; const char* name; bool unsafeOnly; } pins[] = {
         {PIN_LED, "LED (GPIO2)", false},
+        {PIN_RELAY, "Relay (GPIO16 / D0)", false},
         {PIN_GPIO0, "GPIO0", true},
         {PIN_GPIO2, "GPIO2", true}
     };
@@ -138,6 +192,10 @@ void handleRoot() {
     }
     html += "</div></div>";
 
+    html += "<div class=\"row\"><div>CC1101 Scanner</div><div>";
+    html += "<a class=\"btn\" href=\"/cc1101\">Open</a>";
+    html += "</div></div>";
+
     html += "<div class=\"note\">Tip: avoid toggling GPIO0/2 while booting.</div>";
     html += "</div></body></html>";
 
@@ -158,8 +216,8 @@ void handleSet() {
     int value = server.arg("value").toInt();
     const bool unsafe = unsafeEnabled();
 
-    if (pin == PIN_LED) {
-        pinMode(PIN_LED, OUTPUT);
+    if (pin == PIN_LED || pin == PIN_RELAY) {
+        pinMode(pin, OUTPUT);
         writePin(pin, value);
     } else if ((pin == PIN_GPIO0 || pin == PIN_GPIO2) && unsafe) {
         pinMode(pin, OUTPUT);
@@ -177,6 +235,298 @@ void handleSet() {
     server.send(303);
 }
 
+void addScanHit(float mhz, int rssi) {
+    if (scanHitCount < MAX_SCAN_HITS) {
+        scanHits[scanHitCount++] = {mhz, rssi, millis()};
+        return;
+    }
+    int oldestIndex = 0;
+    for (int i = 1; i < MAX_SCAN_HITS; i++) {
+        if (scanHits[i].seenMs < scanHits[oldestIndex].seenMs) {
+            oldestIndex = i;
+        }
+    }
+    scanHits[oldestIndex] = {mhz, rssi, millis()};
+}
+
+void handleCC1101() {
+    if (!ensureAuth()) {
+        return;
+    }
+
+    String html;
+    html += "<!doctype html><html><head>";
+    html += "<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">";
+    html += "<title>CC1101 Scanner</title>";
+    html += "<style>";
+    html += "body{font-family:sans-serif;background:#f5f5f7;margin:0;padding:20px;}";
+    html += "h1{margin:0 0 8px;}";
+    html += ".card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,0.08);max-width:720px;}";
+    html += "label{display:block;margin:10px 0 4px;font-size:12px;color:#444;}";
+    html += "input{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;}";
+    html += ".row{display:flex;gap:10px;}";
+    html += ".row>div{flex:1;}";
+    html += ".btn{padding:10px 14px;border:0;border-radius:8px;background:#0070f3;color:white;cursor:pointer;text-decoration:none;display:inline-block;margin-top:10px;}";
+    html += ".btn.off{background:#666;}";
+    html += "pre{background:#111;color:#0f0;padding:10px;border-radius:8px;overflow:auto;}";
+    html += ".note{font-size:12px;color:#666;margin-top:10px;}";
+    html += "</style></head><body>";
+    html += "<div class=\"card\">";
+    html += "<h1>CC1101 Scanner</h1>";
+    html += "<p class=\"note\">RX-only scan for energy bursts. Rolling-code remotes may not be clonable.</p>";
+
+    html += "<div class=\"row\">";
+    html += "<div><label>Start MHz</label><input id=\"start\" type=\"number\" step=\"0.01\" value=\"318.0\"></div>";
+    html += "<div><label>Stop MHz</label><input id=\"stop\" type=\"number\" step=\"0.01\" value=\"318.6\"></div>";
+    html += "</div>";
+    html += "<div class=\"row\">";
+    html += "<div><label>Step MHz</label><input id=\"step\" type=\"number\" step=\"0.01\" value=\"0.10\"></div>";
+    html += "<div><label>RSSI threshold (dBm)</label><input id=\"threshold\" type=\"number\" step=\"1\" value=\"-85\"></div>";
+    html += "</div>";
+    html += "<div class=\"row\">";
+    html += "<div><label>Dwell (ms per step)</label><input id=\"dwell\" type=\"number\" step=\"1\" value=\"40\"></div>";
+    html += "<div></div>";
+    html += "</div>";
+
+    html += "<button class=\"btn\" onclick=\"startScan()\">Start scan</button> ";
+    html += "<button class=\"btn off\" onclick=\"stopScan()\">Stop scan</button>";
+    html += "<button class=\"btn\" onclick=\"startCapture()\">Start capture</button> ";
+    html += "<button class=\"btn off\" onclick=\"stopCapture()\">Stop capture</button>";
+    html += "<button class=\"btn off\" onclick=\"clearCapture()\">Clear pulses</button>";
+    html += "<div class=\"note\" id=\"cc1101Ready\">CC1101 init: checking...</div>";
+    html += "<div class=\"note\" id=\"cc1101Rssi\">RSSI: -- dBm</div>";
+    html += "<pre id=\"status\">Loading...</pre>";
+    html += "<div class=\"note\">Pins: SCK D5, MISO D6, MOSI D7, CSn D1, GDO0 D2. Use 3.3V only.</div>";
+    html += "</div>";
+
+    html += "<script>";
+    html += "async function req(url){";
+    html += "const res=await fetch(url,{credentials:'same-origin',cache:'no-store'});";
+    html += "if(!res.ok){throw new Error('HTTP '+res.status);} return res;}";
+    html += "async function startScan(){";
+    html += "const p=new URLSearchParams({start:val('start'),stop:val('stop'),step:val('step'),threshold:val('threshold'),dwell:val('dwell')});";
+    html += "await req('/cc1101/start?'+p.toString());}";
+    html += "async function stopScan(){await req('/cc1101/stop');}";
+    html += "async function startCapture(){";
+    html += "const p=new URLSearchParams({freq:val('start')});";
+    html += "await req('/cc1101/capture/start?'+p.toString());}";
+    html += "async function stopCapture(){await req('/cc1101/capture/stop');}";
+    html += "async function clearCapture(){await req('/cc1101/capture/clear');}";
+    html += "function val(id){return document.getElementById(id).value;}";
+    html += "async function poll(){";
+    html += "try{";
+    html += "const freq=val('start');";
+    html += "const [scanRes,captureRes,rssiRes]=await Promise.all([req('/cc1101/status'),req('/cc1101/capture/status'),req('/cc1101/rssi?freq='+encodeURIComponent(freq))]);";
+    html += "const scan=await scanRes.json();";
+    html += "const capture=await captureRes.json();";
+    html += "const rssi=await rssiRes.json();";
+    html += "document.getElementById('cc1101Ready').textContent='CC1101 init: '+(scan.ready?'OK':'FAILED');";
+    html += "document.getElementById('cc1101Rssi').textContent='RSSI: '+rssi.rssi+' dBm @ '+rssi.freq_mhz+' MHz';";
+    html += "document.getElementById('status').textContent=JSON.stringify({scan,capture},null,2);";
+    html += "}catch(err){";
+    html += "document.getElementById('status').textContent='Error: '+err.message;";
+    html += "}";
+    html += "}";
+    html += "setInterval(poll,1000);poll();";
+    html += "</script></body></html>";
+
+    server.send(200, "text/html", html);
+}
+
+void handleCC1101Start() {
+    if (!ensureAuth()) {
+        return;
+    }
+    if (!cc1101Ready) {
+        server.send(500, "text/plain", "CC1101 not initialized");
+        return;
+    }
+
+    if (server.hasArg("start")) {
+        scanStartMhz = server.arg("start").toFloat();
+    }
+    if (server.hasArg("stop")) {
+        scanStopMhz = server.arg("stop").toFloat();
+    }
+    if (server.hasArg("step")) {
+        scanStepMhz = server.arg("step").toFloat();
+    }
+    if (server.hasArg("threshold")) {
+        scanThreshold = server.arg("threshold").toInt();
+    }
+    if (server.hasArg("dwell")) {
+        scanDwellMs = static_cast<unsigned long>(server.arg("dwell").toInt());
+    }
+
+    if (scanStepMhz <= 0.0f) {
+        scanStepMhz = 0.1f;
+    }
+    if (scanStopMhz < scanStartMhz) {
+        float tmp = scanStartMhz;
+        scanStartMhz = scanStopMhz;
+        scanStopMhz = tmp;
+    }
+
+    scanHitCount = 0;
+    scanCurrentMhz = scanStartMhz;
+    scanActive = true;
+    lastScanStep = 0;
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleCC1101Stop() {
+    if (!ensureAuth()) {
+        return;
+    }
+    scanActive = false;
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleCC1101Status() {
+    if (!ensureAuth()) {
+        return;
+    }
+
+    String json = "{";
+    json += "\"ready\":";
+    json += cc1101Ready ? "true" : "false";
+    json += ",\"active\":";
+    json += scanActive ? "true" : "false";
+    json += ",\"capture_active\":";
+    json += captureActive ? "true" : "false";
+    json += ",\"current_mhz\":";
+    json += String(scanCurrentMhz, 3);
+    json += ",\"last_rssi\":";
+    json += lastScanRssi;
+    json += ",\"threshold\":";
+    json += scanThreshold;
+    json += ",\"dwell_ms\":";
+    json += scanDwellMs;
+    json += ",\"hits\":[";
+    for (int i = 0; i < scanHitCount; i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += "{";
+        json += "\"mhz\":";
+        json += String(scanHits[i].mhz, 3);
+        json += ",\"rssi\":";
+        json += scanHits[i].rssi;
+        json += ",\"age_ms\":";
+        json += (millis() - scanHits[i].seenMs);
+        json += "}";
+    }
+    json += "]";
+    json += ",\"pulse_count\":";
+    json += pulseCount;
+    json += "}";
+
+    server.send(200, "application/json", json);
+}
+
+void handleCC1101Rssi() {
+    if (!ensureAuth()) {
+        return;
+    }
+    if (!cc1101Ready) {
+        server.send(500, "text/plain", "CC1101 not initialized");
+        return;
+    }
+    float mhz = scanCurrentMhz;
+    if (server.hasArg("freq")) {
+        mhz = server.arg("freq").toFloat();
+    }
+    ELECHOUSE_cc1101.setMHZ(mhz);
+    ELECHOUSE_cc1101.SetRx();
+    delay(2);
+    int rssi = ELECHOUSE_cc1101.getRssi();
+    String json = "{";
+    json += "\"freq_mhz\":";
+    json += String(mhz, 3);
+    json += ",\"rssi\":";
+    json += rssi;
+    json += "}";
+    server.send(200, "application/json", json);
+}
+
+void handleCC1101CaptureStart() {
+    if (!ensureAuth()) {
+        return;
+    }
+    if (!cc1101Ready) {
+        server.send(500, "text/plain", "CC1101 not initialized");
+        return;
+    }
+    if (server.hasArg("freq")) {
+        captureFreqMhz = server.arg("freq").toFloat();
+    }
+    scanActive = false;
+    noInterrupts();
+    pulseCount = 0;
+    lastEdgeMicros = micros();
+    interrupts();
+    ELECHOUSE_cc1101.setCCMode(0);
+    ELECHOUSE_cc1101.setModulation(2); // ASK/OOK
+    ELECHOUSE_cc1101.setPktFormat(2);  // async serial
+    ELECHOUSE_cc1101.setSyncMode(0);   // no sync word
+    ELECHOUSE_cc1101.setCrc(false);
+    ELECHOUSE_cc1101.setWhiteData(false);
+    ELECHOUSE_cc1101.SpiWriteReg(CC1101_IOCFG0, 0x0D); // GDO0: serial data out
+    ELECHOUSE_cc1101.setMHZ(captureFreqMhz);
+    ELECHOUSE_cc1101.SetRx();
+    pinMode(PIN_CC1101_GDO0, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PIN_CC1101_GDO0), onGdo0Change, CHANGE);
+    captureActive = true;
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleCC1101CaptureStop() {
+    if (!ensureAuth()) {
+        return;
+    }
+    detachInterrupt(digitalPinToInterrupt(PIN_CC1101_GDO0));
+    captureActive = false;
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleCC1101CaptureClear() {
+    if (!ensureAuth()) {
+        return;
+    }
+    noInterrupts();
+    pulseCount = 0;
+    interrupts();
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
+void handleCC1101CaptureStatus() {
+    if (!ensureAuth()) {
+        return;
+    }
+    String json = "{";
+    json += "\"active\":";
+    json += captureActive ? "true" : "false";
+    json += ",\"freq_mhz\":";
+    json += String(captureFreqMhz, 3);
+    json += ",\"pulse_count\":";
+    json += pulseCount;
+    json += ",\"pulses\":[";
+
+    int countCopy = pulseCount;
+    if (countCopy > MAX_PULSES) {
+        countCopy = MAX_PULSES;
+    }
+    int startIndex = countCopy > 80 ? countCopy - 80 : 0;
+    for (int i = startIndex; i < countCopy; i++) {
+        if (i > startIndex) {
+            json += ",";
+        }
+        json += pulseDurations[i];
+    }
+    json += "]}";
+    server.send(200, "application/json", json);
+}
+
 void setup() {
     Serial.begin(115200);
     delay(100);
@@ -184,8 +534,23 @@ void setup() {
     Serial.println("\n\nESP8266 WiFi Connection Test");
     Serial.println("============================");
 
+    SPI.begin();
+    ELECHOUSE_cc1101.setSpiPin(PIN_CC1101_SCK, PIN_CC1101_MISO, PIN_CC1101_MOSI, PIN_CC1101_CSN);
+    ELECHOUSE_cc1101.Init();
+    ELECHOUSE_cc1101.setGDO0(PIN_CC1101_GDO0);
+    cc1101Ready = ELECHOUSE_cc1101.getCC1101();
+    if (cc1101Ready) {
+        ELECHOUSE_cc1101.SetRx();
+        Serial.println("CC1101 initialized");
+    } else {
+        Serial.println("CC1101 init failed");
+    }
+
     pinMode(PIN_LED, OUTPUT);
-    writePin(PIN_LED, 0);
+    writePin(PIN_LED, 1);
+
+    pinMode(PIN_RELAY, OUTPUT);
+    writePin(PIN_RELAY, 0);
 
     pinMode(PIN_GPIO0, INPUT);
     pinMode(PIN_GPIO2, INPUT);
@@ -230,6 +595,15 @@ void setup() {
 
         server.on("/", handleRoot);
         server.on("/set", handleSet);
+        server.on("/cc1101", handleCC1101);
+        server.on("/cc1101/start", handleCC1101Start);
+        server.on("/cc1101/stop", handleCC1101Stop);
+        server.on("/cc1101/status", handleCC1101Status);
+        server.on("/cc1101/rssi", handleCC1101Rssi);
+        server.on("/cc1101/capture/start", handleCC1101CaptureStart);
+        server.on("/cc1101/capture/stop", handleCC1101CaptureStop);
+        server.on("/cc1101/capture/clear", handleCC1101CaptureClear);
+        server.on("/cc1101/capture/status", handleCC1101CaptureStatus);
         server.begin();
         Serial.println("Web server started on port 80");
     } else {
@@ -245,6 +619,23 @@ void loop() {
         ArduinoOTA.handle();
         MDNS.update();
         server.handleClient();
+        if (scanActive && cc1101Ready && !captureActive) {
+            unsigned long now = millis();
+            if (now - lastScanStep >= scanDwellMs) {
+                ELECHOUSE_cc1101.setMHZ(scanCurrentMhz);
+                ELECHOUSE_cc1101.SetRx();
+                delay(2);
+                lastScanRssi = ELECHOUSE_cc1101.getRssi();
+                if (lastScanRssi >= scanThreshold) {
+                    addScanHit(scanCurrentMhz, lastScanRssi);
+                }
+                scanCurrentMhz += scanStepMhz;
+                if (scanCurrentMhz > scanStopMhz) {
+                    scanActive = false;
+                }
+                lastScanStep = now;
+            }
+        }
         if (millis() - lastLog >= 5000) {
             Serial.printf("Connected to %s | IP: %s | RSSI: %d dBm\n",
                 WIFI_SSID,
