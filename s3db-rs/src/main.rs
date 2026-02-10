@@ -10,6 +10,10 @@ use std::collections::HashSet;
 
 use anyhow::{bail, Context, Result};
 
+fn parse_duration_arg(s: &str) -> Result<Duration, String> {
+    duration_str::parse(s).map_err(|e| e.to_string())
+}
+
 /// Ensure S3_ENDPOINT, AWS_REGION, AWS_ACCESS_KEY_ID, and AWS_SECRET_ACCESS_KEY are set.
 #[derive(Parser)]
 struct Cli {
@@ -29,7 +33,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Vacuum {
-        #[arg(value_parser = duration_str::parse, long = "older-than")]
+        #[arg(value_parser = parse_duration_arg, long = "older-than")]
         duration: Duration,
     },
     /// Backup the current or all versions
