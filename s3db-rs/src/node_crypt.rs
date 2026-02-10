@@ -1,8 +1,6 @@
-use xsalsa20poly1305::aead::{generic_array::GenericArray, Aead, NewAead};
-use xsalsa20poly1305::XSalsa20Poly1305;
-
-extern crate error_chain;
-use crate::errors::*;
+use anyhow::{anyhow, bail, Result};
+use crypto_secretbox::aead::{generic_array::GenericArray, Aead, KeyInit};
+use crypto_secretbox::XSalsa20Poly1305;
 
 use std::*;
 
@@ -29,14 +27,14 @@ pub fn keyed_nonce(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
 
 pub fn encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != KEY_LEN {
-        return Err(format!("expected {}-byte key, got {}", KEY_LEN, key.len()).into());
+        bail!("expected {}-byte key, got {}", KEY_LEN, key.len());
     }
     let mut nonce = keyed_nonce(key, plaintext)?;
 
     let key = GenericArray::from_slice(key);
     let mut ciphertext = XSalsa20Poly1305::new(key)
         .encrypt(GenericArray::from_slice(&nonce), plaintext)
-        .chain_err(|| "XSalsa20Poly1305 encrypt")?;
+        .map_err(|_| anyhow!("XSalsa20Poly1305 encrypt"))?;
 
     let mut res: Vec<u8> = Vec::new();
     res.append(&mut nonce);
@@ -46,20 +44,20 @@ pub fn encrypt(key: &[u8], plaintext: &[u8]) -> Result<Vec<u8>> {
 
 pub fn decrypt(key: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
     if key.len() != KEY_LEN {
-        return Err(format!("expected {}-byte key, got {}", KEY_LEN, key.len()).into());
+        bail!("expected {}-byte key, got {}", KEY_LEN, key.len());
     }
     if ciphertext.len() < NONCE_LEN {
-        return Err(format!("ciphertext too short to include {}-byte nonce", NONCE_LEN).into());
+        bail!("ciphertext too short to include {}-byte nonce", NONCE_LEN);
     }
     if ciphertext.len() < MAC_LEN {
-        return Err(format!("ciphertext too short to include {}-byte MAC", MAC_LEN).into());
+        bail!("ciphertext too short to include {}-byte MAC", MAC_LEN);
     }
     let nonce = GenericArray::from_slice(&ciphertext[0..NONCE_LEN]);
     let ciphertext = &ciphertext[NONCE_LEN..ciphertext.len()];
     let key = GenericArray::from_slice(key);
     XSalsa20Poly1305::new(key)
         .decrypt(nonce, ciphertext)
-        .chain_err(|| "decrypt")
+        .map_err(|_| anyhow!("decrypt"))
 }
 
 pub fn derive_key(master_key: &[u8], context: &[u8]) -> Result<Vec<u8>> {
@@ -81,54 +79,68 @@ pub fn derive_key(master_key: &[u8], context: &[u8]) -> Result<Vec<u8>> {
         hash_length: KEY_LEN as u32,
     };
 
-    let pw = base64::encode(&combined);
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+
+    let pw = STANDARD.encode(&combined);
     let pw = pw.as_bytes();
     match argon2::hash_raw(pw, salt, &config) {
         Ok(derived) => Ok(derived),
-        Err(x) => return Err(format!("derive_key failure: {:?}", x).into()),
+        Err(x) => return Err(anyhow!("derive_key failure: {:?}", x)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
 
     #[test]
     fn nonce_reference() {
-        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
+        let key = STANDARD
+            .decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=")
+            .unwrap();
         assert_eq!(
             "DuO9oCKfeLUrcIImvVH88Y67un3CFnRw",
-            base64::encode(&keyed_nonce(&key, b"asdf").unwrap())
+            STANDARD.encode(&keyed_nonce(&key, b"asdf").unwrap())
         )
     }
 
     #[test]
     fn derive_reference() {
-        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
+        let key = STANDARD
+            .decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=")
+            .unwrap();
         let derived = derive_key(&key, b"foo").unwrap();
         assert_eq!(
             "7a0p0qOL3IqOBMPwjUlGokjz8FNDQDedZRXom5ii/Ls=",
-            base64::encode(&derived)
+            STANDARD.encode(&derived)
         )
     }
 
     #[test]
     fn encrypt_reference() {
-        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
+        let key = STANDARD
+            .decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=")
+            .unwrap();
         assert_eq!(
             "DuO9oCKfeLUrcIImvVH88Y67un3CFnRwhZOvsmKMKFjTuKYsiLv0bwSBbjo=",
-            base64::encode(&encrypt(&key, b"asdf").unwrap())
+            STANDARD.encode(&encrypt(&key, b"asdf").unwrap())
         )
     }
 
     #[test]
     fn decrypt_reference() {
-        let key = base64::decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=").unwrap();
+        let key = STANDARD
+            .decode("UdHBz8klP8ze+cl+qP2zcFBOW952mo8DUc/tn59h6Rw=")
+            .unwrap();
         assert_eq!(
             b"asdf".to_vec(),
             decrypt(
                 &key,
-                &base64::decode("l9+HCAKhVy0HhB9QLX07wX3QXJ0unVyUnhw1LktsDQ4cOzeCIhDrQk/RYVo=")
+                &STANDARD
+                    .decode("l9+HCAKhVy0HhB9QLX07wX3QXJ0unVyUnhw1LktsDQ4cOzeCIhDrQk/RYVo=")
                     .unwrap()
             )
             .unwrap()

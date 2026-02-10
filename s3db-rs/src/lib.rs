@@ -1,19 +1,12 @@
 extern crate bytes;
 extern crate serde;
+use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use serde::Deserialize;
 use std::convert::TryFrom;
 
 use std::ffi::CStr;
 use std::os::raw::c_char;
-
-#[macro_use]
-extern crate error_chain;
-
-mod errors {
-    error_chain! {}
-}
-use errors::*;
 
 pub mod node_crypt;
 mod varint;
@@ -64,7 +57,7 @@ fn read_json(
         if json_c.is_null() {
             bail!("unmarshal gob")
         }
-        CStr::from_ptr(json_c).to_str().unwrap()
+        CStr::from_ptr(json_c).to_str().context("non-utf8 json from go")?
     };
     Ok(json.to_owned())
 }
@@ -81,15 +74,15 @@ pub fn read_node(bytes: &Bytes, key: &Option<Bytes>) -> Result<Node> {
     //println!("reading {}-byte node", bytes.len());
 
     let mut c: usize = 0;
-    let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read keys")?;
+    let (nc, _) = read_v115_array(&bytes.slice(c..)).with_context(|| "read keys")?;
     c += nc;
-    let (nc, _) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read values")?;
+    let (nc, _) = read_v115_array(&bytes.slice(c..)).with_context(|| "read values")?;
     c += nc;
 
-    let (_, links_bytes) = read_v115_array(&bytes.slice(c..)).chain_err(|| "read links")?;
+    let (_, links_bytes) = read_v115_array(&bytes.slice(c..)).with_context(|| "read links")?;
     let mut links = Vec::<String>::new();
     for l in links_bytes.iter() {
-        let s = String::from_utf8(Vec::from(l.as_ref())).chain_err(|| "link")?;
+        let s = String::from_utf8(Vec::from(l.as_ref())).with_context(|| "link")?;
         links.push(s);
     }
     Ok(Node { links })
@@ -101,17 +94,17 @@ fn read_v115_array(bytes: &Bytes) -> Result<(usize, Vec<Bytes>)> {
     if i < 0 {
         bail!("truncated before entries")
     };
-    let i: usize = usize::try_from(i).chain_err(|| "way too many entries")?;
+    let i: usize = usize::try_from(i).with_context(|| "way too many entries")?;
     c += i;
     let mut res = Vec::<Bytes>::new();
     let mut entries_read = 0;
     while entry > 0 {
         let (key_bytes_u64, i) = varint::read(&bytes.slice(c..));
-        let key_bytes = usize::try_from(key_bytes_u64).chain_err(|| "too many")?;
+        let key_bytes = usize::try_from(key_bytes_u64).with_context(|| "too many")?;
         if i < 0 {
             bail!("node truncated in entry length")
         }
-        let i: usize = usize::try_from(i).chain_err(|| "way too many")?;
+        let i: usize = usize::try_from(i).with_context(|| "way too many")?;
         if c + i + key_bytes > bytes.len() {
             bail!("node truncated in entries after {}", entries_read)
         }
@@ -124,5 +117,6 @@ fn read_v115_array(bytes: &Bytes) -> Result<(usize, Vec<Bytes>)> {
 }
 
 pub fn read_root(bytes: &Bytes) -> Result<Root> {
-    serde_json::from_str(&read_json(bytes, ReadRoot).chain_err(|| "read")?).chain_err(|| "json")
+    serde_json::from_str(&read_json(bytes, ReadRoot).with_context(|| "read")?)
+        .with_context(|| "json")
 }
