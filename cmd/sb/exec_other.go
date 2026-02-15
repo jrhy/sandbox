@@ -15,7 +15,7 @@ func init() {
 			if len(a) == 0 {
 				return exitSubcommandUsage
 			}
-			fmt.Fprintln(os.Stderr, "sb exec is TODO on this platform")
+			fmt.Fprintln(os.Stderr, "sb exec is TODO on this platform (possible future: bwrap/firejail)")
 			return exitError
 		},
 	}

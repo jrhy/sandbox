@@ -9,6 +9,7 @@ Tool for running potentially-untrusted binaries on macOS:
   `PATH` entries under `/Users`
 
 The `sb exec <command>` subcommand (in `cmd/sb`) mirrors this wrapper behavior.
+On non-macOS platforms, a future implementation could use bwrap/firejail.
 
 ## Files
 
