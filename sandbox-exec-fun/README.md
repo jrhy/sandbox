@@ -8,6 +8,8 @@ Tool for running potentially-untrusted binaries on macOS:
 * reads under `/Users` are denied except for the current directory and any
   `PATH` entries under `/Users`
 
+The `sb exec <command>` subcommand (in `cmd/sb`) mirrors this wrapper behavior.
+
 ## Files
 
 - `example.py`: Python program that creates `sandbox_data`, reads/writes a file, and
