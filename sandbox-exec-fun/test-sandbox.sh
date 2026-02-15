@@ -3,7 +3,14 @@ set -eu
 
 BASE_DIR="$(cd "$(dirname "$0")" && pwd)"
 WRAP="$BASE_DIR/sandbox-wrap.sh"
-PYTHON="/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3"
+PYTHON="${PYTHON:-}"
+if [ -z "$PYTHON" ]; then
+  PYTHON="$(command -v python3 2>/dev/null || true)"
+fi
+if [ -z "$PYTHON" ]; then
+  echo "python3 not found; set PYTHON=/path/to/python3" >&2
+  exit 1
+fi
 USER_DIR="/Users/$(id -un)"
 TEST_ROOT="$(mktemp -d "$USER_DIR/sandbox-exec-fun-test.XXXXXX")"
 BIN_DIR="$TEST_ROOT/bin"

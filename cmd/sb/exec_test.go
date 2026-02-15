@@ -18,8 +18,9 @@ func TestExecPythonExample(t *testing.T) {
 	baseDir := userTempDir(t)
 	copyFile(t, filepath.Join(repoRoot(t), "sandbox-exec-fun", "example.py"), filepath.Join(baseDir, "example.py"))
 
+	python := findPython(t)
 	code, out, err := runSandboxExecTest(baseDir, []string{
-		"/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3",
+		python,
 		"-S",
 		filepath.Join(baseDir, "example.py"),
 	}, map[string]string{
@@ -245,6 +246,23 @@ func runSandboxExecTest(baseDir string, args []string, env map[string]string) (i
 	code, err := runSandboxExec(baseDir, args, env, bytes.NewReader(nil), &stdout, &stderr)
 	out := stdout.String() + stderr.String()
 	return code, out, err
+}
+
+func findPython(t *testing.T) string {
+	t.Helper()
+	candidates := []string{
+		"/usr/bin/python3",
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	if p, err := exec.LookPath("python3"); err == nil {
+		return p
+	}
+	t.Skip("python3 not found")
+	return ""
 }
 
 func runSandboxExecWithProfile(baseDir, profile string, args []string, env map[string]string) (int, string, error) {

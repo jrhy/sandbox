@@ -40,7 +40,7 @@ chmod +x test-sandbox.sh
 ```
 
 Note: the test script creates a temporary directory under `/Users/$USER` and
-cleans it up on exit.
+cleans it up on exit. You can override the Python interpreter with `PYTHON=/path/to/python3`.
 
 ## Expected output (example)
 
