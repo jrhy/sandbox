@@ -75,6 +75,43 @@ func TestExecReadCurrentDir(t *testing.T) {
 	}
 }
 
+func TestExecWriteViaSymlinkedCwd(t *testing.T) {
+	t.Parallel()
+	baseDir := userTempDir(t)
+	linkRoot := userTempDir(t)
+	linkPath := filepath.Join(linkRoot, "cwd-link")
+	if err := os.Symlink(baseDir, linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	target := filepath.Join(linkPath, "note.txt")
+	code, _, err := runSandboxExecTest(linkPath, []string{"/bin/sh", "-c", "echo ok > note.txt"}, nil)
+	if err != nil || code != 0 {
+		t.Fatalf("write via symlink failed: code=%d err=%v", code, err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("expected file not created: %v", err)
+	}
+}
+
+func TestExecPolicySensitivitySymlinkWriteDenied(t *testing.T) {
+	t.Parallel()
+	baseDir := userTempDir(t)
+	linkRoot := userTempDir(t)
+	linkPath := filepath.Join(linkRoot, "cwd-link")
+	if err := os.Symlink(baseDir, linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	profile := buildProfileForTest(t, linkPath, nil)
+	profile = removeWriteRule(profile, filepath.Clean(baseDir))
+	code, _, err := runSandboxExecWithProfile(linkPath, profile, []string{"/bin/sh", "-c", "echo ok > note.txt"}, nil)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("expected symlink write to fail without baseDirReal write allow")
+	}
+}
+
 func TestExecNetworkBlocked(t *testing.T) {
 	t.Parallel()
 	baseDir := userTempDir(t)
@@ -322,6 +359,19 @@ func addAllowNetwork(profile string) string {
 func addAllowReadSubpath(profile, path string) string {
 	line := fmt.Sprintf("(allow file-read* (subpath %s))", quoteProfile(path))
 	return strings.TrimSpace(profile) + "\n" + line + "\n"
+}
+
+func removeWriteRule(profile, path string) string {
+	lines := strings.Split(profile, "\n")
+	out := lines[:0]
+	want := fmt.Sprintf("(allow file-write* (subpath %s))", quoteProfile(path))
+	for _, line := range lines {
+		if strings.TrimSpace(line) == want {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
 }
 
 func userTempDir(t *testing.T) string {

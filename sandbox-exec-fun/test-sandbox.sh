@@ -52,7 +52,15 @@ assert_fail "read from /Users blocked" \
 assert_ok "read current dir" \
   "$WRAP" /bin/cat "$BASE_DIR/README.md"
 
-# 5) network access should be blocked (localhost)
+# 5) writing via symlinked cwd should work
+SYMLINK_DIR="$(mktemp -d "$USER_DIR/sandbox-exec-fun-symlink.XXXXXX")"
+SYMLINK_PATH="$SYMLINK_DIR/cwd-link"
+ln -s "$BASE_DIR" "$SYMLINK_PATH"
+assert_ok "write via symlinked cwd" \
+  /bin/sh -c "cd \"$SYMLINK_PATH\" && \"$WRAP\" /bin/sh -c 'echo ok > symlink.txt'"
+rm -rf "$SYMLINK_DIR"
+
+# 6) network access should be blocked (localhost)
 assert_fail "network blocked" \
   "$WRAP" /bin/sh -c 'python3 -c "import socket; socket.create_connection((\"127.0.0.1\", 80), timeout=1)"'
 

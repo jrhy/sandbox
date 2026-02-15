@@ -15,7 +15,7 @@ import (
 func init() {
 	funcs["magic"] = subcommand{
 		`[files...]`,
-		"analyzes files (or stdin) with libmagic and outputs MIME type",
+		"analyzes files (or stdin) with system libmagic and outputs MIME type",
 		func(a []string) int {
 			o := struct{}{}
 			p := flags.NewParser(&o, 0)

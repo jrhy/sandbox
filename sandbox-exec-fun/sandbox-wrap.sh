@@ -104,6 +104,7 @@ cat > "$PROFILE" <<PROFILE_EOF
 (allow file-read* (subpath "$BASE_DIR"))
 (allow file-read* (subpath "$BASE_DIR_REAL"))
 (allow file-write* (subpath "$BASE_DIR"))
+(allow file-write* (subpath "$BASE_DIR_REAL"))
 (allow file-read* (subpath "$TMP_DIR"))
 (allow file-write* (subpath "$TMP_DIR"))
 $PATH_RULES
