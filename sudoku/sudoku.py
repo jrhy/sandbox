@@ -1,4 +1,5 @@
 import copy
+import sys
 import time
 
 class Puzzle:
@@ -6,13 +7,14 @@ class Puzzle:
         self.a = array
         self.orig = copy.deepcopy(array)
     def __str__(self):
+        res = ""
         res = "\0338"
         res += "╔═════╤═════╤═════╗\n"
         for y in range(len(self.a)):
            res += "║"
            for x in range(len(self.a[y])):
                if (x+1) % 3 == 0 and x < 8:
-                   end="|"
+                   end="┃"
                elif x == 8:
                    end=""
                else:
@@ -40,20 +42,55 @@ sunday_array = [
     [7, 0, 0, 0, 0, 0, 1, 0, 2],
 ]
 
+guesses = 0
+use_single_solution_shortcut = True
+
 def solvePuzzle(p, depth):
-    res = findEmpty(p.a)
-    if res == None:
-        print("yay")
-        return None
-    [y, x] = res
+    global guesses 
+    first_cell = None
+    if use_single_solution_shortcut:
+        choices = compute_choices(p.a)
+        #print("choices for row 0: " + str(choices[0]))
+        constrained = most_constrained_cells(choices)
+
+        for c in constrained:
+            [y, x] = [c[0], c[1]]
+            doit = " meh"
+            if first_cell == None and c[2] == 1:
+                doit = " Let's do that!"
+                first_cell = [y, x]
+            #print("    " + str(c) + " " + str(choices[y][x]) + doit)
+            break
+
+    #if first_cell == None:
+    #    distance = distance_to_complete(p.a)
+    #    print("distances for row 0: " + str(distance[0]))
+    #    most_completing = most_completing_cells(distance, p.a)
+    #    print("most completing: %s", most_completing)
+    #    first_cell = most_completing[0][0:2]
+    #    print("most_completing[0]: " + str(first_cell) + ", distance: " + str(distance[y][x]))
+    
+    if first_cell == None:
+        res = findEmpty(p.a)
+        if res == None:
+            print("yay")
+            print("made %d guesses" % guesses)
+            return None
+        first_cell = res
+        #print('going with empty %d,%d' % (first_cell[0], first_cell[1]))
+    #print('starting with %d,%d' % (y,x))
+    #return None
+    [y, x] = first_cell
     for guess in range(1,10):
         if not validMove(p.a, y, x, guess):
             #print("invalid to guess %d at (%d,%d) depth %d" % (guess, x, y, depth))
             continue
+        guesses += 1
         p.a[y][x] = guess
         #print("trying guess %d at (%d,%d) depth %d" % (guess, x, y, depth))
         print(p)
-        #time.sleep(.005)
+        sys.stdout.flush()
+        time.sleep(.010)
         if solvePuzzle(p, depth+1) == None:
             return None
         #print("backtracking at (%d,%d) depth %d" % (x, y, depth))
@@ -86,6 +123,66 @@ def findEmpty(a):
                True
     return None
 
+def compute_choices(a):
+    res = []
+    for y in range(len(a)):
+       row = []
+       for x in range(len(a[y])):
+           c = []
+           if a[y][x] == 0:
+               for g in range(1, 10):
+                   if validMove(a, y, x, g):
+                       c.append(g)
+           row.append(c)
+       res.append(row)
+    return res
+
+def most_constrained_cells(choices):
+    res = []
+    for y in range(len(choices)):
+       for x in range(len(choices[y])):
+            res.append([y, x, len(choices[y][x])])
+    res.sort(key=lambda arr: arr[2] if arr[2] != 0 else 999)
+    return res
+
+def distance_to_complete(a):
+    res = []
+    for y in range(len(a)):
+       open_in_row = 0
+       for x in range(len(a[y])):
+           open_in_row += a[y][x] == 0
+       row = []
+       for x in range(len(a[y])):
+           row.append(open_in_row)
+       res.append(row)
+    for x in range(len(a[0])):
+        open_in_col = 0
+        for y in range(len(a)):
+           open_in_col += a[y][x] == 0
+        for y in range(len(a)):
+           if res[y][x] > open_in_col:
+               res[y][x] = open_in_col
+    for sy in range(3):
+        for sx in range(3):
+            open_in_subgrid = 0
+            for y in range(sy*3,sy*3+3):
+                for x in range(sx*3,sx*3+3):
+                    open_in_subgrid += a[y][x] == 0
+            for y in range(sy*3,sy*3+3):
+                for x in range(sx*3,sx*3+3):
+                    if res[y][x] > open_in_subgrid:
+                        res[y][x] = open_in_subgrid
+    return res
+
+def most_completing_cells(distance, a):
+    res = []
+    for y in range(len(distance)):
+       for x in range(len(distance[y])):
+            if a[y][x] == 0:
+                res.append([y, x, distance[y][x]]) 
+    res.sort(key=lambda arr: arr[2] if arr[2] != 0 else 999)
+    return res
+    
 def digit_color(p, y, x):
     if p.orig[y][x] != p.a[y][x]:
         return "\033[92m\033[1m"
