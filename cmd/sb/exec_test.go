@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -255,113 +256,57 @@ func TestExecPolicySensitivityNetwork(t *testing.T) {
 
 func TestParseSandboxExecArgs(t *testing.T) {
 	t.Parallel()
-
-	opts, cmd, err := parseSandboxExecArgs([]string{"--minimal-fs", "--network", "/bin/echo", "hi"})
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
+	testCases := []struct {
+		name     string
+		args     []string
+		wantOpts sandboxProfileOptions
+		wantCmd  []string
+		wantErr  string
+	}{
+		{
+			name:     "minimal-fs and network",
+			args:     []string{"--minimal-fs", "--network", "/bin/echo", "hi"},
+			wantOpts: sandboxProfileOptions{AllowNetwork: true, MinimalFS: true},
+			wantCmd:  []string{"/bin/echo", "hi"},
+		},
+		{
+			name:     "allow-runtime alias",
+			args:     []string{"--allow-runtime", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{MinimalFS: true},
+			wantCmd:  []string{"/bin/echo"},
+		},
+		{
+			name:    "help",
+			args:    []string{"-h"},
+			wantCmd: nil,
+		},
+		{
+			name:    "unknown option",
+			args:    []string{"--fs-here-only", "/bin/echo"},
+			wantErr: "unknown option",
+		},
 	}
-	if !opts.MinimalFS {
-		t.Fatalf("expected minimal-fs enabled")
-	}
-	if !opts.AllowNetwork {
-		t.Fatalf("expected network enabled")
-	}
-	if len(cmd) != 2 || cmd[0] != "/bin/echo" || cmd[1] != "hi" {
-		t.Fatalf("unexpected command args: %#v", cmd)
-	}
-}
-
-func TestParseSandboxExecArgsUnknownOption(t *testing.T) {
-	t.Parallel()
-	_, _, err := parseSandboxExecArgs([]string{"--fs-here-only", "/bin/echo"})
-	if err == nil {
-		t.Fatalf("expected parse error for unknown option")
-	}
-}
-
-func TestParseSandboxExecArgsHelp(t *testing.T) {
-	t.Parallel()
-	opts, cmd, err := parseSandboxExecArgs([]string{"-h"})
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if opts.MinimalFS || opts.AllowNetwork {
-		t.Fatalf("unexpected options: %#v", opts)
-	}
-	if cmd != nil {
-		t.Fatalf("expected nil command args for help, got %#v", cmd)
-	}
-}
-
-func TestParseSandboxExecArgsAllowRuntimeAlias(t *testing.T) {
-	t.Parallel()
-	opts, cmd, err := parseSandboxExecArgs([]string{"--allow-runtime", "/bin/echo"})
-	if err != nil {
-		t.Fatalf("parse failed: %v", err)
-	}
-	if !opts.MinimalFS {
-		t.Fatalf("expected minimal-fs enabled via alias")
-	}
-	if len(cmd) != 1 || cmd[0] != "/bin/echo" {
-		t.Fatalf("unexpected command args: %#v", cmd)
-	}
-}
-
-func TestExecPolicyMinimalFSOptionInProfile(t *testing.T) {
-	t.Parallel()
-	profile, err := buildSandboxProfileWithOptions(
-		"/Users/tester/work/repo",
-		"/Users/tester/work/repo",
-		"/Users/tester",
-		"/tmp/sb-test",
-		"/usr/bin:/bin:/Users/tester/bin",
-		sandboxProfileOptions{MinimalFS: true},
-	)
-	if err != nil {
-		t.Fatalf("profile: %v", err)
-	}
-
-	mustHave := []string{
-		"(allow file-read-data (literal \"/dev/autofs_nowait\"))",
-		"(allow file-read-data (literal \"/dev/dtracehelper\"))",
-		"(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))",
-		"(allow ipc-posix-shm-read-data)",
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/Users/tester/.CFUserTextEncoding")),
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/System/Volumes/Data/Users/tester/.CFUserTextEncoding")),
-	}
-	for _, want := range mustHave {
-		if !strings.Contains(profile, want) {
-			t.Fatalf("expected minimal-fs runtime rule %q", want)
-		}
-	}
-}
-
-func TestExecPolicyNoMinimalFSOptionInProfile(t *testing.T) {
-	t.Parallel()
-	profile, err := buildSandboxProfileWithOptions(
-		"/Users/tester/work/repo",
-		"/Users/tester/work/repo",
-		"/Users/tester",
-		"/tmp/sb-test",
-		"/usr/bin:/bin:/Users/tester/bin",
-		sandboxProfileOptions{},
-	)
-	if err != nil {
-		t.Fatalf("profile: %v", err)
-	}
-
-	mustNotHave := []string{
-		"(allow file-read-data (literal \"/dev/autofs_nowait\"))",
-		"(allow file-read-data (literal \"/dev/dtracehelper\"))",
-		"(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))",
-		"(allow ipc-posix-shm-read-data)",
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/Users/tester/.CFUserTextEncoding")),
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/System/Volumes/Data/Users/tester/.CFUserTextEncoding")),
-	}
-	for _, deny := range mustNotHave {
-		if strings.Contains(profile, deny) {
-			t.Fatalf("did not expect minimal-fs runtime rule %q without --minimal-fs", deny)
-		}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotOpts, gotCmd, err := parseSandboxExecArgs(tc.args)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parse failed: %v", err)
+			}
+			if gotOpts != tc.wantOpts {
+				t.Fatalf("unexpected options: got=%#v want=%#v", gotOpts, tc.wantOpts)
+			}
+			if !reflect.DeepEqual(gotCmd, tc.wantCmd) {
+				t.Fatalf("unexpected command args: got=%#v want=%#v", gotCmd, tc.wantCmd)
+			}
+		})
 	}
 }
 
@@ -397,21 +342,69 @@ func TestExecMinimalFSCannotReadPersonalParentFile(t *testing.T) {
 	}
 }
 
-func TestExecPolicyNetworkOptionInProfile(t *testing.T) {
+func TestBuildSandboxProfileWithOptions(t *testing.T) {
 	t.Parallel()
-	profile, err := buildSandboxProfileWithOptions(
-		"/Users/tester/work/repo",
-		"/Users/tester/work/repo",
-		"/Users/tester",
-		"/tmp/sb-test",
-		"/usr/bin:/bin:/Users/tester/bin",
-		sandboxProfileOptions{AllowNetwork: true},
-	)
-	if err != nil {
-		t.Fatalf("profile: %v", err)
+	minimalFSRules := []string{
+		"(allow file-read-data (literal \"/dev/autofs_nowait\"))",
+		"(allow file-read-data (literal \"/dev/dtracehelper\"))",
+		"(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))",
+		"(allow ipc-posix-shm-read-data)",
+		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/Users/tester/.CFUserTextEncoding")),
+		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/System/Volumes/Data/Users/tester/.CFUserTextEncoding")),
 	}
-	if !strings.Contains(profile, "(allow network*)") {
-		t.Fatalf("expected network allow rule")
+	testCases := []struct {
+		name           string
+		opts           sandboxProfileOptions
+		mustContain    []string
+		mustNotContain []string
+	}{
+		{
+			name:        "minimal-fs includes runtime probes",
+			opts:        sandboxProfileOptions{MinimalFS: true},
+			mustContain: minimalFSRules,
+		},
+		{
+			name:           "minimal-fs disabled omits runtime probes",
+			opts:           sandboxProfileOptions{},
+			mustNotContain: minimalFSRules,
+		},
+		{
+			name:        "network option includes network allow rule",
+			opts:        sandboxProfileOptions{AllowNetwork: true},
+			mustContain: []string{"(allow network*)"},
+		},
+		{
+			name:           "network disabled omits network allow rule",
+			opts:           sandboxProfileOptions{},
+			mustNotContain: []string{"(allow network*)"},
+		},
+	}
+	for _, tc := range testCases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			profile, err := buildSandboxProfileWithOptions(
+				"/Users/tester/work/repo",
+				"/Users/tester/work/repo",
+				"/Users/tester",
+				"/tmp/sb-test",
+				"/usr/bin:/bin:/Users/tester/bin",
+				tc.opts,
+			)
+			if err != nil {
+				t.Fatalf("profile: %v", err)
+			}
+			for _, want := range tc.mustContain {
+				if !strings.Contains(profile, want) {
+					t.Fatalf("expected profile to contain %q", want)
+				}
+			}
+			for _, deny := range tc.mustNotContain {
+				if strings.Contains(profile, deny) {
+					t.Fatalf("did not expect profile to contain %q", deny)
+				}
+			}
+		})
 	}
 }
 
