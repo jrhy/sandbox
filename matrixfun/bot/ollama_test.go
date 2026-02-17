@@ -94,7 +94,8 @@ func TestBuildChatRequest(t *testing.T) {
 		DurableMemory:  []string{"User likes concise bullet points"},
 	}
 
-	req := BuildChatRequest("mistral-small3.1", "You are helpful.", promptCtx)
+	now := time.Date(2026, 2, 17, 12, 34, 56, 0, time.UTC)
+	req := buildChatRequestAt("mistral-small3.1", "You are helpful.", promptCtx, now)
 	if req.Model != "mistral-small3.1" {
 		t.Fatalf("model = %q", req.Model)
 	}
@@ -106,6 +107,9 @@ func TestBuildChatRequest(t *testing.T) {
 	}
 	if !strings.Contains(req.Messages[1].Content, "Durable memory") || !strings.Contains(req.Messages[1].Content, "Recent relevant transcript") {
 		t.Fatalf("context block missing sections: %q", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[1].Content, "Time context:") || !strings.Contains(req.Messages[1].Content, "interpret dates/times in Pacific time") {
+		t.Fatalf("context block missing time guidance: %q", req.Messages[1].Content)
 	}
 	if req.Messages[2].Role != "user" || req.Messages[2].Content != "What is the plan?" {
 		t.Fatalf("unexpected user message: %+v", req.Messages[2])

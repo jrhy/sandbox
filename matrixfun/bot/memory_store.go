@@ -16,19 +16,25 @@ import (
 )
 
 type RoomMemory struct {
-	RoomID         string    `json:"room_id"`
-	RollingSummary string    `json:"rolling_summary,omitempty"`
-	DurableMemory  []string  `json:"durable_memory,omitempty"`
-	UpdatedAt      time.Time `json:"updated_at,omitempty"`
+	RoomID         string     `json:"room_id"`
+	RollingSummary string     `json:"rolling_summary,omitempty"`
+	DurableMemory  []string   `json:"durable_memory,omitempty"`
+	Policy         RoomPolicy `json:"policy,omitempty"`
+	UpdatedAt      time.Time  `json:"updated_at,omitempty"`
 }
 
 type RoomMemoryStore struct {
-	dir   string
-	mu    sync.Mutex
-	cache map[id.RoomID]RoomMemory
+	dir       string
+	mirrorDir string
+	mu        sync.Mutex
+	cache     map[id.RoomID]RoomMemory
 }
 
 func NewRoomMemoryStore(dir string) (*RoomMemoryStore, error) {
+	return NewRoomMemoryStoreWithMirror(dir, "")
+}
+
+func NewRoomMemoryStoreWithMirror(dir, mirrorDir string) (*RoomMemoryStore, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		dir = "data/memory"
@@ -36,7 +42,13 @@ func NewRoomMemoryStore(dir string) (*RoomMemoryStore, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create memory dir %q: %w", dir, err)
 	}
-	return &RoomMemoryStore{dir: dir, cache: make(map[id.RoomID]RoomMemory)}, nil
+	mirrorDir = strings.TrimSpace(mirrorDir)
+	if mirrorDir != "" {
+		if err := os.MkdirAll(mirrorDir, 0o755); err != nil {
+			return nil, fmt.Errorf("create policy mirror dir %q: %w", mirrorDir, err)
+		}
+	}
+	return &RoomMemoryStore{dir: dir, mirrorDir: mirrorDir, cache: make(map[id.RoomID]RoomMemory)}, nil
 }
 
 func (s *RoomMemoryStore) Load(roomID id.RoomID) (RoomMemory, error) {
@@ -68,6 +80,7 @@ func (s *RoomMemoryStore) Load(roomID id.RoomID) (RoomMemory, error) {
 		mem.RoomID = string(roomID)
 	}
 	mem.DurableMemory = normalizeDurableMemory(mem.DurableMemory, 50)
+	mem.Policy = normalizeRoomPolicy(mem.Policy)
 	s.cache[roomID] = mem
 	return cloneRoomMemory(mem), nil
 }
@@ -78,6 +91,7 @@ func (s *RoomMemoryStore) Save(roomID id.RoomID, mem RoomMemory) error {
 
 	mem.RoomID = string(roomID)
 	mem.DurableMemory = normalizeDurableMemory(mem.DurableMemory, 50)
+	mem.Policy = normalizeRoomPolicy(mem.Policy)
 	mem.UpdatedAt = time.Now().UTC()
 
 	raw, err := json.MarshalIndent(mem, "", "  ")
@@ -94,6 +108,9 @@ func (s *RoomMemoryStore) Save(roomID id.RoomID, mem RoomMemory) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return fmt.Errorf("replace room memory %q: %w", path, err)
 	}
+	if err := s.writePolicyMirrorLocked(roomID, mem); err != nil {
+		return err
+	}
 
 	s.cache[roomID] = mem
 	return nil
@@ -109,7 +126,42 @@ func (s *RoomMemoryStore) roomPath(roomID id.RoomID) string {
 
 func cloneRoomMemory(mem RoomMemory) RoomMemory {
 	mem.DurableMemory = append([]string(nil), mem.DurableMemory...)
+	mem.Policy.KeepKeywords = append([]string(nil), mem.Policy.KeepKeywords...)
+	mem.Policy.DropKeywords = append([]string(nil), mem.Policy.DropKeywords...)
 	return mem
+}
+
+func (s *RoomMemoryStore) writePolicyMirrorLocked(roomID id.RoomID, mem RoomMemory) error {
+	if s.mirrorDir == "" {
+		return nil
+	}
+	policy := struct {
+		RoomID    string     `json:"room_id"`
+		Policy    RoomPolicy `json:"policy"`
+		UpdatedAt time.Time  `json:"updated_at"`
+	}{
+		RoomID:    string(roomID),
+		Policy:    mem.Policy,
+		UpdatedAt: mem.UpdatedAt,
+	}
+	raw, err := json.MarshalIndent(policy, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal policy mirror for %s: %w", roomID, err)
+	}
+	raw = append(raw, '\n')
+	name := url.PathEscape(string(roomID))
+	if name == "" {
+		name = "unknown-room"
+	}
+	path := filepath.Join(s.mirrorDir, name+".policy.json")
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return fmt.Errorf("write temp policy mirror %q: %w", tmp, err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replace policy mirror %q: %w", path, err)
+	}
+	return nil
 }
 
 func MergeDurableMemory(existing []string, candidates []string, maxItems int) []string {

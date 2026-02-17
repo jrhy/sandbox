@@ -22,6 +22,8 @@ type ContextConfig struct {
 	MaxMessages     int
 	TokenBudget     int
 	SummaryMaxItems int
+	KeepKeywords    []string
+	DropKeywords    []string
 }
 
 type PromptContext struct {
@@ -42,7 +44,7 @@ func BuildPromptContext(cfg ContextConfig, current TranscriptMessage, candidates
 	cfg = normalizeContextConfig(cfg)
 	scored := make([]scoredMessage, 0, len(candidates))
 	for i, msg := range candidates {
-		scored = append(scored, scoredMessage{msg: msg, score: scoreMessage(current, msg), idx: i})
+		scored = append(scored, scoredMessage{msg: msg, score: scoreMessage(cfg, current, msg), idx: i})
 	}
 
 	sort.SliceStable(scored, func(i, j int) bool {
@@ -112,7 +114,7 @@ func normalizeContextConfig(cfg ContextConfig) ContextConfig {
 	return cfg
 }
 
-func scoreMessage(current, candidate TranscriptMessage) int {
+func scoreMessage(cfg ContextConfig, current, candidate TranscriptMessage) int {
 	score := 0
 	if candidate.ThreadRoot != "" && current.ThreadRoot != "" && candidate.ThreadRoot == current.ThreadRoot {
 		score += 5
@@ -135,7 +137,30 @@ func scoreMessage(current, candidate TranscriptMessage) int {
 	if candidate.ThreadRoot != "" && current.ThreadRoot != "" && candidate.ThreadRoot != current.ThreadRoot {
 		score -= 4
 	}
+	if containsAnyKeyword(candidate.Body, cfg.KeepKeywords) {
+		score += 4
+	}
+	if containsAnyKeyword(candidate.Body, cfg.DropKeywords) {
+		score -= 5
+	}
 	return score
+}
+
+func containsAnyKeyword(body string, keywords []string) bool {
+	text := strings.ToLower(strings.TrimSpace(body))
+	if text == "" || len(keywords) == 0 {
+		return false
+	}
+	for _, kw := range keywords {
+		kw = strings.ToLower(strings.TrimSpace(kw))
+		if kw == "" {
+			continue
+		}
+		if strings.Contains(text, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasHighValueContent(body string) bool {

@@ -119,12 +119,16 @@ func IsTimeoutError(err error) bool {
 }
 
 func BuildChatRequest(model, systemPrompt string, promptCtx PromptContext) OllamaChatRequest {
+	return buildChatRequestAt(model, systemPrompt, promptCtx, time.Now())
+}
+
+func buildChatRequestAt(model, systemPrompt string, promptCtx PromptContext, now time.Time) OllamaChatRequest {
 	messages := []ChatMessage{{
 		Role:    "system",
 		Content: strings.TrimSpace(systemPrompt),
 	}}
 
-	contextBlock := renderContextBlock(promptCtx)
+	contextBlock := renderContextBlock(promptCtx, now)
 	if contextBlock != "" {
 		messages = append(messages, ChatMessage{Role: "system", Content: contextBlock})
 	}
@@ -138,8 +142,9 @@ func BuildChatRequest(model, systemPrompt string, promptCtx PromptContext) Ollam
 	}
 }
 
-func renderContextBlock(promptCtx PromptContext) string {
-	parts := make([]string, 0, 4)
+func renderContextBlock(promptCtx PromptContext, now time.Time) string {
+	parts := make([]string, 0, 5)
+	parts = append(parts, renderTimeContext(now))
 
 	if len(promptCtx.DurableMemory) > 0 {
 		parts = append(parts, "Durable memory:\n- "+strings.Join(promptCtx.DurableMemory, "\n- "))
@@ -158,6 +163,23 @@ func renderContextBlock(promptCtx PromptContext) string {
 	}
 
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
+}
+
+func renderTimeContext(now time.Time) string {
+	pacificName := "America/Los_Angeles"
+	pacific := now
+	if loc, err := time.LoadLocation(pacificName); err == nil {
+		pacific = now.In(loc)
+	} else {
+		pacificName = pacific.Location().String()
+	}
+
+	return strings.Join([]string{
+		"Time context:",
+		"- Current time (Pacific): " + pacific.Format(time.RFC1123Z),
+		"- Current time (UTC): " + now.UTC().Format(time.RFC1123Z),
+		"- Unless the user specifies otherwise, interpret dates/times in Pacific time (" + pacificName + ").",
+	}, "\n")
 }
 
 func formatContextLine(msg TranscriptMessage) string {

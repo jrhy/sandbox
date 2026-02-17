@@ -16,7 +16,7 @@ func TestHandleCommand_BaseCommands(t *testing.T) {
 	}{
 		{in: "!ping", want: "pong"},
 		{in: "!echo hello", want: "hello"},
-		{in: "!help", want: "Commands: !ping, !echo <text>, !help, !memory, !memory clear"},
+		{in: "!help", want: "Commands: !ping, !echo <text>, !help, !memory, !memory clear, !policy ..."},
 	}
 	for _, tc := range cases {
 		tc := tc

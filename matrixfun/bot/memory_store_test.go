@@ -55,6 +55,34 @@ func TestRoomMemoryStore_SaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRoomMemoryStore_MirrorWritesPolicyFile(t *testing.T) {
+	t.Parallel()
+
+	storeDir := t.TempDir()
+	mirrorDir := t.TempDir()
+	store, err := NewRoomMemoryStoreWithMirror(storeDir, mirrorDir)
+	if err != nil {
+		t.Fatalf("NewRoomMemoryStoreWithMirror() error = %v", err)
+	}
+	roomID := id.RoomID("!room:example.org")
+	if err := store.Save(roomID, RoomMemory{
+		RoomID: string(roomID),
+		Policy: RoomPolicy{
+			CustomSystemPrompt: "Be concise",
+		},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	matches, err := filepath.Glob(filepath.Join(mirrorDir, "*.policy.json"))
+	if err != nil {
+		t.Fatalf("glob error: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("mirror files = %d, want 1", len(matches))
+	}
+}
+
 func TestRoomMemoryStore_LoadMissingRoom(t *testing.T) {
 	t.Parallel()
 

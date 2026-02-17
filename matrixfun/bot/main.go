@@ -81,11 +81,15 @@ func run(ctx context.Context) error {
 	ambientMode := parseBoolEnv("MATRIX_AMBIENT_MODE")
 	dmRooms := parseRoomSet(os.Getenv("MATRIX_DM_ROOMS"))
 	memoryDir := strings.TrimSpace(os.Getenv("MATRIX_MEMORY_DIR"))
+	policyMirrorDir := strings.TrimSpace(os.Getenv("MATRIX_POLICY_MIRROR_DIR"))
 	statsEvery := parseIntEnv("MATRIX_DECISION_STATS_EVERY", 25)
 	restartAnnouncement := strings.TrimSpace(os.Getenv("MATRIX_RESTART_ANNOUNCE_TEXT"))
 	if restartAnnouncement == "" {
 		restartAnnouncement = defaultRestartAnnouncement
 	}
+	trustedEditors := parseUserSet(os.Getenv("BOT_POLICY_TRUSTED_EDITORS"))
+	chatAPIListen := strings.TrimSpace(os.Getenv("BOT_API_LISTEN"))
+	chatAPIToken := strings.TrimSpace(os.Getenv("BOT_API_TOKEN"))
 
 	client, err := mautrix.NewClient(homeserver, "", "")
 	if err != nil {
@@ -139,11 +143,22 @@ func run(ctx context.Context) error {
 	}
 	conversation := NewConversationStore(250)
 	ollamaClient := NewHTTPOllamaClientWithTimeout(ollamaURL, time.Duration(ollamaTimeoutSeconds)*time.Second)
-	memoryStore, err := NewRoomMemoryStore(memoryDir)
+	memoryStore, err := NewRoomMemoryStoreWithMirror(memoryDir, policyMirrorDir)
 	if err != nil {
 		return fmt.Errorf("init room memory store: %w", err)
 	}
 	decisionStats := newDecisionStats(statsEvery)
+	runtime := &BotRuntime{
+		LLMConfig:            llmCfg,
+		OllamaClient:         ollamaClient,
+		Conversation:         conversation,
+		MemoryStore:          memoryStore,
+		OllamaTimeoutSeconds: ollamaTimeoutSeconds,
+		TrustedPolicyEditors: trustedEditors,
+	}
+	if err := startChatAPIServer(ctx, chatAPIListen, runtime, chatAPIToken); err != nil {
+		return fmt.Errorf("start chat api server: %w", err)
+	}
 	var announceOnce sync.Once
 
 	syncer.OnSync(func(syncCtx context.Context, _ *mautrix.RespSync, _ string) bool {
@@ -176,6 +191,24 @@ func run(ctx context.Context) error {
 			emitDecision()
 			return
 		}
+		if reply, handled, err := handlePolicyCommand(handlerCtx, evt.Sender, evt.RoomID, signals.Body, memoryStore, llmCfg, ollamaClient, trustedEditors); handled {
+			if err != nil {
+				log.Printf("policy command failed in room %s: %v", evt.RoomID, err)
+				action = "policy_error"
+				emitDecision()
+				return
+			}
+			if err := sendAndRecord(handlerCtx, client, login.UserID, conversation, evt.RoomID, reply); err != nil {
+				log.Printf("policy send failed in room %s: %v", evt.RoomID, err)
+				action = "send_error"
+				emitDecision()
+				return
+			}
+			action = "policy_command"
+			reacted = true
+			emitDecision()
+			return
+		}
 
 		if reply, handled := handleCommand(signals.Body, evt.RoomID, memoryStore, conversation); handled {
 			if err := sendAndRecord(handlerCtx, client, login.UserID, conversation, evt.RoomID, reply); err != nil {
@@ -200,8 +233,11 @@ func run(ctx context.Context) error {
 			log.Printf("load room memory failed for %s: %v", evt.RoomID, err)
 			roomMemory = RoomMemory{RoomID: string(evt.RoomID)}
 		}
+		activeLLMCfg := llmCfg
+		activeLLMCfg.SystemPrompt = composeSystemPrompt(llmCfg.SystemPrompt, roomMemory.Policy)
+		activeLLMCfg.Context = applyPolicyToContextConfig(llmCfg.Context, roomMemory.Policy)
 		promptCtx := BuildPromptContextForEvent(
-			llmCfg.Context,
+			activeLLMCfg.Context,
 			current,
 			history,
 			roomMemory.RollingSummary,
@@ -218,7 +254,7 @@ func run(ctx context.Context) error {
 			}
 		}()
 
-		llmReply, err := CallOllama(handlerCtx, ollamaClient, llmCfg, promptCtx)
+		llmReply, err := CallOllama(handlerCtx, ollamaClient, activeLLMCfg, promptCtx)
 		if err != nil {
 			log.Printf("ollama call failed in room %s: %v", evt.RoomID, err)
 			if IsTimeoutError(err) {
@@ -304,6 +340,18 @@ func parseRoomSet(raw string) map[id.RoomID]bool {
 			continue
 		}
 		out[id.RoomID(room)] = true
+	}
+	return out
+}
+
+func parseUserSet(raw string) map[id.UserID]bool {
+	out := make(map[id.UserID]bool)
+	for _, part := range strings.Split(raw, ",") {
+		user := strings.TrimSpace(part)
+		if user == "" {
+			continue
+		}
+		out[id.UserID(user)] = true
 	}
 	return out
 }

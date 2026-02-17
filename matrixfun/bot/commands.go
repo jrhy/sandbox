@@ -16,7 +16,7 @@ func handleCommand(body string, roomID id.RoomID, memoryStore *RoomMemoryStore, 
 	case strings.HasPrefix(body, "!echo "):
 		return strings.TrimSpace(strings.TrimPrefix(body, "!echo ")), true
 	case body == "!help":
-		return "Commands: !ping, !echo <text>, !help, !memory, !memory clear", true
+		return "Commands: !ping, !echo <text>, !help, !memory, !memory clear, !policy ...", true
 	case body == "!memory":
 		if memoryStore == nil {
 			return "Memory store not configured.", true
