@@ -26,7 +26,7 @@ func main() {
 	if f, ok := funcs[os.Args[1]]; ok {
 		exit := f.f(os.Args[2:])
 		if exit == exitSubcommandUsage {
-			fmt.Fprintf(os.Stderr, "usage: sb %s %s\n", os.Args[1], f.usage)
+			printSubcommandUsage(os.Args[1], f)
 		}
 		os.Exit(exit)
 	}
@@ -39,9 +39,17 @@ func die(m string) {
 }
 
 type subcommand struct {
-	usage   string
+	// usage is the command-specific CLI synopsis shown after "sb <name>".
+	// It may be single-line or multiline. Keep additional lines indented for
+	// readable "sb -h" output.
+	usage string
+	// summary is a short one-line description shown in "sb -h" listings.
 	summary string
 	f       func([]string) int
+}
+
+func printSubcommandUsage(name string, c subcommand) {
+	fmt.Fprintf(os.Stderr, "usage: sb %s %s\n", name, c.usage)
 }
 
 func usages() {
