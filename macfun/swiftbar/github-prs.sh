@@ -193,27 +193,39 @@ if [[ ${#other_pr_lines[@]} -gt 0 ]]; then
   done
 fi
 
-# --- Merged PRs I'm involved in (not authored by me) ---
+# --- Merged PRs ---
 merged_data=$(echo "$merged_json" | jq -r '.items[:5] | .[] | [.number, .title, .html_url, .user.login] | @tsv')
-declare -a merged_pr_lines=()
+declare -a my_merged_lines=()
+declare -a other_merged_lines=()
 
 while IFS=$'\t' read -r pr_number title html_url author; do
   [[ -z "$pr_number" ]] && continue
-  # Only show merged PRs by others
-  [[ "$author" == "$GITHUB_USERNAME" ]] && continue
 
   # Truncate and sanitize
   short_title="${title:0:40}"
   [[ ${#title} -gt 40 ]] && short_title="${short_title}..."
   safe_title="${short_title//|/-}"
 
-  merged_pr_lines+=("$author"$'\t'"$safe_title"$'\t'"$html_url")
+  if [[ "$author" == "$GITHUB_USERNAME" ]]; then
+    my_merged_lines+=("$safe_title"$'\t'"$html_url")
+  else
+    other_merged_lines+=("$author"$'\t'"$safe_title"$'\t'"$html_url")
+  fi
 done <<< "$merged_data"
 
-if [[ ${#merged_pr_lines[@]} -gt 0 ]]; then
+if [[ ${#my_merged_lines[@]} -gt 0 ]]; then
+  out "---"
+  out "Recently Merged"
+  for pr_line in "${my_merged_lines[@]}"; do
+    IFS=$'\t' read -r title url <<< "$pr_line"
+    out "$title | image=SF:checkmark.circle.fill color=purple href=$url"
+  done
+fi
+
+if [[ ${#other_merged_lines[@]} -gt 0 ]]; then
   out "---"
   out "Involved In (Merged)"
-  for pr_line in "${merged_pr_lines[@]}"; do
+  for pr_line in "${other_merged_lines[@]}"; do
     IFS=$'\t' read -r author title url <<< "$pr_line"
     out "$author: $title | image=SF:checkmark.circle.fill color=purple href=$url"
   done
