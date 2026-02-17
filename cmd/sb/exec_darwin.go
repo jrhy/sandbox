@@ -18,13 +18,15 @@ import (
 type sandboxProfileOptions struct {
 	AllowNetwork bool
 	MinimalFS    bool
+	NoUser       bool
 }
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] <command> [args...]
+		`[--minimal-fs] [--network] [--no-user] <command> [args...]
     --minimal-fs    restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
-    --network       allow network access`,
+    --network       allow network access
+    --no-user       deny ALL access under /Users; no cwd access; PATH entries under /Users are removed`,
 		"Run a command under a macOS sandbox profile",
 		func(a []string) int {
 			opts, cmdArgs, err := parseSandboxExecArgs(a)
@@ -70,6 +72,8 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			opts.MinimalFS = true
 		case "--network":
 			opts.AllowNetwork = true
+		case "--no-user":
+			opts.NoUser = true
 		default:
 			return sandboxProfileOptions{}, nil, fmt.Errorf("unknown option %q", a)
 		}
@@ -170,10 +174,6 @@ func buildSandboxProfile(baseDir, baseDirReal, userHome, tmpDir, pathEnv string)
 }
 
 func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, pathEnv string, opts sandboxProfileOptions) (string, error) {
-	pathRules := buildPathRules(userHome, pathEnv)
-	parentRules := buildParentRules(baseDir)
-	userDenyRules := buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv)
-
 	buf := &bytes.Buffer{}
 	buf.WriteString("(version 1)\n")
 	buf.WriteString("(deny default)\n\n")
@@ -196,23 +196,35 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	buf.WriteString("(allow file-read-metadata (subpath \"/var\"))\n")
 	buf.WriteString("(allow file-ioctl (subpath \"/dev\"))\n")
 
-	buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDir)))
-	buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDirReal)))
-	buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(baseDir)))
-	buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(baseDirReal)))
-	buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(tmpDir)))
-	buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(tmpDir)))
+	if opts.NoUser {
+		// --no-user: no cwd access, no /Users access. Only system paths,
+		// package manager roots (discovered from PATH), and a temp dir.
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(tmpDir)))
+		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(tmpDir)))
+		buf.WriteString(buildNoUserPathRules(pathEnv))
+		buf.WriteString(buildNoUserDenyRules())
+	} else {
+		pathRules := buildPathRules(userHome, pathEnv)
+		parentRules := buildParentRules(baseDir)
+		userDenyRules := buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv)
 
-	buf.WriteString(pathRules)
-	buf.WriteString(parentRules)
-	buf.WriteString(userDenyRules)
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDir)))
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDirReal)))
+		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(baseDir)))
+		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(baseDirReal)))
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(tmpDir)))
+		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(tmpDir)))
+		buf.WriteString(pathRules)
+		buf.WriteString(parentRules)
+		buf.WriteString(userDenyRules)
+	}
 
 	if opts.MinimalFS {
 		// Extra compatibility allowances for programs that probe host runtime state.
 		buf.WriteString("(allow file-read-data (literal \"/dev/autofs_nowait\"))\n")
 		buf.WriteString("(allow file-read-data (literal \"/dev/dtracehelper\"))\n")
 		buf.WriteString("(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))\n")
-		if userHome != "" {
+		if userHome != "" && !opts.NoUser {
 			buf.WriteString(fmt.Sprintf("(allow file-read-data (literal %s))\n", quoteProfile(filepath.Join(userHome, ".CFUserTextEncoding"))))
 			if strings.HasPrefix(userHome, "/Users/") {
 				rel := strings.TrimPrefix(userHome, "/Users/")
@@ -223,6 +235,78 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	}
 
 	return buf.String(), nil
+}
+
+// buildNoUserPathRules discovers package manager roots from PATH entries
+// (e.g., /opt/homebrew/bin → /opt/homebrew) and grants read-only access.
+// Entries under /Users are skipped entirely. Entries already covered by
+// system paths (/usr, /bin, /sbin, /Library, /System) are skipped.
+func buildNoUserPathRules(pathEnv string) string {
+	roots := map[string]bool{}
+	for _, p := range strings.Split(pathEnv, ":") {
+		p = filepath.Clean(p)
+		if p == "" || p == "." {
+			continue
+		}
+		// Skip /Users paths — the whole point of --no-user.
+		if strings.HasPrefix(p, "/Users/") || strings.HasPrefix(p, "/System/Volumes/Data/Users/") {
+			continue
+		}
+		// Skip paths already covered by broad system allows.
+		if isSystemPath(p) {
+			continue
+		}
+		root := packageManagerRoot(p)
+		if root != "" {
+			roots[root] = true
+		}
+	}
+	var buf bytes.Buffer
+	for root := range roots {
+		// Parent directory metadata needed for path resolution
+		// (e.g., /opt must be traversable to reach /opt/homebrew).
+		parent := filepath.Dir(root)
+		if parent != "/" {
+			buf.WriteString(fmt.Sprintf("(allow file-read-metadata (literal %s))\n", quoteProfile(parent)))
+		}
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(root)))
+		buf.WriteString(fmt.Sprintf("(allow file-map-executable (subpath %s))\n", quoteProfile(root)))
+	}
+	return buf.String()
+}
+
+func isSystemPath(p string) bool {
+	for _, dir := range []string{"/usr", "/bin", "/sbin", "/Library", "/System", "/etc", "/private", "/dev"} {
+		if p == dir || strings.HasPrefix(p, dir+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// packageManagerRoot returns the top-level root for known package managers,
+// or the path itself for unknown non-system paths.
+func packageManagerRoot(path string) string {
+	switch {
+	case strings.HasPrefix(path, "/opt/homebrew"):
+		return "/opt/homebrew"
+	case strings.HasPrefix(path, "/nix/"):
+		return "/nix"
+	default:
+		return path
+	}
+}
+
+// buildNoUserDenyRules produces hard deny rules for all user data paths.
+// Placed at the end of the profile to override broader allows (e.g., /System
+// covers /System/Volumes/Data/Users via APFS firmlink).
+func buildNoUserDenyRules() string {
+	return "(deny file-read* (subpath \"/Users\"))\n" +
+		"(deny file-write* (subpath \"/Users\"))\n" +
+		"(deny file-map-executable (subpath \"/Users\"))\n" +
+		"(deny file-read* (subpath \"/System/Volumes/Data/Users\"))\n" +
+		"(deny file-write* (subpath \"/System/Volumes/Data/Users\"))\n" +
+		"(deny file-map-executable (subpath \"/System/Volumes/Data/Users\"))\n"
 }
 
 func buildPathRules(userHome, pathEnv string) string {

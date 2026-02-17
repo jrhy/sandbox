@@ -283,3 +283,117 @@ func TestExecLong_MinimalFSCannotReadPersonalParentFile(t *testing.T) {
 		t.Fatalf("personal file outside cwd unexpectedly readable in minimal-fs mode: %s", stdout.String()+stderr.String())
 	}
 }
+
+// --no-user tests
+
+func TestExecLong_NoUserRunsCommand(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/usr/bin/true"}, nil, sandboxProfileOptions{NoUser: true}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil || code != 0 {
+		t.Fatalf("--no-user command failed: code=%d err=%v out=%s", code, err, stdout.String()+stderr.String())
+	}
+}
+
+func TestExecLong_NoUserBlocksReadingUsersDir(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	secretFile := filepath.Join(userHomeForTests(t), ".CFUserTextEncoding")
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/cat", secretFile}, nil, sandboxProfileOptions{NoUser: true}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("cat failed: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("--no-user: reading file under /Users unexpectedly succeeded")
+	}
+}
+
+func TestExecLong_NoUserBlocksAPFSFirmlinkToUsers(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	// /System/Volumes/Data/Users is the APFS firmlink that provides an
+	// alternative path to /Users. Without an explicit deny, the broad
+	// (allow file-read* (subpath "/System")) would grant access.
+	home := userHomeForTests(t)
+	username := strings.TrimPrefix(home, "/Users/")
+	firmlinkPath := filepath.Join("/System/Volumes/Data/Users", username, ".CFUserTextEncoding")
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/cat", firmlinkPath}, nil, sandboxProfileOptions{NoUser: true}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("cat failed: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("--no-user: reading via APFS firmlink /System/Volumes/Data/Users unexpectedly succeeded")
+	}
+}
+
+func TestExecLong_NoUserBlocksReadingCwd(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	testFile := filepath.Join(baseDir, "note.txt")
+	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/cat", testFile}, nil, sandboxProfileOptions{NoUser: true}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("cat failed: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("--no-user: reading cwd file unexpectedly succeeded (cwd is under /Users)")
+	}
+}
+
+func TestExecLong_NoUserPythonStdinStdout(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	python := findPython(t)
+	baseDir := userTempDir(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{python, "-IS", "-c", `import json,sys; data=json.load(sys.stdin); print(json.dumps({"n":len(data)}))`},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{NoUser: true},
+		strings.NewReader(`[1,2,3]`),
+		&stdout, &stderr,
+	)
+	if err != nil || code != 0 {
+		t.Fatalf("--no-user python stdin/stdout failed: code=%d err=%v out=%s", code, err, stdout.String()+stderr.String())
+	}
+	if !strings.Contains(stdout.String(), `"n": 3`) && !strings.Contains(stdout.String(), `"n":3`) {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestExecLong_NoUserBlocksNetwork(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	cmd := `python3 -c "import socket; socket.create_connection(('127.0.0.1', 80), timeout=1)"`
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", cmd}, nil, sandboxProfileOptions{NoUser: true}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("network test failed: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("--no-user: network unexpectedly succeeded")
+	}
+}
+
+func TestExecLong_NoUserWithRuntimeRunsCommand(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/usr/bin/true"}, nil, sandboxProfileOptions{NoUser: true, MinimalFS: true}, bytes.NewReader(nil), &stdout, &stderr)
+	if err != nil || code != 0 {
+		t.Fatalf("--runtime --no-user command failed: code=%d err=%v out=%s", code, err, stdout.String()+stderr.String())
+	}
+}
