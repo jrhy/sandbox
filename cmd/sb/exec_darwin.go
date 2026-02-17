@@ -15,19 +15,30 @@ import (
 	"strings"
 )
 
+type sandboxProfileOptions struct {
+	AllowNetwork bool
+	MinimalFS    bool
+}
+
 func init() {
 	funcs["exec"] = subcommand{
-		"<command> [args...]",
+		`[--minimal-fs] [--network] <command> [args...]
+    --minimal-fs    restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
+    --network       allow network access`,
 		"Run a command under a macOS sandbox profile",
 		func(a []string) int {
-			if len(a) == 0 {
+			opts, cmdArgs, err := parseSandboxExecArgs(a)
+			if err != nil {
+				die(fmt.Sprintf("parse: %v", err))
+			}
+			if len(cmdArgs) == 0 {
 				return exitSubcommandUsage
 			}
 			baseDir, err := os.Getwd()
 			if err != nil {
 				die(fmt.Sprintf("cwd: %v", err))
 			}
-			exitCode, err := runSandboxExec(baseDir, a, nil, os.Stdin, os.Stdout, os.Stderr)
+			exitCode, err := runSandboxExecWithOptions(baseDir, cmdArgs, nil, opts, os.Stdin, os.Stdout, os.Stderr)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				if exitCode == 0 {
@@ -39,7 +50,39 @@ func init() {
 	}
 }
 
+func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error) {
+	opts := sandboxProfileOptions{}
+	remaining := args
+	for len(remaining) > 0 {
+		a := remaining[0]
+		if a == "-h" || a == "--help" {
+			return opts, nil, nil
+		}
+		if a == "--" {
+			remaining = remaining[1:]
+			break
+		}
+		if !strings.HasPrefix(a, "--") || a == "-" {
+			break
+		}
+		switch a {
+		case "--minimal-fs", "--runtime", "--allow-runtime":
+			opts.MinimalFS = true
+		case "--network":
+			opts.AllowNetwork = true
+		default:
+			return sandboxProfileOptions{}, nil, fmt.Errorf("unknown option %q", a)
+		}
+		remaining = remaining[1:]
+	}
+	return opts, remaining, nil
+}
+
 func runSandboxExec(baseDir string, args []string, envOverride map[string]string, stdin io.Reader, stdout io.Writer, stderr io.Writer) (int, error) {
+	return runSandboxExecWithOptions(baseDir, args, envOverride, sandboxProfileOptions{}, stdin, stdout, stderr)
+}
+
+func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[string]string, opts sandboxProfileOptions, stdin io.Reader, stdout io.Writer, stderr io.Writer) (int, error) {
 	if len(args) == 0 {
 		return exitSubcommandUsage, errors.New("missing command")
 	}
@@ -87,7 +130,7 @@ func runSandboxExec(baseDir string, args []string, envOverride map[string]string
 		}
 	}
 
-	profile, err := buildSandboxProfile(baseDir, baseDirReal, userHome, tmpDir, pathEnv)
+	profile, err := buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, pathEnv, opts)
 	if err != nil {
 		return exitError, err
 	}
@@ -123,6 +166,10 @@ func runSandboxExec(baseDir string, args []string, envOverride map[string]string
 }
 
 func buildSandboxProfile(baseDir, baseDirReal, userHome, tmpDir, pathEnv string) (string, error) {
+	return buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, pathEnv, sandboxProfileOptions{})
+}
+
+func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, pathEnv string, opts sandboxProfileOptions) (string, error) {
 	pathRules := buildPathRules(userHome, pathEnv)
 	parentRules := buildParentRules(baseDir)
 	userDenyRules := buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv)
@@ -134,10 +181,16 @@ func buildSandboxProfile(baseDir, baseDirReal, userHome, tmpDir, pathEnv string)
 	buf.WriteString("(allow sysctl-read)\n")
 	buf.WriteString("(allow mach-lookup)\n\n")
 
+	if opts.AllowNetwork {
+		buf.WriteString("(allow network*)\n")
+	}
+	buf.WriteString("\n")
+
 	buf.WriteString("(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/Library\") (subpath \"/System/Volumes/Data/Library\") (subpath \"/private\") (subpath \"/etc\") (subpath \"/dev\") (subpath \"/bin\") (subpath \"/sbin\"))\n")
 	buf.WriteString("(allow file-map-executable (subpath \"/System\") (subpath \"/usr\") (subpath \"/Library\") (subpath \"/System/Volumes/Data/Library\") (subpath \"/bin\") (subpath \"/sbin\"))\n")
 	buf.WriteString("(allow file-read-metadata (subpath \"/System/Cryptexes/App\") (subpath \"/System/Cryptexes/OS\"))\n")
 	buf.WriteString("(allow file-write* (literal \"/dev/null\") (literal \"/dev/tty\") (literal \"/dev/fd\"))\n")
+	// Many programs probe "/" during startup; allowing literal "/" does not grant recursive access.
 	buf.WriteString("(allow file-read-data (literal \"/\"))\n")
 	buf.WriteString("(allow file-read-metadata (literal \"/\"))\n")
 	buf.WriteString("(allow file-read-metadata (subpath \"/var\"))\n")
@@ -153,6 +206,21 @@ func buildSandboxProfile(baseDir, baseDirReal, userHome, tmpDir, pathEnv string)
 	buf.WriteString(pathRules)
 	buf.WriteString(parentRules)
 	buf.WriteString(userDenyRules)
+
+	if opts.MinimalFS {
+		// Extra compatibility allowances for programs that probe host runtime state.
+		buf.WriteString("(allow file-read-data (literal \"/dev/autofs_nowait\"))\n")
+		buf.WriteString("(allow file-read-data (literal \"/dev/dtracehelper\"))\n")
+		buf.WriteString("(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))\n")
+		if userHome != "" {
+			buf.WriteString(fmt.Sprintf("(allow file-read-data (literal %s))\n", quoteProfile(filepath.Join(userHome, ".CFUserTextEncoding"))))
+			if strings.HasPrefix(userHome, "/Users/") {
+				rel := strings.TrimPrefix(userHome, "/Users/")
+				buf.WriteString(fmt.Sprintf("(allow file-read-data (literal %s))\n", quoteProfile(filepath.Join("/System/Volumes/Data/Users", rel, ".CFUserTextEncoding"))))
+			}
+		}
+		buf.WriteString("(allow ipc-posix-shm-read-data)\n")
+	}
 
 	return buf.String(), nil
 }

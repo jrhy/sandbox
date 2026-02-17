@@ -9,10 +9,12 @@ import (
 
 func init() {
 	funcs["exec"] = subcommand{
-		"<command> [args...]",
+		`[--minimal-fs] [--network] <command> [args...]
+    --minimal-fs    restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
+    --network       allow network access`,
 		"Run a command under a macOS sandbox profile",
 		func(a []string) int {
-			if len(a) == 0 {
+			if len(a) == 0 || (len(a) == 1 && (a[0] == "-h" || a[0] == "--help")) {
 				return exitSubcommandUsage
 			}
 			fmt.Fprintln(os.Stderr, "sb exec is TODO on this platform (possible future: bwrap/firejail)")
