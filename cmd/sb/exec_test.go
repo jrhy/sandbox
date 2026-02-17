@@ -14,6 +14,7 @@ import (
 )
 
 func TestExecPythonExample(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	copyFile(t, filepath.Join(repoRoot(t), "sandbox-exec-fun", "example.py"), filepath.Join(baseDir, "example.py"))
@@ -36,6 +37,7 @@ func TestExecPythonExample(t *testing.T) {
 }
 
 func TestExecLsBlocked(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	code, _, err := runSandboxExecTest(baseDir, []string{"/bin/ls", ".."}, nil)
@@ -48,6 +50,7 @@ func TestExecLsBlocked(t *testing.T) {
 }
 
 func TestExecReadUsersBlocked(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	code, _, err := runSandboxExecTest(baseDir, []string{"/bin/cat", filepath.Join(userHomeForTests(t), ".CFUserTextEncoding")}, nil)
@@ -60,6 +63,7 @@ func TestExecReadUsersBlocked(t *testing.T) {
 }
 
 func TestExecReadCurrentDir(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	content := "hello"
@@ -77,6 +81,7 @@ func TestExecReadCurrentDir(t *testing.T) {
 }
 
 func TestExecWriteViaSymlinkedCwd(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	linkRoot := userTempDir(t)
@@ -95,6 +100,7 @@ func TestExecWriteViaSymlinkedCwd(t *testing.T) {
 }
 
 func TestExecPolicySensitivitySymlinkWriteDenied(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	linkRoot := userTempDir(t)
@@ -114,6 +120,7 @@ func TestExecPolicySensitivitySymlinkWriteDenied(t *testing.T) {
 }
 
 func TestExecNetworkBlocked(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	cmd := "python3 -c \"import socket; socket.create_connection(('127.0.0.1', 80), timeout=1)\""
@@ -127,6 +134,7 @@ func TestExecNetworkBlocked(t *testing.T) {
 }
 
 func TestExecPathAllowlistUnderUsers(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	pathRoot := userTempDir(t)
@@ -150,6 +158,7 @@ func TestExecPathAllowlistUnderUsers(t *testing.T) {
 }
 
 func TestExecNonPathUsersBlocked(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	secretRoot := userTempDir(t)
@@ -167,6 +176,7 @@ func TestExecNonPathUsersBlocked(t *testing.T) {
 }
 
 func TestExecGitOutsideBlocked(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	repoDir := userTempDir(t)
@@ -195,6 +205,7 @@ func TestExecGitOutsideBlocked(t *testing.T) {
 }
 
 func TestExecPolicySensitivityLsParent(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	parentDir := filepath.Dir(baseDir)
@@ -209,6 +220,7 @@ func TestExecPolicySensitivityLsParent(t *testing.T) {
 }
 
 func TestExecPolicySensitivityUsersRead(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	secretRoot := userTempDir(t)
@@ -226,6 +238,7 @@ func TestExecPolicySensitivityUsersRead(t *testing.T) {
 }
 
 func TestExecPolicySensitivityNetwork(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	profile := buildProfileForTest(t, baseDir, nil)
@@ -296,16 +309,25 @@ func TestParseSandboxExecArgsAllowRuntimeAlias(t *testing.T) {
 
 func TestExecPolicyMinimalFSOptionInProfile(t *testing.T) {
 	t.Parallel()
-	baseDir := userTempDir(t)
-	profile := buildProfileForTestWithOptions(t, baseDir, nil, sandboxProfileOptions{MinimalFS: true})
+	profile, err := buildSandboxProfileWithOptions(
+		"/Users/tester/work/repo",
+		"/Users/tester/work/repo",
+		"/Users/tester",
+		"/tmp/sb-test",
+		"/usr/bin:/bin:/Users/tester/bin",
+		sandboxProfileOptions{MinimalFS: true},
+	)
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
 
 	mustHave := []string{
 		"(allow file-read-data (literal \"/dev/autofs_nowait\"))",
 		"(allow file-read-data (literal \"/dev/dtracehelper\"))",
 		"(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))",
 		"(allow ipc-posix-shm-read-data)",
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile(filepath.Join(userHomeForTests(t), ".CFUserTextEncoding"))),
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile(filepath.Join("/System/Volumes/Data/Users", strings.TrimPrefix(userHomeForTests(t), "/Users/"), ".CFUserTextEncoding"))),
+		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/Users/tester/.CFUserTextEncoding")),
+		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/System/Volumes/Data/Users/tester/.CFUserTextEncoding")),
 	}
 	for _, want := range mustHave {
 		if !strings.Contains(profile, want) {
@@ -316,16 +338,25 @@ func TestExecPolicyMinimalFSOptionInProfile(t *testing.T) {
 
 func TestExecPolicyNoMinimalFSOptionInProfile(t *testing.T) {
 	t.Parallel()
-	baseDir := userTempDir(t)
-	profile := buildProfileForTestWithOptions(t, baseDir, nil, sandboxProfileOptions{})
+	profile, err := buildSandboxProfileWithOptions(
+		"/Users/tester/work/repo",
+		"/Users/tester/work/repo",
+		"/Users/tester",
+		"/tmp/sb-test",
+		"/usr/bin:/bin:/Users/tester/bin",
+		sandboxProfileOptions{},
+	)
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
 
 	mustNotHave := []string{
 		"(allow file-read-data (literal \"/dev/autofs_nowait\"))",
 		"(allow file-read-data (literal \"/dev/dtracehelper\"))",
 		"(allow file-read-data (literal \"/Library/Preferences/Logging/com.apple.diagnosticd.filter.plist\"))",
 		"(allow ipc-posix-shm-read-data)",
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile(filepath.Join(userHomeForTests(t), ".CFUserTextEncoding"))),
-		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile(filepath.Join("/System/Volumes/Data/Users", strings.TrimPrefix(userHomeForTests(t), "/Users/"), ".CFUserTextEncoding"))),
+		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/Users/tester/.CFUserTextEncoding")),
+		fmt.Sprintf("(allow file-read-data (literal %s))", quoteProfile("/System/Volumes/Data/Users/tester/.CFUserTextEncoding")),
 	}
 	for _, deny := range mustNotHave {
 		if strings.Contains(profile, deny) {
@@ -335,6 +366,7 @@ func TestExecPolicyNoMinimalFSOptionInProfile(t *testing.T) {
 }
 
 func TestExecMinimalFSOptionRunsCommand(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	var stdout bytes.Buffer
@@ -346,6 +378,7 @@ func TestExecMinimalFSOptionRunsCommand(t *testing.T) {
 }
 
 func TestExecMinimalFSCannotReadPersonalParentFile(t *testing.T) {
+	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
 	parentDir := userTempDir(t)
@@ -366,10 +399,30 @@ func TestExecMinimalFSCannotReadPersonalParentFile(t *testing.T) {
 
 func TestExecPolicyNetworkOptionInProfile(t *testing.T) {
 	t.Parallel()
-	baseDir := userTempDir(t)
-	profile := buildProfileForTestWithOptions(t, baseDir, nil, sandboxProfileOptions{AllowNetwork: true})
+	profile, err := buildSandboxProfileWithOptions(
+		"/Users/tester/work/repo",
+		"/Users/tester/work/repo",
+		"/Users/tester",
+		"/tmp/sb-test",
+		"/usr/bin:/bin:/Users/tester/bin",
+		sandboxProfileOptions{AllowNetwork: true},
+	)
+	if err != nil {
+		t.Fatalf("profile: %v", err)
+	}
 	if !strings.Contains(profile, "(allow network*)") {
 		t.Fatalf("expected network allow rule")
+	}
+}
+
+func requireLongTest(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping integration-style sandbox test in -short mode")
+	}
+	home := userHomeForTests(t)
+	if _, err := os.Stat(home); err != nil {
+		t.Skipf("home %q not accessible for integration-style sandbox test: %v", home, err)
 	}
 }
 
