@@ -36,7 +36,13 @@ Elision policy:
 
 Style:
 - Be concise, accurate, and friendly.
-- In group rooms, keep replies short by default.`
+- In group rooms, keep replies short by default.
+
+Mutation safety:
+- Do not claim state changes (memory/policy/task updates) unless a real command path performed them.
+- If the user asks for a mutation in plain language, ask them to use explicit commands.
+- For memory edits, prefer commands like: !memory, !memory forget <text>, !memory clear.
+- For policy edits, prefer commands like: !policy show, !policy set ..., !policy edit ..., !policy reset.`
 
 const defaultRestartAnnouncement = "gobot restarted and finished initial sync."
 
@@ -91,47 +97,6 @@ func run(ctx context.Context) error {
 	chatAPIListen := strings.TrimSpace(os.Getenv("BOT_API_LISTEN"))
 	chatAPIToken := strings.TrimSpace(os.Getenv("BOT_API_TOKEN"))
 
-	client, err := mautrix.NewClient(homeserver, "", "")
-	if err != nil {
-		return fmt.Errorf("new client: %w", err)
-	}
-
-	login, err := client.Login(ctx, &mautrix.ReqLogin{
-		Type: "m.login.password",
-		Identifier: mautrix.UserIdentifier{
-			Type: mautrix.IdentifierTypeUser,
-			User: user,
-		},
-		Password: pass,
-	})
-	if err != nil {
-		return fmt.Errorf("login failed: %w", err)
-	}
-	client.SetCredentials(login.UserID, login.AccessToken)
-	store, err := newFileSyncStore(stateFile)
-	if err != nil {
-		return fmt.Errorf("init sync store: %w", err)
-	}
-	client.Store = store
-
-	if room != "" {
-		if _, err := client.JoinRoom(ctx, room, nil); err != nil {
-			log.Printf("join room %q failed: %v", room, err)
-		} else {
-			log.Printf("joined room %s", room)
-		}
-	}
-
-	syncer, ok := client.Syncer.(*mautrix.DefaultSyncer)
-	if !ok {
-		return fmt.Errorf("unexpected syncer type %T", client.Syncer)
-	}
-
-	routingCfg := RoutingConfig{
-		BotUserID:     login.UserID,
-		CommandPrefix: "!",
-		AmbientMode:   ambientMode,
-	}
 	llmCfg := LLMConfig{
 		Model:        ollamaModel,
 		SystemPrompt: systemPrompt,
@@ -148,7 +113,7 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("init room memory store: %w", err)
 	}
 	decisionStats := newDecisionStats(statsEvery)
-	runtime := &BotRuntime{
+	botRuntime := &BotRuntime{
 		LLMConfig:            llmCfg,
 		OllamaClient:         ollamaClient,
 		Conversation:         conversation,
@@ -156,33 +121,150 @@ func run(ctx context.Context) error {
 		OllamaTimeoutSeconds: ollamaTimeoutSeconds,
 		TrustedPolicyEditors: trustedEditors,
 	}
-	if err := startChatAPIServer(ctx, chatAPIListen, runtime, chatAPIToken); err != nil {
+
+	if err := startChatAPIServer(ctx, chatAPIListen, botRuntime, chatAPIToken); err != nil {
 		return fmt.Errorf("start chat api server: %w", err)
 	}
+
+	loopCfg := matrixLoopConfig{
+		Homeserver:          homeserver,
+		User:                user,
+		Pass:                pass,
+		Room:                room,
+		StateFile:           stateFile,
+		DMRooms:             dmRooms,
+		AmbientMode:         ambientMode,
+		RestartAnnouncement: restartAnnouncement,
+		Runtime:             botRuntime,
+		DecisionStats:       decisionStats,
+	}
+
+	go matrixLoop(ctx, loopCfg)
+
+	<-ctx.Done()
+	return nil
+}
+
+type matrixLoopConfig struct {
+	Homeserver          string
+	User                string
+	Pass                string
+	Room                string
+	StateFile           string
+	DMRooms             map[id.RoomID]bool
+	AmbientMode         bool
+	RestartAnnouncement string
+	Runtime             *BotRuntime
+	DecisionStats       *decisionStats
+}
+
+func matrixLoop(ctx context.Context, cfg matrixLoopConfig) {
+	delay := 1 * time.Second
+	maxDelay := 5 * time.Minute
 	var announceOnce sync.Once
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		start := time.Now()
+		err := runMatrixSession(ctx, cfg, &announceOnce)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			log.Printf("matrix session ended with error: %v", err)
+		} else {
+			log.Printf("matrix session ended")
+		}
+
+		if time.Since(start) >= 60*time.Second {
+			delay = 1 * time.Second
+		}
+
+		log.Printf("matrix reconnect in %s", delay)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		delay *= 2
+		if delay > maxDelay {
+			delay = maxDelay
+		}
+	}
+}
+
+func runMatrixSession(ctx context.Context, cfg matrixLoopConfig, announceOnce *sync.Once) error {
+	client, err := mautrix.NewClient(cfg.Homeserver, "", "")
+	if err != nil {
+		return fmt.Errorf("new client: %w", err)
+	}
+
+	login, err := client.Login(ctx, &mautrix.ReqLogin{
+		Type: "m.login.password",
+		Identifier: mautrix.UserIdentifier{
+			Type: mautrix.IdentifierTypeUser,
+			User: cfg.User,
+		},
+		Password: cfg.Pass,
+	})
+	if err != nil {
+		return fmt.Errorf("login failed: %w", err)
+	}
+	client.SetCredentials(login.UserID, login.AccessToken)
+
+	store, err := newFileSyncStore(cfg.StateFile)
+	if err != nil {
+		return fmt.Errorf("init sync store: %w", err)
+	}
+	client.Store = store
+
+	if cfg.Room != "" {
+		if _, err := client.JoinRoom(ctx, cfg.Room, nil); err != nil {
+			log.Printf("join room %q failed: %v", cfg.Room, err)
+		} else {
+			log.Printf("joined room %s", cfg.Room)
+		}
+	}
+
+	syncer, ok := client.Syncer.(*mautrix.DefaultSyncer)
+	if !ok {
+		return fmt.Errorf("unexpected syncer type %T", client.Syncer)
+	}
 
 	syncer.OnSync(func(syncCtx context.Context, _ *mautrix.RespSync, _ string) bool {
 		announceOnce.Do(func() {
-			go announceRestart(syncCtx, client, login.UserID, conversation, restartAnnouncement)
+			go announceRestart(syncCtx, client, login.UserID, cfg.Runtime.Conversation, cfg.RestartAnnouncement)
 		})
 		return true
 	})
+
+	routingCfg := RoutingConfig{
+		BotUserID:     login.UserID,
+		CommandPrefix: "!",
+		AmbientMode:   cfg.AmbientMode,
+	}
 
 	syncer.OnEventType(event.EventMessage, func(handlerCtx context.Context, evt *event.Event) {
 		if evt.Sender == login.UserID {
 			return
 		}
 
-		roomIsDM := dmRooms[evt.RoomID]
-		history := conversation.Recent(evt.RoomID, 80)
-		decision, signals := ShouldRespondToEvent(handlerCtx, routingCfg, evt, roomIsDM, conversation)
+		roomIsDM := cfg.DMRooms[evt.RoomID]
+		history := cfg.Runtime.Conversation.Recent(evt.RoomID, 80)
+		decision, signals := ShouldRespondToEvent(handlerCtx, routingCfg, evt, roomIsDM, cfg.Runtime.Conversation)
 		current := TranscriptFromEvent(evt, signals.MentionsBot, false)
-		conversation.Add(evt.RoomID, current)
+		cfg.Runtime.Conversation.Add(evt.RoomID, current)
 		action := "ignored"
 		reacted := false
 		emitDecision := func() {
 			logIncomingDecision(evt, signals, decision, reacted, action)
-			if summary, ok := decisionStats.Record(decision, action, reacted); ok {
+			if summary, ok := cfg.DecisionStats.Record(decision, action, reacted); ok {
 				log.Printf("%s", summary)
 			}
 		}
@@ -191,14 +273,15 @@ func run(ctx context.Context) error {
 			emitDecision()
 			return
 		}
-		if reply, handled, err := handlePolicyCommand(handlerCtx, evt.Sender, evt.RoomID, signals.Body, memoryStore, llmCfg, ollamaClient, trustedEditors); handled {
+
+		if reply, handled, err := handlePolicyCommand(handlerCtx, evt.Sender, evt.RoomID, signals.Body, cfg.Runtime.MemoryStore, cfg.Runtime.LLMConfig, cfg.Runtime.OllamaClient, cfg.Runtime.TrustedPolicyEditors); handled {
 			if err != nil {
 				log.Printf("policy command failed in room %s: %v", evt.RoomID, err)
 				action = "policy_error"
 				emitDecision()
 				return
 			}
-			if err := sendAndRecord(handlerCtx, client, login.UserID, conversation, evt.RoomID, reply); err != nil {
+			if err := sendAndRecord(handlerCtx, client, login.UserID, cfg.Runtime.Conversation, evt.RoomID, reply); err != nil {
 				log.Printf("policy send failed in room %s: %v", evt.RoomID, err)
 				action = "send_error"
 				emitDecision()
@@ -210,8 +293,8 @@ func run(ctx context.Context) error {
 			return
 		}
 
-		if reply, handled := handleCommand(signals.Body, evt.RoomID, memoryStore, conversation); handled {
-			if err := sendAndRecord(handlerCtx, client, login.UserID, conversation, evt.RoomID, reply); err != nil {
+		if reply, handled := handleCommand(signals.Body, evt.RoomID, cfg.Runtime.MemoryStore, cfg.Runtime.Conversation); handled {
+			if err := sendAndRecord(handlerCtx, client, login.UserID, cfg.Runtime.Conversation, evt.RoomID, reply); err != nil {
 				log.Printf("command send failed in room %s: %v", evt.RoomID, err)
 				action = "send_error"
 				emitDecision()
@@ -228,14 +311,14 @@ func run(ctx context.Context) error {
 			return
 		}
 
-		roomMemory, err := memoryStore.Load(evt.RoomID)
+		roomMemory, err := cfg.Runtime.MemoryStore.Load(evt.RoomID)
 		if err != nil {
 			log.Printf("load room memory failed for %s: %v", evt.RoomID, err)
 			roomMemory = RoomMemory{RoomID: string(evt.RoomID)}
 		}
-		activeLLMCfg := llmCfg
-		activeLLMCfg.SystemPrompt = composeSystemPrompt(llmCfg.SystemPrompt, roomMemory.Policy)
-		activeLLMCfg.Context = applyPolicyToContextConfig(llmCfg.Context, roomMemory.Policy)
+		activeLLMCfg := cfg.Runtime.LLMConfig
+		activeLLMCfg.SystemPrompt = composeSystemPrompt(cfg.Runtime.LLMConfig.SystemPrompt, roomMemory.Policy)
+		activeLLMCfg.Context = applyPolicyToContextConfig(cfg.Runtime.LLMConfig.Context, roomMemory.Policy)
 		promptCtx := BuildPromptContextForEvent(
 			activeLLMCfg.Context,
 			current,
@@ -254,12 +337,12 @@ func run(ctx context.Context) error {
 			}
 		}()
 
-		llmReply, err := CallOllama(handlerCtx, ollamaClient, activeLLMCfg, promptCtx)
+		llmReply, err := CallOllama(handlerCtx, cfg.Runtime.OllamaClient, activeLLMCfg, promptCtx)
 		if err != nil {
 			log.Printf("ollama call failed in room %s: %v", evt.RoomID, err)
 			if IsTimeoutError(err) {
-				timeoutReply := fmt.Sprintf("I timed out waiting for Ollama after %ds. Please try again, or increase OLLAMA_TIMEOUT_SECONDS.", ollamaTimeoutSeconds)
-				if sendErr := sendAndRecord(handlerCtx, client, login.UserID, conversation, evt.RoomID, timeoutReply); sendErr != nil {
+				timeoutReply := fmt.Sprintf("I timed out waiting for Ollama after %ds. Please try again, or increase OLLAMA_TIMEOUT_SECONDS.", cfg.Runtime.OllamaTimeoutSeconds)
+				if sendErr := sendAndRecord(handlerCtx, client, login.UserID, cfg.Runtime.Conversation, evt.RoomID, timeoutReply); sendErr != nil {
 					log.Printf("timeout notice send failed in room %s: %v", evt.RoomID, sendErr)
 					action = "send_error"
 					emitDecision()
@@ -286,11 +369,11 @@ func run(ctx context.Context) error {
 			ExtractDurableMemoryCandidates(current.Body),
 			50,
 		)
-		if err := memoryStore.Save(evt.RoomID, roomMemory); err != nil {
+		if err := cfg.Runtime.MemoryStore.Save(evt.RoomID, roomMemory); err != nil {
 			log.Printf("save room memory failed for %s: %v", evt.RoomID, err)
 		}
 
-		if err := sendAndRecord(handlerCtx, client, login.UserID, conversation, evt.RoomID, llmReply); err != nil {
+		if err := sendAndRecord(handlerCtx, client, login.UserID, cfg.Runtime.Conversation, evt.RoomID, llmReply); err != nil {
 			log.Printf("llm send failed in room %s: %v", evt.RoomID, err)
 			action = "send_error"
 			emitDecision()
@@ -301,7 +384,7 @@ func run(ctx context.Context) error {
 		emitDecision()
 	})
 
-	log.Printf("bot running as %s", login.UserID)
+	log.Printf("matrix connected as %s", login.UserID)
 	if err := client.SyncWithContext(ctx); err != nil {
 		return fmt.Errorf("sync stopped: %w", err)
 	}

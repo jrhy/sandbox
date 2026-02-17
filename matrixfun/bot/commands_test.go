@@ -16,7 +16,7 @@ func TestHandleCommand_BaseCommands(t *testing.T) {
 	}{
 		{in: "!ping", want: "pong"},
 		{in: "!echo hello", want: "hello"},
-		{in: "!help", want: "Commands: !ping, !echo <text>, !help, !memory, !memory clear, !policy ..."},
+		{in: "!help", want: "Commands: !ping, !echo <text>, !help, !memory, !memory forget <text>, !memory clear, !policy ..."},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -100,6 +100,46 @@ func TestHandleCommand_MemoryClear(t *testing.T) {
 	recent := conversation.Recent(roomID, 10)
 	if len(recent) != 0 {
 		t.Fatalf("expected conversation cleared, got %+v", recent)
+	}
+}
+
+func TestHandleCommand_MemoryForget(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewRoomMemoryStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRoomMemoryStore() error = %v", err)
+	}
+	roomID := id.RoomID("!room:example.org")
+	if err := store.Save(roomID, RoomMemory{
+		RoomID:        string(roomID),
+		DurableMemory: []string{"Julian bath and homework", "Remember milk"},
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	reply, handled := handleCommand("!memory forget julian", roomID, store, nil)
+	if !handled {
+		t.Fatal("expected !memory forget handled")
+	}
+	if !strings.Contains(reply, "Removed 1 durable memory entry.") {
+		t.Fatalf("unexpected forget reply: %q", reply)
+	}
+
+	mem, err := store.Load(roomID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(mem.DurableMemory) != 1 || mem.DurableMemory[0] != "Remember milk" {
+		t.Fatalf("unexpected durable memory after forget: %+v", mem.DurableMemory)
+	}
+
+	reply, handled = handleCommand("!memory forget missing", roomID, store, nil)
+	if !handled {
+		t.Fatal("expected !memory forget handled")
+	}
+	if !strings.Contains(reply, "No durable memory entries matched") {
+		t.Fatalf("unexpected no-match reply: %q", reply)
 	}
 }
 

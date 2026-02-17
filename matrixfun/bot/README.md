@@ -77,7 +77,7 @@ If `BOT_API_TOKEN` is set, send:
 
 1. Ignore non-text and self messages.
 2. In DM rooms (`MATRIX_DM_ROOMS`): always respond.
-3. Commands (`!ping`, `!echo`, `!help`, `!memory`, `!memory clear`) always respond.
+3. Commands (`!ping`, `!echo`, `!help`, `!memory`, `!memory forget <text>`, `!memory clear`) always respond.
 3. Policy commands (`!policy ...`) always respond.
 4. In group rooms, respond when bot is mentioned, replied to, or thread-targeted.
 5. Ignore messages clearly directed to other users.
@@ -104,6 +104,7 @@ For LLM calls:
 - Use an alias like `#room:<hostname>` or a room ID like `!abcdef:<hostname>`.
 - The bot persists Matrix sync token in `MATRIX_STATE_FILE`, so restarts do not replay old commands.
 - `!memory` prints persisted room summary + durable memory.
+- `!memory forget <text>` removes durable-memory entries that contain `<text>` (case-insensitive).
 - `!memory clear` clears persisted room memory and in-process transcript cache for the current room.
 - Policy commands:
   - `!policy show`
