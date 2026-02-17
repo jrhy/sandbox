@@ -36,6 +36,10 @@ func run(ctx context.Context) error {
 	user := mustEnv("MATRIX_USER")
 	pass := mustEnv("MATRIX_PASS")
 	room := strings.TrimSpace(os.Getenv("MATRIX_ROOM"))
+	stateFile := strings.TrimSpace(os.Getenv("MATRIX_STATE_FILE"))
+	if stateFile == "" {
+		stateFile = ".matrix-bot-state.json"
+	}
 
 	client, err := mautrix.NewClient(homeserver, "", "")
 	if err != nil {
@@ -54,6 +58,11 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("login failed: %w", err)
 	}
 	client.SetCredentials(login.UserID, login.AccessToken)
+	store, err := newFileSyncStore(stateFile)
+	if err != nil {
+		return fmt.Errorf("init sync store: %w", err)
+	}
+	client.Store = store
 
 	if room != "" {
 		if _, err := client.JoinRoom(ctx, room, nil); err != nil {
