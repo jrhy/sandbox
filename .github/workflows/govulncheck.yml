@@ -1,0 +1,38 @@
+name: govulncheck
+
+on:
+  push:
+  pull_request:
+  schedule: # daily at 12:36 UTC
+    - cron: "36 12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  govulncheck:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - .
+          - atmotube
+          - matrixfun/bot
+          - passkeys-webauthn-demo
+          - rc4/rc44csp
+          - s3db-rs
+          - scala-go-scala
+    name: ${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+      - name: Run govulncheck
+        working-directory: ${{ matrix.module }}
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
