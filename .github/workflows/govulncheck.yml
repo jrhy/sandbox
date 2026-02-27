@@ -31,7 +31,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v6
         with:
-          go-version-file: ${{ matrix.module }}/go.mod
+          # Use one modern toolchain so govulncheck itself can run across
+          # modules that declare older minimum Go versions.
+          go-version: "1.25.1"
       - name: Run govulncheck
         working-directory: ${{ matrix.module }}
         run: |
