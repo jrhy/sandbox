@@ -1,6 +1,6 @@
 module localhost/server
 
-go 1.24.13
+go 1.25.7
 
 require (
 	github.com/go-webauthn/webauthn v0.15.0

@@ -1,6 +1,6 @@
 module github.com/jrhy/sandbox/s3db-rs
 
-go 1.17
+go 1.25.7
 
 require github.com/stretchr/testify v1.7.0
 
