@@ -1,0 +1,53 @@
+ARG BASE_IMAGE=docker.io/library/alpine:latest
+FROM ${BASE_IMAGE}
+
+ENV HOME=/data/root
+ENV PATH=/usr/local/bin:${PATH}
+
+RUN apk add --no-cache \
+    bash \
+    ca-certificates \
+    curl \
+    doas \
+    gcompat \
+    git \
+    go \
+    libc6-compat \
+    lsof \
+    nodejs \
+    npm \
+    procps-ng \
+    sqlite \
+    sudo \
+    tmux \
+ && update-ca-certificates \
+ && mkdir -p /etc/sudoers.d /data \
+ && adduser -D -h /data/user -s /bin/bash user \
+ && sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:\)[^:]*:\(.*\)$#\1/data/root:\2#' /etc/passwd \
+ && sed -i 's#^\(root:[^:]*:[^:]*:[^:]*:[^:]*:[^:]*:\).*#\1/bin/bash#' /etc/passwd \
+ && printf 'user ALL=(root) NOPASSWD:ALL\n' >/etc/sudoers.d/10-gastownfun \
+ && chmod 440 /etc/sudoers.d/10-gastownfun \
+ && printf 'permit nopass user as root\n' >/etc/doas.conf \
+ && chmod 0400 /etc/doas.conf \
+ && curl -fsSL https://github.com/dolthub/dolt/releases/latest/download/install.sh | bash \
+ && GOBIN=/usr/local/bin go install github.com/steveyegge/beads/cmd/bd@latest \
+ && npm install --global @openai/codex \
+ && command -v dolt >/dev/null 2>&1 \
+ && command -v bd >/dev/null 2>&1 \
+ && command -v codex >/dev/null 2>&1
+
+# Gastown's go.mod currently has replace directives, so build from a clone.
+# Match upstream make build ldflags so gt marks itself as built properly.
+RUN git clone --depth 1 https://github.com/steveyegge/gastown.git /tmp/gastown \
+ && cd /tmp/gastown \
+ && VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo dev) \
+ && COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) \
+ && BUILD_TIME=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
+ && LDFLAGS="-X github.com/steveyegge/gastown/internal/cmd.Version=$VERSION -X github.com/steveyegge/gastown/internal/cmd.Commit=$COMMIT -X github.com/steveyegge/gastown/internal/cmd.BuildTime=$BUILD_TIME -X github.com/steveyegge/gastown/internal/cmd.BuiltProperly=1" \
+ && go build -ldflags "$LDFLAGS" -o /usr/local/bin/gt ./cmd/gt \
+ && cd / \
+ && rm -rf /tmp/gastown \
+ && command -v gt >/dev/null 2>&1
+RUN apk add ripgrep fd
+
+CMD ["tail", "-f", "/dev/null"]
