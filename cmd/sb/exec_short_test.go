@@ -4,6 +4,9 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,9 +35,20 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 			wantCmd:  []string{"/bin/echo"},
 		},
 		{
+			name:     "http allow",
+			args:     []string{"--http-allow", "*.example.com,api.test.local", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{HTTPAllowHosts: []string{"*.example.com", "api.test.local"}},
+			wantCmd:  []string{"/bin/echo"},
+		},
+		{
 			name:    "help",
 			args:    []string{"-h"},
 			wantCmd: nil,
+		},
+		{
+			name:    "network and http allow conflict",
+			args:    []string{"--network", "--http-allow", "*.example.com", "/bin/echo"},
+			wantErr: "cannot be combined",
 		},
 		{
 			name:    "unknown option",
@@ -56,7 +70,7 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parse failed: %v", err)
 			}
-			if gotOpts != tc.wantOpts {
+			if !reflect.DeepEqual(gotOpts, tc.wantOpts) {
 				t.Fatalf("unexpected options: got=%#v want=%#v", gotOpts, tc.wantOpts)
 			}
 			if !reflect.DeepEqual(gotCmd, tc.wantCmd) {
@@ -87,7 +101,7 @@ func TestExecShort_ParseNoUserWithRuntime(t *testing.T) {
 		t.Fatalf("parse failed: %v", err)
 	}
 	want := sandboxProfileOptions{MinimalFS: true, NoUser: true}
-	if opts != want {
+	if !reflect.DeepEqual(opts, want) {
 		t.Fatalf("unexpected options: got=%#v want=%#v", opts, want)
 	}
 	if !reflect.DeepEqual(cmd, []string{"python3", "-c", "1"}) {
@@ -126,6 +140,14 @@ func TestExecShort_BuildSandboxProfileWithOptions(t *testing.T) {
 			name:        "network option includes network allow rule",
 			opts:        sandboxProfileOptions{AllowNetwork: true},
 			mustContain: []string{"(allow network*)"},
+		},
+		{
+			name: "http allow option restricts network to localhost proxy",
+			opts: sandboxProfileOptions{LocalhostProxyPort: 43123},
+			mustContain: []string{
+				"(allow network-outbound (remote tcp \"localhost:43123\"))",
+			},
+			mustNotContain: []string{"(allow network*)"},
 		},
 		{
 			name:           "network disabled omits network allow rule",
@@ -218,4 +240,62 @@ func TestExecShort_BuildSandboxProfileWithOptions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExecShort_ParseHTTPAllowPatterns(t *testing.T) {
+	t.Parallel()
+	got, err := parseHTTPAllowPatterns(" *.Example.com,api.test.local,,*.Example.com ")
+	if err != nil {
+		t.Fatalf("parseHTTPAllowPatterns failed: %v", err)
+	}
+	want := []string{"*.example.com", "api.test.local"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected patterns: got=%v want=%v", got, want)
+	}
+}
+
+func TestExecShort_ParseHTTPAllowPatternsRejectsInvalidGlob(t *testing.T) {
+	t.Parallel()
+	if _, err := parseHTTPAllowPatterns("["); err == nil {
+		t.Fatalf("expected invalid glob error")
+	}
+}
+
+func TestExecShort_HTTPAllowProxyFiltersHosts(t *testing.T) {
+	t.Parallel()
+	var seenHost string
+	proxy := &allowlistHTTPProxy{
+		patterns: []string{"*.example.com"},
+		transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			seenHost = req.URL.Host
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("ok")),
+			}, nil
+		}),
+	}
+
+	allowedReq := httptest.NewRequest(http.MethodGet, "http://api.example.com/demo", nil)
+	allowedRec := httptest.NewRecorder()
+	proxy.ServeHTTP(allowedRec, allowedReq)
+	if allowedRec.Code != http.StatusAccepted {
+		t.Fatalf("allowed request code=%d body=%q", allowedRec.Code, allowedRec.Body.String())
+	}
+	if seenHost != "api.example.com" {
+		t.Fatalf("unexpected upstream host: %q", seenHost)
+	}
+
+	blockedReq := httptest.NewRequest(http.MethodGet, "http://blocked.test/demo", nil)
+	blockedRec := httptest.NewRecorder()
+	proxy.ServeHTTP(blockedRec, blockedReq)
+	if blockedRec.Code != http.StatusForbidden {
+		t.Fatalf("blocked request code=%d body=%q", blockedRec.Code, blockedRec.Body.String())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
