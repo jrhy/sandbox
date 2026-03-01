@@ -49,6 +49,8 @@ The image baseline installs `git`, `sqlite3`, `tmux`, `dolt`, `bd` (Beads), `gt`
 
 That includes real `procps-ng` and `lsof` binaries instead of the BusyBox applets, because Gastown's Dolt status checks rely on GNU-style `ps` and `lsof`.
 
+The checked-in [`gastownfun/data-golden/`](/Users/jeffr/sandbox/gastownfun/data-golden) directory is the safe reset baseline for reusable, non-personal user dotfiles. It intentionally includes only curated config like shell, tmux, git, and Codex settings, and excludes live state such as `gt/`, caches, histories, and other generated runtime data.
+
 For new Gas Town HQs, `gt` currently defaults the town agent to `claude`. To use Codex, run this once inside each new town:
 
 ```sh
@@ -60,6 +62,8 @@ The container also keeps `~/.codex/config.toml` seeded with:
 ```toml
 project_doc_fallback_filenames = ["CLAUDE.md"]
 ```
+
+The tmux baseline uses vi-style copy and scrollback keys via `mode-keys vi`.
 
 If you experiment inside the container and then decide a change should become permanent, add it to `gastownfun/Containerfile`, run `./gastownfun/ensure-container.sh`, and then use `--recreate` when you are ready to replace the current writable layer with the new baseline.
 
