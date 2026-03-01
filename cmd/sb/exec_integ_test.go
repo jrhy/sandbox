@@ -482,6 +482,114 @@ except urllib.error.HTTPError as e:
 	}
 }
 
+func TestExecLong_HTTPAllowOriginFormUsesReqHostFallback(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewServer(httpTestHandler("origin form ok"))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import os, sys, urllib.parse, http.client
+proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])
+target = urllib.parse.urlparse(sys.argv[1])
+path = target.path or '/'
+if target.query:
+    path += '?' + target.query
+conn = http.client.HTTPConnection(proxy.hostname, proxy.port, timeout=5)
+conn.request('GET', path, headers={'Host': target.netloc})
+resp = conn.getresponse()
+sys.stdout.write(resp.read().decode())`,
+			server.URL + "/origin-form?x=1",
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil || code != 0 {
+		t.Fatalf("--http-allow origin-form request failed: code=%d err=%v out=%s", code, err, out)
+	}
+	if !strings.Contains(stdout.String(), "origin form ok") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestExecLong_HTTPAllowMixedAllowlistAllowsTwoHostsAndBlocksOne(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(r.Host))
+	}))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	port := u.Port()
+	localhostURL := "http://localhost:" + port + "/via-localhost"
+	blockedURL := "http://example.invalid:" + port + "/blocked"
+
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import os, sys, urllib.request, urllib.error
+proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']})
+opener = urllib.request.build_opener(proxy)
+allowed = []
+for url in sys.argv[1:3]:
+    with opener.open(url, timeout=5) as resp:
+        allowed.append(resp.read().decode().strip())
+print("allowed:" + "|".join(allowed))
+try:
+    opener.open(sys.argv[3], timeout=5)
+    print("blocked:unexpected-success")
+    sys.exit(99)
+except urllib.error.HTTPError as e:
+    print(f"blocked:{e.code}")`,
+			server.URL,
+			localhostURL,
+			blockedURL,
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"127.0.0.1", "localhost"}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil {
+		t.Fatalf("--http-allow mixed allowlist failed unexpectedly: %v", err)
+	}
+	if code == 99 {
+		t.Fatalf("--http-allow mixed allowlist unexpectedly allowed blocked host: %s", out)
+	}
+	if !strings.Contains(out, "allowed:127.0.0.1:"+port+"|localhost:"+port) {
+		t.Fatalf("expected both allowed hosts in output, got: %s", out)
+	}
+	if !strings.Contains(out, "blocked:403") {
+		t.Fatalf("expected blocked host to return 403, got: %s", out)
+	}
+}
+
 func TestExecLong_MinimalFSOptionRunsCommand(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
