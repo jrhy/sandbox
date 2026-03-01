@@ -261,6 +261,46 @@ func TestExecShort_ParseHTTPAllowPatternsRejectsInvalidGlob(t *testing.T) {
 	}
 }
 
+func TestExecShort_ParseHTTPAllowPatternsRejectsEmpty(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"", " , , "} {
+		if _, err := parseHTTPAllowPatterns(raw); err == nil || !strings.Contains(err.Error(), "missing hostname glob") {
+			t.Fatalf("raw=%q: expected missing hostname glob error, got %v", raw, err)
+		}
+	}
+}
+
+func TestExecShort_ParseSandboxExecArgsHTTPAllowMissingValue(t *testing.T) {
+	t.Parallel()
+	_, _, err := parseSandboxExecArgs([]string{"--http-allow"})
+	if err == nil || !strings.Contains(err.Error(), "missing value for --http-allow") {
+		t.Fatalf("expected missing value error, got %v", err)
+	}
+}
+
+func TestExecShort_MergeProxyEnv(t *testing.T) {
+	t.Parallel()
+	got := mergeProxyEnv(map[string]string{
+		"HTTP_PROXY": "http://old:1",
+		"NO_PROXY":   "localhost",
+		"CUSTOM":     "keep",
+	}, "http://127.0.0.1:43123")
+	wantProxy := "http://127.0.0.1:43123"
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if got[key] != wantProxy {
+			t.Fatalf("%s=%q want %q", key, got[key], wantProxy)
+		}
+	}
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if got[key] != "" {
+			t.Fatalf("%s=%q want empty", key, got[key])
+		}
+	}
+	if got["CUSTOM"] != "keep" {
+		t.Fatalf("CUSTOM=%q want keep", got["CUSTOM"])
+	}
+}
+
 func TestExecShort_HTTPAllowProxyFiltersHosts(t *testing.T) {
 	t.Parallel()
 	var seenHost string
@@ -291,6 +331,117 @@ func TestExecShort_HTTPAllowProxyFiltersHosts(t *testing.T) {
 	proxy.ServeHTTP(blockedRec, blockedReq)
 	if blockedRec.Code != http.StatusForbidden {
 		t.Fatalf("blocked request code=%d body=%q", blockedRec.Code, blockedRec.Body.String())
+	}
+}
+
+func TestExecShort_HTTPAllowProxyUsesReqHostWhenURLHostMissing(t *testing.T) {
+	t.Parallel()
+	var seenHost string
+	var seenScheme string
+	proxy := &allowlistHTTPProxy{
+		patterns: []string{"api.example.com"},
+		transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			seenHost = req.URL.Host
+			seenScheme = req.URL.Scheme
+			return &http.Response{
+				StatusCode: http.StatusNoContent,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader("")),
+			}, nil
+		}),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/demo", nil)
+	req.Host = "api.example.com"
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: %d body=%q", rec.Code, rec.Body.String())
+	}
+	if seenHost != "api.example.com" {
+		t.Fatalf("unexpected upstream host: %q", seenHost)
+	}
+	if seenScheme != "http" {
+		t.Fatalf("unexpected upstream scheme: %q", seenScheme)
+	}
+}
+
+func TestExecShort_HTTPAllowProxyReturnsBadGatewayOnTransportError(t *testing.T) {
+	t.Parallel()
+	proxy := &allowlistHTTPProxy{
+		patterns: []string{"api.example.com"},
+		transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, fmt.Errorf("boom")
+		}),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/demo", nil)
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("unexpected status: %d body=%q", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "proxy upstream error: boom") {
+		t.Fatalf("unexpected body: %q", rec.Body.String())
+	}
+}
+
+func TestExecShort_HTTPAllowProxyStripsHopByHopHeaders(t *testing.T) {
+	t.Parallel()
+	var seenConnection string
+	var seenProxyAuth string
+	proxy := &allowlistHTTPProxy{
+		patterns: []string{"api.example.com"},
+		transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			seenConnection = req.Header.Get("Connection")
+			seenProxyAuth = req.Header.Get("Proxy-Authorization")
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Header: http.Header{
+					"Connection":        []string{"keep-alive"},
+					"Transfer-Encoding": []string{"chunked"},
+					"X-Upstream":        []string{"ok"},
+				},
+				Body: io.NopCloser(strings.NewReader("ok")),
+			}, nil
+		}),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://api.example.com/demo", nil)
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Proxy-Authorization", "Basic abc")
+	rec := httptest.NewRecorder()
+	proxy.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("unexpected status: %d body=%q", rec.Code, rec.Body.String())
+	}
+	if seenConnection != "" || seenProxyAuth != "" {
+		t.Fatalf("hop-by-hop headers leaked upstream: connection=%q proxy-auth=%q", seenConnection, seenProxyAuth)
+	}
+	if rec.Header().Get("Connection") != "" || rec.Header().Get("Transfer-Encoding") != "" {
+		t.Fatalf("hop-by-hop headers leaked downstream: headers=%v", rec.Header())
+	}
+	if rec.Header().Get("X-Upstream") != "ok" {
+		t.Fatalf("unexpected downstream headers: %v", rec.Header())
+	}
+}
+
+func TestExecShort_HTTPAllowProxyNormalizesHosts(t *testing.T) {
+	t.Parallel()
+	proxy := &allowlistHTTPProxy{patterns: []string{"*.example.com", "api.test.local"}}
+	testCases := []struct {
+		host string
+		want bool
+	}{
+		{host: "API.EXAMPLE.COM.", want: true},
+		{host: "api.test.local", want: true},
+		{host: "Api.Test.Local.", want: true},
+		{host: "blocked.test.local", want: false},
+	}
+	for _, tc := range testCases {
+		if got := proxy.hostAllowed(tc.host); got != tc.want {
+			t.Fatalf("host=%q got=%v want=%v", tc.host, got, tc.want)
+		}
 	}
 }
 

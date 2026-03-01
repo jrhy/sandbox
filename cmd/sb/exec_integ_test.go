@@ -5,6 +5,9 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -252,6 +255,233 @@ func TestExecLong_PolicySensitivityNetwork(t *testing.T) {
 	}
 }
 
+func TestExecLong_HTTPAllowSetsProxyEnv(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{"/usr/bin/env"},
+		map[string]string{
+			"HTTP_PROXY": "http://old:1",
+			"NO_PROXY":   "localhost",
+		},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"allowed.test"}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil || code != 0 {
+		t.Fatalf("--http-allow env test failed: code=%d err=%v out=%s", code, err, out)
+	}
+	env := parseExecEnvOutput(out)
+	wantProxy := env["HTTP_PROXY"]
+	if wantProxy == "" || !strings.HasPrefix(wantProxy, "http://127.0.0.1:") {
+		t.Fatalf("unexpected HTTP_PROXY: %q", wantProxy)
+	}
+	for _, key := range []string{"HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		if env[key] != wantProxy {
+			t.Fatalf("%s=%q want %q", key, env[key], wantProxy)
+		}
+	}
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if env[key] != "" {
+			t.Fatalf("%s=%q want empty", key, env[key])
+		}
+	}
+}
+
+func TestExecLong_HTTPAllowAllowsHTTPToAllowedHost(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewServer(httpTestHandler("allowed over http"))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import os, sys, urllib.request
+proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']})
+opener = urllib.request.build_opener(proxy)
+with opener.open(sys.argv[1], timeout=5) as resp:
+    sys.stdout.write(resp.read().decode())`,
+			server.URL,
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil || code != 0 {
+		t.Fatalf("--http-allow http fetch failed: code=%d err=%v out=%s", code, err, out)
+	}
+	if !strings.Contains(stdout.String(), "allowed over http") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestExecLong_HTTPAllowBlocksHTTPToDisallowedHost(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewServer(httpTestHandler("should not be reachable"))
+	defer server.Close()
+
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import os, sys, urllib.request, urllib.error
+proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']})
+opener = urllib.request.build_opener(proxy)
+try:
+    opener.open(sys.argv[1], timeout=5)
+    sys.exit(99)
+except urllib.error.HTTPError as e:
+    sys.stdout.write(e.read().decode())
+    sys.exit(3)`,
+			server.URL,
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil {
+		t.Fatalf("--http-allow blocked http failed unexpectedly: %v", err)
+	}
+	if code == 0 || code == 99 {
+		t.Fatalf("--http-allow disallowed http unexpectedly succeeded: code=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "blocked by --http-allow") {
+		t.Fatalf("expected explicit block message, got: %s", out)
+	}
+}
+
+func TestExecLong_HTTPAllowStillBlocksRawNetwork(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	cmd := `python3 -c "import socket; socket.create_connection(('127.0.0.1', 80), timeout=1)"`
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{"/bin/sh", "-c", cmd},
+		nil,
+		sandboxProfileOptions{HTTPAllowHosts: []string{"127.0.0.1"}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	if err != nil {
+		t.Fatalf("raw network test failed: %v", err)
+	}
+	if code == 0 {
+		t.Fatalf("raw network unexpectedly succeeded with --http-allow")
+	}
+}
+
+func TestExecLong_HTTPAllowAllowsHTTPSConnect(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewTLSServer(httpTestHandler("allowed over https"))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import os, sys, ssl, urllib.request
+proxy = urllib.request.ProxyHandler({'https': os.environ['HTTPS_PROXY']})
+https = urllib.request.HTTPSHandler(context=ssl._create_unverified_context())
+opener = urllib.request.build_opener(proxy, https)
+with opener.open(sys.argv[1], timeout=5) as resp:
+    sys.stdout.write(resp.read().decode())`,
+			server.URL,
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil || code != 0 {
+		t.Fatalf("--http-allow https CONNECT failed: code=%d err=%v out=%s", code, err, out)
+	}
+	if !strings.Contains(stdout.String(), "allowed over https") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestExecLong_HTTPAllowBlocksHTTPSConnectToDisallowedHost(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewTLSServer(httpTestHandler("should not be reachable over https"))
+	defer server.Close()
+
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import os, sys, ssl, urllib.request, urllib.error
+proxy = urllib.request.ProxyHandler({'https': os.environ['HTTPS_PROXY']})
+https = urllib.request.HTTPSHandler(context=ssl._create_unverified_context())
+opener = urllib.request.build_opener(proxy, https)
+try:
+    opener.open(sys.argv[1], timeout=5)
+    sys.exit(99)
+except urllib.error.HTTPError as e:
+    sys.stdout.write(e.read().decode())
+    sys.exit(3)`,
+			server.URL,
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil {
+		t.Fatalf("--http-allow blocked https failed unexpectedly: %v", err)
+	}
+	if code == 0 || code == 99 {
+		t.Fatalf("--http-allow disallowed https unexpectedly succeeded: code=%d out=%s", code, out)
+	}
+	if !strings.Contains(out, "403 Forbidden") && !strings.Contains(out, "Tunnel connection failed") {
+		t.Fatalf("expected explicit https CONNECT denial, got: %s", out)
+	}
+}
+
 func TestExecLong_MinimalFSOptionRunsCommand(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
@@ -395,5 +625,26 @@ func TestExecLong_NoUserWithRuntimeRunsCommand(t *testing.T) {
 	code, err := runSandboxExecWithOptions(baseDir, []string{"/usr/bin/true"}, nil, sandboxProfileOptions{NoUser: true, MinimalFS: true}, bytes.NewReader(nil), &stdout, &stderr)
 	if err != nil || code != 0 {
 		t.Fatalf("--runtime --no-user command failed: code=%d err=%v out=%s", code, err, stdout.String()+stderr.String())
+	}
+}
+
+func parseExecEnvOutput(out string) map[string]string {
+	env := make(map[string]string)
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		env[parts[0]] = parts[1]
+	}
+	return env
+}
+
+func httpTestHandler(body string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
 	}
 }
