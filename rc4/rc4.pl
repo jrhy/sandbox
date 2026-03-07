@@ -47,6 +47,11 @@ sub encrypt {
 }
 
 ksa();
+
+# Reset i and j to 0 before starting PRGA (required by RC4 spec)
+$i = 0;
+$j = 0;
+
 my @res = encrypt("Plaintext");
 my @expected = (0xBB, 0xF3, 0x16, 0xE8, 0xD9, 0x40, 0xAF, 0x0A, 0xD3);
 
