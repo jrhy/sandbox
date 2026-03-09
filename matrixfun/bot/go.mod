@@ -1,6 +1,6 @@
 module matrixfun/bot
 
-go 1.25.7
+go 1.26.1
 
 require maunium.net/go/mautrix v0.26.3
 
