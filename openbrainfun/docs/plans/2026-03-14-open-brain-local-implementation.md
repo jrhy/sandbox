@@ -568,15 +568,113 @@ git add openbrainfun/internal/metadata/extractor.go openbrainfun/internal/metada
 git commit -m "openbrainfun: add optional metadata extraction"
 ```
 
+### Task 10: Add CI-grade end-to-end coverage with ephemeral Postgres and CPU-only embeddings
+
+**Files:**
+- Create: `openbrainfun/.github/workflows/e2e.yml`
+- Create: `openbrainfun/internal/e2e/e2e_test.go`
+- Create: `openbrainfun/internal/e2e/testdata/walkthrough.json`
+- Create: `openbrainfun/scripts/e2e-walkthrough.sh`
+- Modify: `openbrainfun/internal/config/config.go`
+- Modify: `openbrainfun/cmd/openbrain/main.go`
+- Modify: `openbrainfun/README.md`
+
+**Step 1: Write the failing E2E test first**
+
+Create a test that:
+
+- starts with a clean test database
+- runs migrations
+- launches the app in-process with a deterministic local embedder mode (`OPENBRAIN_EMBED_PROVIDER=fake`)
+- posts two thoughts (`local_only` and `remote_ok`)
+- waits for worker completion and asserts both become `ready`
+- calls MCP `search_thoughts` with bearer auth and verifies only `remote_ok` is returned
+
+Run: `go test ./internal/e2e -run TestEndToEndWalkthrough -v`
+
+Expected: FAIL until the test harness and fake embedder wiring are implemented.
+
+**Step 2: Add test-mode embedding path for fast CPU-only runs**
+
+- Extend config with an embed provider selector (`ollama` default, `fake` for tests).
+- Add a deterministic fake embedder used only in test/dev walkthroughs.
+- Ensure vectors are stable from input text (for reproducible assertions).
+
+```go
+type EmbedProvider string
+
+const (
+	EmbedProviderOllama EmbedProvider = "ollama"
+	EmbedProviderFake   EmbedProvider = "fake"
+)
+```
+
+**Step 3: Add GitHub Actions workflow with ephemeral Postgres**
+
+- Define a `postgres` service container in workflow YAML.
+- Install migration dependencies and run migrations against service DB.
+- Execute `go test ./...` including E2E.
+- Upload walkthrough logs/artifacts on failure.
+
+Example service block:
+
+```yaml
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    env:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: openbrain_test
+    ports:
+      - 5432:5432
+```
+
+**Step 4: Add scripted walkthrough for humans and CI logs**
+
+Create `scripts/e2e-walkthrough.sh` that demonstrates:
+
+1. boot and migrate
+2. create sample thoughts
+3. show pending → ready transition
+4. issue an MCP question (e.g. “What did I note about MCP auth?”)
+5. print filtered MCP output proving `local_only` exclusion
+
+Store sample requests in `internal/e2e/testdata/walkthrough.json` for deterministic replay.
+
+**Step 5: Run and verify**
+
+Run:
+
+```bash
+go test ./internal/e2e -run TestEndToEndWalkthrough -v
+OPENBRAIN_EMBED_PROVIDER=fake ./scripts/e2e-walkthrough.sh
+```
+
+Expected:
+
+- E2E test PASS with ephemeral Postgres
+- walkthrough script prints successful MCP query response
+- output includes only `remote_ok` thought content
+
+**Step 6: Commit**
+
+```bash
+git add openbrainfun/.github/workflows/e2e.yml openbrainfun/internal/e2e/e2e_test.go openbrainfun/internal/e2e/testdata/walkthrough.json openbrainfun/scripts/e2e-walkthrough.sh openbrainfun/internal/config/config.go openbrainfun/cmd/openbrain/main.go openbrainfun/README.md
+git commit -m "openbrainfun: add e2e workflow with ephemeral postgres"
+```
+
 ## Final verification checklist
 
 - `go test ./...`
+- `go test ./internal/e2e -run TestEndToEndWalkthrough -v`
 - `docker compose up -d postgres ollama`
 - apply migrations successfully
 - create one `local_only` thought and verify it is absent from MCP search results
 - create one `remote_ok` thought and verify it appears in MCP results
 - stop Ollama, capture a thought, verify it stays `pending`
 - restart Ollama, verify the worker marks it `ready`
+- run `OPENBRAIN_EMBED_PROVIDER=fake ./scripts/e2e-walkthrough.sh` and confirm MCP question output only includes `remote_ok` thoughts
 - connect Open WebUI using MCP (Streamable HTTP) and bearer auth
 
 ## Delivery notes
