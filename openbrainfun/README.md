@@ -30,41 +30,6 @@ docker compose up -d postgres ollama
 
 ## Walkthrough with command output
 
-The reproducible command log lives at:
-
-- `docs/walkthrough.demo.md`
-
-It was generated with Showboat.
-
-### 0) Showboat help (required tool)
-
-Command:
-
-```bash
-uvx showboat --help | sed -n '1,16p'
-```
-
-Output:
-
-```text
-showboat - Create executable demo documents that show and prove an agent's work.
-
-Showboat helps agents build markdown documents that mix commentary, executable
-code blocks, and captured output. These documents serve as both readable
-documentation and reproducible proof of work. A verifier can re-execute all
-code blocks and confirm the outputs still match.
-
-Usage:
-  showboat init <file> <title>             Create a new demo document
-  showboat note <file> [text]              Append commentary (text or stdin)
-  showboat exec <file> <lang> [code]       Run code and capture output
-  showboat image <file> <path>             Copy image into document
-  showboat image <file> '![alt](path)'   Copy image with alt text
-  showboat pop <file>                      Remove the most recent entry
-  showboat verify <file> [--output <new>]  Re-run and diff all code blocks
-  showboat extract <file> [--filename <name>]  Emit commands to recreate file
-```
-
 ### 1) Provision token
 
 Command:
