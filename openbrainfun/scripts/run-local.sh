@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+export OPENBRAIN_HTTP_ADDR=${OPENBRAIN_HTTP_ADDR:-127.0.0.1:8080}
+export OPENBRAIN_DATABASE_URL=${OPENBRAIN_DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/openbrain?sslmode=disable}
+export OPENBRAIN_OLLAMA_URL=${OPENBRAIN_OLLAMA_URL:-http://127.0.0.1:11434}
+export OPENBRAIN_EMBED_MODEL=${OPENBRAIN_EMBED_MODEL:-embeddinggemma}
+export OPENBRAIN_EMBED_DIMENSIONS=${OPENBRAIN_EMBED_DIMENSIONS:-384}
+export OPENBRAIN_MCP_BEARER_TOKEN=${OPENBRAIN_MCP_BEARER_TOKEN:-dev-token}
+go run ./cmd/openbrain
