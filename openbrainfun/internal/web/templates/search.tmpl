@@ -1,0 +1,5 @@
+{{define "search"}}{{template "header" .}}
+<h1>Search</h1>
+<form method="get"><input name="q" value="{{.Q}}"><select name="mode"><option value="keyword">keyword</option><option value="semantic">semantic</option></select></form>
+<ul>{{range .Thoughts}}<li>{{.Content}} ({{.IngestStatus}})</li>{{end}}</ul>
+{{template "footer" .}}{{end}}

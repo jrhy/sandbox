@@ -1,0 +1,4 @@
+{{define "thoughts"}}{{template "header" .}}
+<h1>Recent thoughts</h1>
+<ul>{{range .Thoughts}}<li>{{.Content}} ({{.IngestStatus}})</li>{{end}}</ul>
+{{template "footer" .}}{{end}}
