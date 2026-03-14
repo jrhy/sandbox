@@ -233,6 +233,9 @@ NAT is acceptable. The proxy host only needs a stable public route to the servic
 - unit tests for config parsing, auth middleware, visibility filtering, capture validation, worker retry behavior, and MCP tool handlers
 - repository tests for SQL query shape and policy filters
 - integration tests for end-to-end capture → pending → ready using fakes for the embedder
+- CI-backed end-to-end test that boots an ephemeral Postgres + pgvector service (GitHub Actions service container), runs migrations, and executes a scripted walkthrough against a real app process
+- E2E should use a local CPU-only embedding provider in test mode (for example `all-minilm` via Ollama, or a deterministic in-process fake-embedder toggle) so test runs stay fast and offline-friendly
+- scripted MCP verification in E2E should call `/mcp` with bearer auth and assert `local_only` thoughts are filtered while `remote_ok` thoughts are returned
 
 ### Manual
 
@@ -241,6 +244,16 @@ NAT is acceptable. The proxy host only needs a stable public route to the servic
 - stop Ollama and verify capture still works while new rows remain `pending`
 - restart Ollama and verify retry completes
 - connect Open WebUI to the MCP endpoint in Streamable HTTP mode
+
+### Walkthrough artifact expectations
+
+Capture a reproducible “golden path” transcript (local script + CI log) that demonstrates:
+
+1. system startup with migrations applied
+2. posting at least two example thoughts (one `local_only`, one `remote_ok`)
+3. worker transition from `pending` to `ready`
+4. one MCP question (for example: “What did I note about MCP auth?”) and the returned result set
+5. explicit proof that `local_only` content is absent from MCP output
 
 ## Deferred decisions
 
