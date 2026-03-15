@@ -13,7 +13,7 @@ Persistent data lives in:
 - Embedding model: `all-minilm:22m`
 - Metadata model: `qwen3:0.6b`
 
-_Generated at 2026-03-15T20:38:45Z._
+_Generated at 2026-03-15T22:41:43Z._
 
 ### Create or update the demo user
 
@@ -24,7 +24,7 @@ go run ./cmd/openbrain user update 'demo' --password 'demo-password' --token-lab
 ```text
 updated user username=demo
 created default token label=default
-token=0iVIrWugi86uafwQqB7OmpwAjhEmPaHfR2jTKyPrzFk
+token=tjBWpAcQlXzEVaZQKU7TUF3fTlRo-zDhvWnD12f3xhw
 note: this token will not be shown again; use `openbrain token create demo --label default` to rotate it
 ```
 
@@ -34,7 +34,7 @@ note: this token will not be shown again; use `openbrain token create demo --lab
 curl \
   -sS \
   -i \
-  -c /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.uow4zqwdM8 \
+  -c /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
   -H 'Content-Type: application/json' \
   -X POST \
   http://127.0.0.1:18080/api/session \
@@ -47,28 +47,28 @@ curl \
 ```text
 HTTP/1.1 200 OK
 Content-Type: application/json
-Set-Cookie: openbrain_session=1fUpZF7qPmGzHFvy-g0s1bFIoITRIK0P0WhRDGFoVrQ; Path=/; Expires=Mon, 16 Mar 2026 20:38:32 GMT; HttpOnly; SameSite=Lax
-Date: Sun, 15 Mar 2026 20:38:32 GMT
+Set-Cookie: openbrain_session=dRY_RJ_GFvdPxS9U-_ArpXqzad3MDHUbvP7KcOdtkdA; Path=/; Expires=Mon, 16 Mar 2026 22:41:02 GMT; HttpOnly; SameSite=Lax
+Date: Sun, 15 Mar 2026 22:41:02 GMT
 Content-Length: 82
 
 {
-  "csrf_token": "f37c315b5ea2c005ce25518e89bc714580efdaa115a967f44a5af9eae1695a2b"
+  "csrf_token": "1955b2910bdfcc4eb8dd58a456e03b34352a1368fc430d305a39a171d7520dc3"
 }
 ```
 
-### Create a thought
+### Create a baseline auth thought
 
 ```bash
 curl \
   -sS \
   -i \
-  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.uow4zqwdM8 \
+  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
   -H 'Content-Type: application/json' \
   -H 'X-CSRF-Token: <csrf-token>' \
   -X POST \
   http://127.0.0.1:18080/api/thoughts \
   --data '{
-  "content": "Remember MCP auth and local sessions",
+  "content": "Remember MCP auth and local sessions for Open WebUI",
   "exposure_scope": "remote_ok",
   "user_tags": [
     "mcp",
@@ -80,12 +80,12 @@ curl \
 ```text
 HTTP/1.1 201 Created
 Content-Type: application/json
-Date: Sun, 15 Mar 2026 20:38:32 GMT
-Content-Length: 326
+Date: Sun, 15 Mar 2026 22:41:02 GMT
+Content-Length: 341
 
 {
-  "id": "2d7f2618-277a-4800-aec2-5f5ff26c0a0a",
-  "content": "Remember MCP auth and local sessions",
+  "id": "94e6b2c3-1d8d-4420-b0de-f37eb3585bc0",
+  "content": "Remember MCP auth and local sessions for Open WebUI",
   "exposure_scope": "remote_ok",
   "user_tags": [
     "mcp",
@@ -97,67 +97,302 @@ Content-Length: 326
     "Entities": []
   },
   "ingest_status": "pending",
-  "created_at": "2026-03-15T20:38:32Z",
-  "updated_at": "2026-03-15T20:38:32Z"
+  "created_at": "2026-03-15T22:41:02Z",
+  "updated_at": "2026-03-15T22:41:02Z"
 }
 ```
 
-### Retrieve the thought after background processing
+### Create an unrelated gardening thought
 
 ```bash
 curl \
   -sS \
   -i \
-  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.uow4zqwdM8 \
-  http://127.0.0.1:18080/api/thoughts/2d7f2618-277a-4800-aec2-5f5ff26c0a0a
+  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
+  -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <csrf-token>' \
+  -X POST \
+  http://127.0.0.1:18080/api/thoughts \
+  --data '{
+  "content": "Prune the balcony tomato plants and water the seedlings on Tuesday",
+  "exposure_scope": "remote_ok",
+  "user_tags": [
+    "garden",
+    "plants"
+  ]
+}'
+```
+
+```text
+HTTP/1.1 201 Created
+Content-Type: application/json
+Date: Sun, 15 Mar 2026 22:41:02 GMT
+Content-Length: 357
+
+{
+  "id": "5531659c-12ad-4b10-bdb3-926600d95504",
+  "content": "Prune the balcony tomato plants and water the seedlings on Tuesday",
+  "exposure_scope": "remote_ok",
+  "user_tags": [
+    "garden",
+    "plants"
+  ],
+  "metadata": {
+    "Summary": "No summary available.",
+    "Topics": [],
+    "Entities": []
+  },
+  "ingest_status": "pending",
+  "created_at": "2026-03-15T22:41:02Z",
+  "updated_at": "2026-03-15T22:41:02Z"
+}
+```
+
+### Create an unrelated shopping thought
+
+```bash
+curl \
+  -sS \
+  -i \
+  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
+  -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <csrf-token>' \
+  -X POST \
+  http://127.0.0.1:18080/api/thoughts \
+  --data '{
+  "content": "Buy coffee beans, oats, and oranges after work",
+  "exposure_scope": "remote_ok",
+  "user_tags": [
+    "shopping",
+    "groceries"
+  ]
+}'
+```
+
+```text
+HTTP/1.1 201 Created
+Content-Type: application/json
+Date: Sun, 15 Mar 2026 22:41:02 GMT
+Content-Length: 342
+
+{
+  "id": "b4bb2e65-ade8-4bf6-b0ba-2a5d5ed08a1f",
+  "content": "Buy coffee beans, oats, and oranges after work",
+  "exposure_scope": "remote_ok",
+  "user_tags": [
+    "shopping",
+    "groceries"
+  ],
+  "metadata": {
+    "Summary": "No summary available.",
+    "Topics": [],
+    "Entities": []
+  },
+  "ingest_status": "pending",
+  "created_at": "2026-03-15T22:41:02Z",
+  "updated_at": "2026-03-15T22:41:02Z"
+}
+```
+
+### Create the anchor thought for related-thought search
+
+```bash
+curl \
+  -sS \
+  -i \
+  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
+  -H 'Content-Type: application/json' \
+  -H 'X-CSRF-Token: <csrf-token>' \
+  -X POST \
+  http://127.0.0.1:18080/api/thoughts \
+  --data '{
+  "content": "Local MCP bearer tokens should stay tied to one user session",
+  "exposure_scope": "remote_ok",
+  "user_tags": [
+    "mcp",
+    "auth"
+  ]
+}'
+```
+
+```text
+HTTP/1.1 201 Created
+Content-Type: application/json
+Date: Sun, 15 Mar 2026 22:41:02 GMT
+Content-Length: 346
+
+{
+  "id": "a2883658-db81-40e7-a779-ca597b3c12de",
+  "content": "Local MCP bearer tokens should stay tied to one user session",
+  "exposure_scope": "remote_ok",
+  "user_tags": [
+    "mcp",
+    "auth"
+  ],
+  "metadata": {
+    "Summary": "No summary available.",
+    "Topics": [],
+    "Entities": []
+  },
+  "ingest_status": "pending",
+  "created_at": "2026-03-15T22:41:02Z",
+  "updated_at": "2026-03-15T22:41:02Z"
+}
+```
+
+### Retrieve the anchor thought after background processing
+
+```bash
+curl \
+  -sS \
+  -i \
+  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
+  http://127.0.0.1:18080/api/thoughts/a2883658-db81-40e7-a779-ca597b3c12de
 ```
 
 ```text
 HTTP/1.1 200 OK
 Content-Type: application/json
-Date: Sun, 15 Mar 2026 20:38:45 GMT
-Content-Length: 738
+Date: Sun, 15 Mar 2026 22:41:43 GMT
+Content-Length: 543
 
 {
-  "id": "2d7f2618-277a-4800-aec2-5f5ff26c0a0a",
-  "content": "Remember MCP auth and local sessions",
+  "id": "a2883658-db81-40e7-a779-ca597b3c12de",
+  "content": "Local MCP bearer tokens should stay tied to one user session",
   "exposure_scope": "remote_ok",
   "user_tags": [
     "mcp",
-    "sessions"
+    "auth"
   ],
   "metadata": {
-    "Summary": "Concise summary: MCP authentication and local session management are key for secure access. Topics: Authentication protocols, session management strategies, security best practices.",
+    "Summary": "Local MCP bearer tokens should be tied to a single user session to ensure security and consistency.",
     "Topics": [
-      "MCP auth",
-      "local sessions",
-      "authentication protocols",
-      "session management strategies",
-      "security best practices"
+      "user session",
+      "bearer tokens",
+      "local systems"
     ],
     "Entities": [
-      "MCP",
-      "local sessions",
-      "authentication protocols",
-      "session management strategies",
-      "security best practices"
+      "Local MCP bearer tokens",
+      "user session"
     ]
   },
   "embedding_model": "all-minilm:22m",
   "ingest_status": "ready",
-  "created_at": "2026-03-15T20:38:32Z",
-  "updated_at": "2026-03-15T20:38:45Z"
+  "created_at": "2026-03-15T22:41:02Z",
+  "updated_at": "2026-03-15T22:41:13Z"
 }
 ```
 
-### Query MCP
+### Find related thoughts through the JSON API
+
+```bash
+curl \
+  -sS \
+  -i \
+  -b /var/folders/qt/pxvds2pn1qnd2blwq356wtxh0000gq/T/tmp.TEwFk2AwQI \
+  'http://127.0.0.1:18080/api/thoughts/a2883658-db81-40e7-a779-ca597b3c12de/related?limit=3'
+```
+
+```text
+HTTP/1.1 200 OK
+Content-Type: application/json
+Date: Sun, 15 Mar 2026 22:41:43 GMT
+Content-Length: 1626
+
+{
+  "thoughts": [
+    {
+      "id": "94e6b2c3-1d8d-4420-b0de-f37eb3585bc0",
+      "content": "Remember MCP auth and local sessions for Open WebUI",
+      "exposure_scope": "remote_ok",
+      "user_tags": [
+        "mcp",
+        "sessions"
+      ],
+      "metadata": {
+        "Summary": "Keep track of MCP authentication and local sessions in Open WebUI for secure and efficient user sessions.",
+        "Topics": [
+          "authentication",
+          "local sessions",
+          "Open WebUI"
+        ],
+        "Entities": [
+          "MCP",
+          "Open WebUI",
+          "session management",
+          "authentication"
+        ]
+      },
+      "similarity": 0.5801512253194822,
+      "embedding_model": "all-minilm:22m",
+      "ingest_status": "ready",
+      "created_at": "2026-03-15T22:41:02Z",
+      "updated_at": "2026-03-15T22:41:43Z"
+    },
+    {
+      "id": "b4bb2e65-ade8-4bf6-b0ba-2a5d5ed08a1f",
+      "content": "Buy coffee beans, oats, and oranges after work",
+      "exposure_scope": "remote_ok",
+      "user_tags": [
+        "shopping",
+        "groceries"
+      ],
+      "metadata": {
+        "Summary": "Buy coffee beans, oats, and oranges after work",
+        "Topics": [
+          "coffee beans",
+          "oats",
+          "oranges"
+        ],
+        "Entities": [
+          "coffee beans",
+          "oats",
+          "oranges"
+        ]
+      },
+      "similarity": 0.0652156216291715,
+      "embedding_model": "all-minilm:22m",
+      "ingest_status": "ready",
+      "created_at": "2026-03-15T22:41:02Z",
+      "updated_at": "2026-03-15T22:41:24Z"
+    },
+    {
+      "id": "5531659c-12ad-4b10-bdb3-926600d95504",
+      "content": "Prune the balcony tomato plants and water the seedlings on Tuesday",
+      "exposure_scope": "remote_ok",
+      "user_tags": [
+        "garden",
+        "plants"
+      ],
+      "metadata": {
+        "Summary": "Prune tomato plants and water seedlings on Tuesday.",
+        "Topics": [
+          "pruning tomato plants",
+          "watering seedlings"
+        ],
+        "Entities": [
+          "tomato plants",
+          "seedlings"
+        ]
+      },
+      "similarity": -0.05749998494982411,
+      "embedding_model": "all-minilm:22m",
+      "ingest_status": "ready",
+      "created_at": "2026-03-15T22:41:02Z",
+      "updated_at": "2026-03-15T22:41:35Z"
+    }
+  ]
+}
+```
+
+### Find related thoughts through MCP
 
 ```bash
 curl \
   -sS \
   -i \
   -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer 0iVIrWugi86uafwQqB7OmpwAjhEmPaHfR2jTKyPrzFk' \
+  -H 'Authorization: Bearer tjBWpAcQlXzEVaZQKU7TUF3fTlRo-zDhvWnD12f3xhw' \
   -X POST \
   http://127.0.0.1:18081/mcp \
   --data '{
@@ -165,9 +400,10 @@ curl \
   "id": 1,
   "method": "tools/call",
   "params": {
-    "name": "search_thoughts",
+    "name": "related_thoughts",
     "arguments": {
-      "query": "MCP auth"
+      "id": "a2883658-db81-40e7-a779-ca597b3c12de",
+      "limit": 3
     }
   }
 }'
@@ -177,8 +413,8 @@ curl \
 HTTP/1.1 200 OK
 Cache-Control: no-cache, no-transform
 Content-Type: application/json
-Date: Sun, 15 Mar 2026 20:38:45 GMT
-Content-Length: 504
+Date: Sun, 15 Mar 2026 22:41:43 GMT
+Content-Length: 1590
 
 {
   "jsonrpc": "2.0",
@@ -187,19 +423,42 @@ Content-Length: 504
     "content": [
       {
         "type": "text",
-        "text": "{\"thoughts\":[{\"content\":\"Remember MCP auth and local sessions\",\"exposure_scope\":\"remote_ok\",\"id\":\"2d7f2618-277a-4800-aec2-5f5ff26c0a0a\",\"ingest_status\":\"ready\",\"user_tags\":[\"mcp\",\"sessions\"]}]}"
+        "text": "{\"thoughts\":[{\"content\":\"Remember MCP auth and local sessions for Open WebUI\",\"exposure_scope\":\"remote_ok\",\"id\":\"94e6b2c3-1d8d-4420-b0de-f37eb3585bc0\",\"ingest_status\":\"ready\",\"similarity\":0.5801512253194822,\"user_tags\":[\"mcp\",\"sessions\"]},{\"content\":\"Buy coffee beans, oats, and oranges after work\",\"exposure_scope\":\"remote_ok\",\"id\":\"b4bb2e65-ade8-4bf6-b0ba-2a5d5ed08a1f\",\"ingest_status\":\"ready\",\"similarity\":0.0652156216291715,\"user_tags\":[\"shopping\",\"groceries\"]},{\"content\":\"Prune the balcony tomato plants and water the seedlings on Tuesday\",\"exposure_scope\":\"remote_ok\",\"id\":\"5531659c-12ad-4b10-bdb3-926600d95504\",\"ingest_status\":\"ready\",\"similarity\":-0.05749998494982411,\"user_tags\":[\"garden\",\"plants\"]}]}"
       }
     ],
     "structuredContent": {
       "thoughts": [
         {
-          "content": "Remember MCP auth and local sessions",
+          "content": "Remember MCP auth and local sessions for Open WebUI",
           "exposure_scope": "remote_ok",
-          "id": "2d7f2618-277a-4800-aec2-5f5ff26c0a0a",
+          "id": "94e6b2c3-1d8d-4420-b0de-f37eb3585bc0",
           "ingest_status": "ready",
+          "similarity": 0.5801512253194822,
           "user_tags": [
             "mcp",
             "sessions"
+          ]
+        },
+        {
+          "content": "Buy coffee beans, oats, and oranges after work",
+          "exposure_scope": "remote_ok",
+          "id": "b4bb2e65-ade8-4bf6-b0ba-2a5d5ed08a1f",
+          "ingest_status": "ready",
+          "similarity": 0.0652156216291715,
+          "user_tags": [
+            "shopping",
+            "groceries"
+          ]
+        },
+        {
+          "content": "Prune the balcony tomato plants and water the seedlings on Tuesday",
+          "exposure_scope": "remote_ok",
+          "id": "5531659c-12ad-4b10-bdb3-926600d95504",
+          "ingest_status": "ready",
+          "similarity": -0.05749998494982411,
+          "user_tags": [
+            "garden",
+            "plants"
           ]
         }
       ]

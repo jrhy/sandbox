@@ -29,13 +29,11 @@ app_log="$(mktemp)"
 transcript_json="$(mktemp)"
 render_tmp_dir="$(mktemp -d "$repo_root/.cache/walkthrough-render.XXXXXX")"
 render_go="$render_tmp_dir/main.go"
+app_bin="$render_tmp_dir/openbrain"
 cleanup() {
   rm -f "$cookie_jar" "$body_file" "$headers_file" "$transcript_json"
   rm -rf "$render_tmp_dir"
-  if [[ -n "${app_pid:-}" ]] && kill -0 "$app_pid" >/dev/null 2>&1; then
-    kill "$app_pid"
-    wait "$app_pid" 2>/dev/null || true
-  fi
+  stop_app
 }
 trap cleanup EXIT
 
@@ -48,6 +46,17 @@ record_step() {
   step_titles+=("$1")
   step_commands+=("$2")
   step_responses+=("$3")
+}
+
+parse_json_field_from_http_response() {
+  local field="$1"
+
+  python3 -c '
+import json, sys
+field = sys.argv[1]
+payload = sys.stdin.read().split("\r\n\r\n")[-1].split("\n\n")[-1]
+print(json.loads(payload)[field])
+' "$field"
 }
 
 run_capture() {
@@ -83,6 +92,30 @@ wait_for_ready_response() {
   return 1
 }
 
+create_thought() {
+  local title="$1"
+  local request_json="$2"
+  local display_command="$3"
+
+  last_capture_output="$(curl -sS -i -b "$cookie_jar" -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf_token" \
+    -X POST "http://${OPENBRAIN_WEB_ADDR}/api/thoughts" \
+    --data "$request_json")"
+  record_step "$title" "$display_command" "$last_capture_output"
+}
+
+stop_app() {
+  local job_pid
+  for job_pid in $(jobs -pr); do
+    kill "$job_pid" >/dev/null 2>&1 || true
+    wait "$job_pid" 2>/dev/null || true
+  done
+  if [[ -n "${app_pid:-}" ]] && kill -0 "$app_pid" >/dev/null 2>&1; then
+    kill "$app_pid" >/dev/null 2>&1 || true
+    wait "$app_pid" 2>/dev/null || true
+  fi
+  unset app_pid
+}
+
 container_compose up -d postgres ollama
 bash ./scripts/wait-for-stack.sh
 
@@ -106,7 +139,8 @@ if [[ -z "$demo_mcp_token" ]]; then
   exit 1
 fi
 
-go run ./cmd/openbrain start >"$app_log" 2>&1 &
+go build -o "$app_bin" ./cmd/openbrain
+"$app_bin" start >"$app_log" 2>&1 &
 app_pid=$!
 export OPENBRAIN_WEB_HEALTH_URL="http://${OPENBRAIN_WEB_ADDR}/healthz"
 bash ./scripts/wait-for-stack.sh
@@ -119,23 +153,54 @@ csrf_token="$(
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrf_token"])'
 )"
 
-create_response="$(curl -sS -i -b "$cookie_jar" -H 'Content-Type: application/json' -H "X-CSRF-Token: $csrf_token" \
-  -X POST "http://${OPENBRAIN_WEB_ADDR}/api/thoughts" \
-  --data '{"content":"Remember MCP auth and local sessions","exposure_scope":"remote_ok","user_tags":["mcp","sessions"]}')"
-record_step "Create a thought" "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Remember MCP auth and local sessions\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"mcp\",\"sessions\"]}'" "$create_response"
+create_thought \
+  "Create a baseline auth thought" \
+  '{"content":"Remember MCP auth and local sessions for Open WebUI","exposure_scope":"remote_ok","user_tags":["mcp","sessions"]}' \
+  "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Remember MCP auth and local sessions for Open WebUI\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"mcp\",\"sessions\"]}'"
+auth_baseline_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
 
-thought_id="$(
-  printf '%s' "$create_response" | python3 -c 'import json,sys; payload=sys.stdin.read().split("\r\n\r\n")[-1].split("\n\n")[-1]; print(json.loads(payload)["id"])'
-)"
+create_thought \
+  "Create an unrelated gardening thought" \
+  '{"content":"Prune the balcony tomato plants and water the seedlings on Tuesday","exposure_scope":"remote_ok","user_tags":["garden","plants"]}' \
+  "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Prune the balcony tomato plants and water the seedlings on Tuesday\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"garden\",\"plants\"]}'"
+garden_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
+
+create_thought \
+  "Create an unrelated shopping thought" \
+  '{"content":"Buy coffee beans, oats, and oranges after work","exposure_scope":"remote_ok","user_tags":["shopping","groceries"]}' \
+  "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Buy coffee beans, oats, and oranges after work\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"shopping\",\"groceries\"]}'"
+shopping_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
+
+create_thought \
+  "Create the anchor thought for related-thought search" \
+  '{"content":"Local MCP bearer tokens should stay tied to one user session","exposure_scope":"remote_ok","user_tags":["mcp","auth"]}' \
+  "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Local MCP bearer tokens should stay tied to one user session\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"mcp\",\"auth\"]}'"
+thought_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
 
 thought_ready_timeout_seconds="${OPENBRAIN_WALKTHROUGH_READY_TIMEOUT_SECONDS:-60}"
+wait_for_ready_response "$auth_baseline_id" "$thought_ready_timeout_seconds" >/dev/null
+wait_for_ready_response "$garden_id" "$thought_ready_timeout_seconds" >/dev/null
+wait_for_ready_response "$shopping_id" "$thought_ready_timeout_seconds" >/dev/null
 get_response="$(wait_for_ready_response "$thought_id" "$thought_ready_timeout_seconds")"
-record_step "Retrieve the thought after background processing" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}'" "$get_response"
+record_step "Retrieve the anchor thought after background processing" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}'" "$get_response"
+
+related_response="$(curl -sS -i -b "$cookie_jar" "http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}/related?limit=3")"
+record_step "Find related thoughts through the JSON API" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}/related?limit=3'" "$related_response"
 
 mcp_response="$(curl -sS -i -H 'Content-Type: application/json' -H "Authorization: Bearer ${demo_mcp_token}" \
   -X POST "http://${OPENBRAIN_MCP_ADDR}/mcp" \
-  --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_thoughts","arguments":{"query":"MCP auth"}}}')"
-record_step "Query MCP" "curl -sS -i -H 'Content-Type: application/json' -H 'Authorization: Bearer ${demo_mcp_token}' -X POST 'http://${OPENBRAIN_MCP_ADDR}/mcp' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"search_thoughts\",\"arguments\":{\"query\":\"MCP auth\"}}}'" "$mcp_response"
+  --data "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"related_thoughts\",\"arguments\":{\"id\":\"${thought_id}\",\"limit\":3}}}")"
+record_step "Find related thoughts through MCP" "curl -sS -i -H 'Content-Type: application/json' -H 'Authorization: Bearer ${demo_mcp_token}' -X POST 'http://${OPENBRAIN_MCP_ADDR}/mcp' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"related_thoughts\",\"arguments\":{\"id\":\"${thought_id}\",\"limit\":3}}}'" "$mcp_response"
+
+stop_app
+
+expected_step_count=8
+if (( ${#step_titles[@]} < expected_step_count )); then
+  printf 'expected at least %d walkthrough steps, got %d\n' "$expected_step_count" "${#step_titles[@]}" >&2
+  printf 'recorded step titles:\n' >&2
+  printf ' - %s\n' "${step_titles[@]}" >&2
+  exit 1
+fi
 
 export STEP_TITLES="$(IFS=$'\x1f'; printf '%s' "${step_titles[*]}")"
 export STEP_COMMANDS="$(IFS=$'\x1f'; printf '%s' "${step_commands[*]}")"

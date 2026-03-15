@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a multi-user local-first open-brain service with DB-backed login sessions, per-user thought ownership, per-user MCP token access on a separate port, v1 metadata extraction, a generated README walkthrough, and CI that verifies both fake and real Ollama embedding backends.
+**Goal:** Build a multi-user local-first open-brain service with DB-backed login sessions, per-user thought ownership, scored semantic and related-thought retrieval, per-user MCP token access on a separate port, v1 metadata extraction, a generated README walkthrough, and CI that verifies both fake and real Ollama embedding backends.
 
 **Architecture:** One Go binary serves the browser UI and JSON API on the web listener and the read-only MCP server on a second listener. Postgres stores users, sessions, MCP tokens, thoughts, ingest state, and normalized extracted metadata. Ollama supplies embeddings and metadata extraction behind small interfaces so fake and real providers can run through the same contract/integration suites.
 
@@ -629,6 +629,7 @@ Expected: FAIL because the handlers, templates, and styles do not exist.
 
 - Add server-rendered pages for `/`, `/thoughts`, `/thoughts/{id}`, and `/thoughts/{id}/delete`.
 - Add a retry action on `/thoughts` and `/thoughts/{id}` for failed ingest.
+- Show a related-thoughts section on `/thoughts/{id}` once the anchor thought is `ready`, including similarity scores.
 - Add visible `Save thought`, `Save changes`, and `Delete thought` buttons.
 - Add responsive CSS that keeps forms readable on mobile and desktop.
 - Keep the pages functional without JavaScript.
@@ -697,6 +698,18 @@ func TestRetryThoughtRequiresCSRFToken(t *testing.T) {
 		t.Fatalf("status = %d, want 403", rr.Code)
 	}
 }
+
+func TestRelatedThoughtsReturnsSimilarityScores(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/thoughts/123/related?limit=3", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextUserKey{}, auth.User{ID: mustUUID(t)}))
+	rr := httptest.NewRecorder()
+
+	NewThoughtHandlers(fakeThoughtService{}).Related(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+}
 ```
 
 **Step 2: Run test to verify it fails**
@@ -706,13 +719,14 @@ Expected: FAIL because the JSON CRUD handlers do not exist.
 
 **Step 3: Write minimal implementation**
 
-- Add `POST /api/thoughts`, `GET /api/thoughts/{id}`, `PATCH /api/thoughts/{id}`, `DELETE /api/thoughts/{id}`, `POST /api/thoughts/{id}/retry`, and `GET /api/thoughts`.
+- Add `POST /api/thoughts`, `GET /api/thoughts/{id}`, `GET /api/thoughts/{id}/related`, `PATCH /api/thoughts/{id}`, `DELETE /api/thoughts/{id}`, `POST /api/thoughts/{id}/retry`, and `GET /api/thoughts`.
 - Reuse the same thought service and ownership checks as the HTML handlers.
 - Return structured JSON for errors and resources.
 - Preserve cookie-based auth for curl via `/api/session`.
 - Require CSRF headers on cookie-authenticated write endpoints.
 - Parse `q`, `search_mode`, `exposure_scope`, `ingest_status`, `tag`, `page`, and `page_size` on `GET /api/thoughts`.
 - Route keyword and semantic search through one shared query contract so JSON API and MCP behave consistently.
+- Include `similarity` in semantic-search and related-thought JSON responses.
 
 **Step 4: Run tests to verify they pass**
 
@@ -781,7 +795,7 @@ Expected: FAIL because the MCP server, tools, and listener wiring do not exist.
 
 - Add token-auth middleware for the MCP listener.
 - Use the official MCP Go SDK.
-- Expose `search_thoughts`, `recent_thoughts`, `get_thought`, and `stats`.
+- Expose `search_thoughts`, `related_thoughts`, `recent_thoughts`, `get_thought`, and `stats`.
 - Filter by `user_id` first and `remote_ok` second on every query.
 - Reuse the same query service/search contract as the JSON API so keyword vs semantic behavior stays aligned.
 - Reject revoked tokens on every request and update `last_used_at` best-effort.
@@ -817,12 +831,12 @@ git commit -m "openbrainfun: add isolated mcp server"
 func TestRenderWalkthroughIncludesCurlAndMCPSections(t *testing.T) {
 	md, err := RenderWalkthrough(Transcript{
 		StoragePaths: []string{"./var/postgres", "./var/ollama"},
-		Steps: []Step{{Title: "Create a thought", Command: "curl ... /api/thoughts", Response: "201 Created"}, {Title: "Query MCP", Command: "curl ... :8081/mcp", Response: "200 OK"}},
+		Steps: []Step{{Title: "Find related thoughts through the JSON API", Command: "curl ... /api/thoughts/123/related", Response: "200 OK"}, {Title: "Find related thoughts through MCP", Command: "curl ... :8081/mcp", Response: "200 OK"}},
 	})
 	if err != nil {
 		t.Fatalf("RenderWalkthrough() error = %v", err)
 	}
-	if !strings.Contains(md, "./var/postgres") || !strings.Contains(md, "Query MCP") {
+	if !strings.Contains(md, "./var/postgres") || !strings.Contains(md, "Find related thoughts through MCP") {
 		t.Fatalf("walkthrough missing required sections: %s", md)
 	}
 }
@@ -851,13 +865,15 @@ Expected: FAIL because the README renderer and walkthrough assets do not exist.
   - captures the printed demo MCP token for the later curl example
   - logs in with curl using `/api/session`
   - stores the returned CSRF token alongside the cookie jar
-  - creates a thought with curl using both the cookie jar and CSRF header
-  - waits for background processing to finish
-  - retrieves it with curl
-  - calls the MCP endpoint with curl
+  - creates multiple thoughts with curl using both the cookie jar and CSRF header, including intentionally unrelated notes plus one anchor note that should match an earlier auth-related note
+  - waits for background processing to finish for all created thoughts
+  - retrieves the anchor thought with curl once it is `ready`
+  - calls `GET /api/thoughts/{id}/related` with curl and records the scored related-thought response
+  - calls the MCP endpoint with curl using `related_thoughts` for the same anchor id
   - captures requests and responses into `docs/walkthrough.demo.md`
 - Make the retrieved thought example show extracted metadata in at least one JSON response.
 - Add a README renderer/updater that writes the walkthrough section between markers in `README.md`, wrapping long `curl` commands and pretty-printing JSON request/response bodies for readability while staying faithful to the captured interactions.
+- Make the walkthrough prove embeddings are being used by showing a related-thought lookup where the new anchor note is closer to the earlier auth note than to the unrelated gardening/shopping notes.
 - Keep the README explicit about persistence paths and the exact Ollama model used.
 - Add `docs/operations.md` covering persistence paths, local backup/restore expectations, and the operator steps for changing embedding models and re-embedding/reindexing stored thoughts.
 

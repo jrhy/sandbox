@@ -9,7 +9,11 @@ Build a local-first “open brain” service with a Go application, Postgres + p
 
 The system is explicitly multi-user from the beginning. Thoughts belong to a user. Browser access is allowed only through username/password login. MCP access is allowed only through a mapped bearer token, and every MCP read/search is restricted to the mapped user’s `remote_ok` thoughts.
 
-The design also treats the project README as part of the system contract. The README must include a walkthrough generated from real interactions that shows admin-CLI provisioning, browser/API login via curl, thought creation and retrieval, and an MCP query returning the created thought.
+The design also treats the project README as part of the system contract. The
+README must include a walkthrough generated from real interactions that shows
+admin-CLI provisioning, browser/API login via curl, creation of multiple
+thoughts, retrieval of a ready anchor thought, and related-thought lookups
+through both the JSON API and MCP.
 
 ## Inspiration and intentional divergences
 
@@ -333,6 +337,7 @@ Required elements:
 - delete confirmation step
 - ingest status and ingest error display
 - read-only extracted metadata section
+- related-thoughts section showing scored nearest neighbors once the thought is `ready`
 - visible **Retry ingestion** button when the thought is `failed`
 
 Behavior:
@@ -353,6 +358,7 @@ Required endpoints:
 - `DELETE /api/session` — logout
 - `POST /api/thoughts` — create a thought for the current user
 - `GET /api/thoughts/{id}` — fetch one thought owned by the current user
+- `GET /api/thoughts/{id}/related` — fetch the most similar ready thoughts owned by the current user
 - `PATCH /api/thoughts/{id}` — edit one thought owned by the current user
 - `DELETE /api/thoughts/{id}` — delete one thought owned by the current user
 - `POST /api/thoughts/{id}/retry` — retry ingestion for one failed thought owned by the current user
@@ -416,6 +422,7 @@ Rules:
 
 - Keyword search always works over the current user’s thoughts.
 - Semantic search only includes the current user’s `ready` thoughts and only runs when the query is non-empty.
+- Related-thoughts lookups compare one ready anchor thought against the same user’s other ready thoughts and return scored nearest neighbors.
 - Search and browse results are paginated.
 - Non-search browse defaults to `updated_at desc, id desc`; search paths must also use deterministic tie-breaking.
 - MCP search applies both `user_id` scoping and `remote_ok` filtering.
@@ -425,6 +432,7 @@ Rules:
 Keep the MCP surface deliberately small in v1:
 
 - `search_thoughts` — semantic and/or keyword retrieval over the mapped user’s `remote_ok` thoughts
+- `related_thoughts` — nearest-neighbor lookup for one mapped-user `remote_ok` thought by id
 - `recent_thoughts` — browse the mapped user’s recent `remote_ok` thoughts
 - `get_thought` — fetch one mapped-user `remote_ok` thought by id
 - `stats` — count totals for the mapped user, with MCP-visible counts scoped to `remote_ok`
@@ -462,9 +470,10 @@ It must contain:
    - provisioning or updating a demo user with the `openbrain` CLI
    - printing a newly created demo MCP token from the `openbrain` CLI when no token exists yet
    - logging in with curl, storing a cookie jar, and capturing the CSRF token needed for write requests
-   - creating a thought with curl
-   - retrieving that thought with curl
-   - issuing an MCP query with curl that returns the thought
+   - creating multiple thoughts with curl so at least two are semantically related
+   - retrieving one anchor thought with curl after background processing
+   - querying `GET /api/thoughts/{id}/related` with curl to show scored similar thoughts
+   - issuing an MCP `related_thoughts` query with curl that returns the same cluster
 
 Implementation expectations:
 
@@ -473,6 +482,7 @@ Implementation expectations:
 - the walkthrough should use the same app paths and auth model that the system actually uses
 - the walkthrough renderer may format captured interactions for readability, including wrapped long `curl` commands and pretty-printed JSON request/response bodies, but it must stay faithful to the real commands and responses that were captured
 - the walkthrough should show retrieved thought data after background processing so extracted metadata is visible in at least one response
+- the walkthrough should prove that embeddings are actually used by demonstrating a related-thought lookup over multiple stored thoughts rather than only single-thought CRUD
 - the README or companion local-ops documentation must explain how to back up local Postgres data and how to recover after changing embedding models and re-embedding thoughts
 
 ## Embedding model strategy
