@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build a local-first “open brain” service with a Go application, Postgres + pgvector storage, and Ollama embeddings. The product has two externally visible surfaces:
+Build a local-first “open brain” service with a Go application, Postgres + pgvector storage, Ollama embeddings, and best-effort metadata extraction. The product has two externally visible surfaces:
 
 1. an authenticated browser experience for login, capture, browse, search, edit, and delete
 2. a read-only MCP endpoint on a separate port, authenticated by bearer tokens that each map to exactly one user
@@ -10,6 +10,20 @@ Build a local-first “open brain” service with a Go application, Postgres + p
 The system is explicitly multi-user from the beginning. Thoughts belong to a user. Browser access is allowed only through username/password login. MCP access is allowed only through a mapped bearer token, and every MCP read/search is restricted to the mapped user’s `remote_ok` thoughts.
 
 The design also treats the project README as part of the product contract. The README must include a walkthrough generated from real interactions that shows database provisioning, browser/API login via curl, thought creation and retrieval, and an MCP query returning the created thought.
+
+## Inspiration and intentional divergences
+
+This design is inspired by Nate B Jones’ “Build Your Open Brain” guide: <https://promptkit.natebjones.com/20260224_uq1_guide_main>.
+
+The intended similarity is the core user value: capture thoughts, enrich them with embeddings and metadata, and retrieve them through an open protocol from multiple AI clients.
+
+The intentional divergences are:
+
+- use a self-hosted Go application, Postgres + pgvector, and Ollama instead of Supabase, OpenRouter, Slack, and hosted edge functions
+- make the browser UI and authenticated JSON API first-class product surfaces rather than relying on Slack as the primary capture interface
+- support explicitly multi-user ownership and isolation from day one instead of a simpler single-brain setup
+- keep MCP read-only in v1 and defer a write-capable `capture_thought` MCP tool until the core create/update service is proven out
+- require stronger project artifacts around walkthroughs, verification, coverage, and local operations than the original guide needs
 
 ## Goals
 
@@ -19,6 +33,7 @@ The design also treats the project README as part of the product contract. The R
 - Keep user data isolated by default in both web and MCP paths.
 - Support deterministic browse/search without needing a chat model.
 - Support semantic search with a self-hosted embedding runtime.
+- Enrich thoughts with extracted metadata similar to the PromptKit workflow while keeping manual tags first-class.
 - Make the UI work well on mobile and desktop.
 - Make setup, storage locations, and walkthrough behavior explicit in the README.
 - Keep deployment simple enough for one always-on host behind a reverse proxy.
@@ -53,6 +68,7 @@ The design also treats the project README as part of the product contract. The R
 - MCP callers can only read/search that mapped user’s thoughts, and only when `exposure_scope='remote_ok'`.
 - The browser UI must be fully usable without JavaScript.
 - The browser UI must have visible submit/save/delete controls; it cannot rely on implied or hidden affordances.
+- Best-effort metadata extraction is part of v1, and extracted metadata must remain secondary to user-authored content and tags.
 - The README walkthrough must be produced from real interactions and verified in CI.
 
 ## Recommended architecture
@@ -98,6 +114,7 @@ Reasoning:
 - official embedding docs are clear and current
 - the `/api/embed` API is simple and local-first
 - `all-minilm` makes quickstarts and CI practical on CPU-only machines
+- Ollama also provides a practical path for small local metadata-extraction models with structured JSON output
 - stronger alternative models remain available by configuration later
 
 ## Core domain model
@@ -173,17 +190,33 @@ Notes:
 - `user_id` ownership is mandatory on all read/write paths.
 - `__EMBED_DIMENSIONS__` is intentionally a placeholder. The migration helper should probe the configured Ollama model first and render the concrete dimension before applying the migration.
 - Only one embedding model is active per deployment at a time. Changing models later requires a documented re-embed + reindex workflow.
+- `metadata` should be normalized into a documented shape in v1 rather than remaining arbitrary model output. A minimal shape is `summary` plus array fields such as `topics` and `entities`.
 - Deletion is a hard delete in v1 so “delete” means the thought is gone.
+
+## Metadata extraction strategy
+
+Metadata extraction is part of v1.
+
+Rules:
+
+- The background worker should extract normalized metadata from thought content after capture and after edits to searchable content.
+- Manual tags remain first-class and user-controlled. Extracted metadata is additive and read-only in v1.
+- Metadata extraction is best-effort. If embeddings succeed but metadata extraction fails or produces invalid JSON, the app should normalize to safe defaults rather than fail the thought.
+- The extraction model should be configurable separately from the embedding model so operators can choose a small chat/instruct model without changing vector dimensions.
+- The create/update thought service should remain transport-agnostic so a future MCP `capture_thought` write tool can reuse it, but MCP write tools stay out of v1.
 
 ## Authentication and trust model
 
 ### Web auth
 
 - `/login` is the only public browser page.
-- Successful login creates a server-side session and sets a secure cookie.
+- Successful login creates a server-side session and sets a cookie with `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` enabled in production. Local development may explicitly disable `Secure` cookies so the README walkthrough can run over plain HTTP.
 - Logout invalidates the session and clears the cookie.
 - Every page under `/`, `/thoughts`, and `/api/*` requires a valid session.
-- Browser write actions must use CSRF protection.
+- Cookie-authenticated write requests must use CSRF protection, including both server-rendered forms and cookie-authenticated JSON API writes.
+- `POST /api/session` should return the session cookie plus a CSRF token for subsequent cookie-authenticated API writes.
+- Disabled users must be rejected not only at login but also on subsequent authenticated requests made with an existing session.
+- Expired or invalid sessions must fail closed.
 
 ### MCP auth
 
@@ -192,12 +225,14 @@ Notes:
 - Each token maps to exactly one user.
 - MCP never uses browser sessions.
 - MCP is read-only in v1.
+- Revoked tokens must be rejected on every request.
 
 ### Trust boundaries
 
 - Browser requests are scoped by authenticated session user.
 - MCP requests are scoped by token-mapped user.
 - `remote_ok` is an additional MCP filter, not a substitute for `user_id` ownership.
+- `last_seen_at` for sessions and `last_used_at` for MCP tokens should be updated best-effort and may be throttled to avoid a write on every request.
 - Logs must avoid raw passwords, raw bearer tokens, and full thought contents by default.
 
 ## Web UI contract
@@ -241,6 +276,7 @@ Required elements:
   - visible **Save thought** button
 - recent-thoughts list below the form
 - pending/ready/failed ingest status visible for recent thoughts
+- extracted metadata should be visible somewhere in the authenticated experience once ready, with manual tags shown more prominently than extracted fields
 - success/error flash messages after form actions
 
 Behavior:
@@ -255,15 +291,22 @@ Primary browse/manage page.
 Required elements:
 
 - keyword search input
+- search mode control for keyword vs semantic search
 - filters for exposure scope and ingest status
 - list of only the current user’s thoughts
-- each row/card shows excerpt, tags, ingest status, updated time, and an **Edit** action
+- each row/card shows excerpt, manual tags, ingest status, updated time, and an **Edit** action
+- extracted topics may be shown as secondary read-only chips when available
 
 Behavior:
 
 - mobile layout uses stacked cards
 - desktop layout may use a table or spacious list
 - search and filter state stays visible in the URL
+- pagination state stays visible in the URL
+- the default list sort is `updated_at desc, id desc`
+- the default page size is 20
+- empty states must be explicit for “no thoughts yet”, “no search results”, “all matching thoughts pending”, and “failed ingest”
+- failed thoughts should expose a visible **Retry ingestion** action
 
 ### `/thoughts/{id}`
 
@@ -278,13 +321,16 @@ Required elements:
 - visible **Delete thought** button
 - delete confirmation step
 - ingest status and ingest error display
+- read-only extracted metadata section
+- visible **Retry ingestion** button when the thought is `failed`
 
 Behavior:
 
 - only the owning user may access the page
 - successful edit uses POST/Redirect/GET
 - editing searchable fields resets ingest to `pending`
-- delete permanently removes the thought after confirmation
+- retry resets ingest to `pending`, clears the previous ingest error, and redirects back with a flash message
+- delete permanently removes the thought after confirmation and redirects to `/thoughts` with a flash message
 
 ## JSON API contract
 
@@ -298,12 +344,17 @@ Required endpoints:
 - `GET /api/thoughts/{id}` — fetch one thought owned by the current user
 - `PATCH /api/thoughts/{id}` — edit one thought owned by the current user
 - `DELETE /api/thoughts/{id}` — delete one thought owned by the current user
+- `POST /api/thoughts/{id}/retry` — retry ingestion for one failed thought owned by the current user
 - `GET /api/thoughts` — list/search the current user’s thoughts
 
 Rules:
 
 - the API uses the same ownership checks as the server-rendered UI
 - JSON endpoints return structured errors and appropriate status codes
+- cookie-authenticated JSON writes require a CSRF token header
+- `GET /api/thoughts` accepts `q`, `search_mode`, `exposure_scope`, `ingest_status`, `tag`, `page`, and `page_size`
+- `search_mode=semantic` is valid only when `q` is non-empty
+- `GET /api/thoughts` defaults to `page=1`, `page_size=20`, and `updated_at desc, id desc` ordering for non-search browse mode
 - the README walkthrough should use these endpoints rather than scraping HTML
 
 ## Request and data flows
@@ -313,7 +364,8 @@ Rules:
 1. User submits username and password.
 2. App validates the account and password hash.
 3. App stores a server-side session row and sets a session cookie.
-4. Browser is redirected to `/`.
+4. If the request is for `/api/session`, the response also includes a CSRF token for later cookie-authenticated API writes.
+5. Browser is redirected to `/`.
 
 ### Capture flow
 
@@ -323,8 +375,9 @@ Rules:
 4. App returns success immediately.
 5. Background worker claims pending thoughts in batches.
 6. Worker requests embeddings from Ollama.
-7. Worker updates the thought to `ready` or `failed`.
-8. UI and API show pending/ready/failed state.
+7. Worker requests structured metadata extraction from a configured Ollama metadata model.
+8. Worker normalizes metadata into the documented shape and updates the thought to `ready` or `failed`.
+9. UI and API show pending/ready/failed state plus extracted metadata when available.
 
 ### Edit flow
 
@@ -332,18 +385,28 @@ Rules:
 2. User edits content, tags, and/or exposure scope.
 3. App validates ownership and input.
 4. If searchable fields changed, app stores the edit and resets ingest to `pending`.
-5. Worker re-embeds the thought.
+5. Worker re-embeds the thought and re-runs metadata extraction.
 
 ### Delete flow
 
 1. User requests delete from `/thoughts/{id}`.
 2. App shows an explicit confirmation step.
 3. Confirmed delete permanently removes the row.
+4. Browser redirects to `/thoughts` with a success flash.
+
+### Retry flow
+
+1. User invokes retry from the list page, detail page, or JSON API.
+2. App validates ownership and current state.
+3. App resets the thought to `pending`, clears the old ingest error, and requeues background processing.
+4. Browser redirects back with a flash message; API returns the updated ingest state.
 
 ### Search flow
 
 - Keyword search always works over the current user’s thoughts.
-- Semantic search only includes the current user’s `ready` thoughts.
+- Semantic search only includes the current user’s `ready` thoughts and only runs when the query is non-empty.
+- Search and browse results are paginated.
+- Non-search browse defaults to `updated_at desc, id desc`; search paths must also use deterministic tie-breaking.
 - MCP search applies both `user_id` scoping and `remote_ok` filtering.
 
 ## MCP tool surface
@@ -387,7 +450,7 @@ It must contain:
    - starting the stack
    - provisioning a demo user in Postgres
    - provisioning a demo MCP token mapped to that user
-   - logging in with curl and storing a cookie jar
+   - logging in with curl, storing a cookie jar, and capturing the CSRF token needed for write requests
    - creating a thought with curl
    - retrieving that thought with curl
    - issuing an MCP query with curl that returns the thought
@@ -397,6 +460,8 @@ Implementation expectations:
 - the walkthrough should be generated from a script, not maintained by hand
 - CI should run the script, keep the generated transcript as an artifact, and fail if the checked-in README walkthrough is out of sync
 - the walkthrough should use the same app paths and auth model that the product actually uses
+- the walkthrough should show retrieved thought data after background processing so extracted metadata is visible in at least one response
+- the README or companion local-ops documentation must explain how to back up local Postgres data and how to recover after changing embedding models and re-embedding thoughts
 
 ## Embedding model strategy
 
@@ -426,13 +491,27 @@ Rules:
 - the migration/bootstrap path must verify model dimension before creating or accepting the schema
 - startup must fail fast if the configured model and schema dimension do not match
 
+## Metadata model strategy
+
+Use one configured Ollama metadata-extraction model per deployment.
+
+Rules:
+
+- keep it configurable separately from the embedding model
+- require structured JSON output that is normalized by the application before persistence
+- prefer a small CPU-friendly model in README and local development examples
+- treat model output as untrusted input until it passes normalization
+
 ## Failure handling
 
 - Invalid login returns a generic credential error without username enumeration.
 - Expired or invalid sessions redirect to login for browser requests and return auth errors for API requests.
+- Invalid or missing CSRF tokens return a forbidden error without mutating data.
+- Disabled users with existing sessions are treated as unauthenticated for browser/API access after the disabled state is observed.
 - Invalid or revoked MCP tokens return typed auth errors.
 - If Ollama is unavailable, create/edit requests still succeed and leave thoughts `pending`.
 - If embedding fails repeatedly, the thought is marked `failed` with a visible error and a retry path.
+- If metadata extraction fails, the thought should still become `ready` when embeddings succeed; metadata falls back to safe defaults instead of blocking searchability.
 - Only `ready` thoughts participate in semantic search.
 - Keyword search remains available even when embeddings are unavailable.
 - Delete on a missing or non-owned thought returns not-found rather than leaking ownership details.
@@ -446,17 +525,35 @@ Rules:
 - Code must pass `go vet`.
 - Automated coverage must stay very high.
 - The design target is at least 90% repo-wide coverage and at least 95% for core packages that enforce auth, ownership, CRUD, and MCP filtering.
+- `scripts/verify.sh` should be the canonical local verification entrypoint and should run the same checks CI expects.
+- coverage enforcement should be implemented by a dedicated script so local and CI behavior match.
 
 ### Automated tests
 
-- unit tests for config parsing, session auth, token auth, ownership filtering, capture validation, edit/delete flows, worker retry behavior, and MCP handlers
+- unit tests for config parsing, session auth, token auth, CSRF validation, ownership filtering, capture validation, metadata normalization, edit/delete/retry flows, worker retry behavior, and MCP handlers
 - repository tests for SQL query shape and user scoping
 - template/handler tests that prove visible submit/save/delete controls exist on rendered pages
-- integration tests for login → create → edit → delete → search using the fake embedder
+- template/handler tests that prove extracted metadata renders in the authenticated UI
+- template/handler tests that prove empty states and retry actions render correctly
+- integration tests for login → create → edit → retry → delete → search using the fake embedder
+- integration tests that prove metadata extraction updates the stored thought and survives invalid model output via normalization
 - shared contract tests for the embedder interface run against both the fake implementation and the real Ollama implementation
 - CI-backed tests against a real Ollama process using `all-minilm:22m`
+- CI-backed smoke verification that the real metadata-extraction path returns normalized JSON for at least one fixture thought
 - CI verification that one user cannot read another user’s thoughts through web, API, or MCP
 - CI verification that the README walkthrough still matches real behavior
+- CI verification that session expiry, disabled users, revoked MCP tokens, and CSRF enforcement behave as specified
+
+## Verification artifacts and operational docs
+
+The repository should include explicit verification and operations artifacts:
+
+- `scripts/verify.sh` to run the canonical local quality checks
+- a coverage-check script that enforces both repo-wide and core-package floors
+- `docs/acceptance-checklist.md` mapping major requirements to automated tests, walkthrough evidence, or explicit manual checks
+- local-ops documentation covering persistence paths, backup/restore expectations, and the steps required to re-embed/reindex after changing embedding models
+
+These artifacts are part of the deliverable, not optional extras.
 
 ### Test backend split
 
@@ -469,7 +566,7 @@ The same backend-agnostic contract cases should run against both implementations
 
 ## Deferred decisions
 
-- whether to add automatic metadata extraction in the first milestone or after CRUD/auth/search works end to end
 - whether to add an admin CLI for provisioning users/tokens instead of raw SQL walkthrough steps
+- whether to add a write-capable MCP `capture_thought` tool after the transport-agnostic create-thought service is proven out
 - whether to expose a parallel OpenAPI-only search endpoint for easier third-party debugging
 - whether to split the worker into a second process after the system proves useful
