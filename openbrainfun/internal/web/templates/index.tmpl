@@ -1,0 +1,40 @@
+{{define "content"}}
+<section class="panel">
+  <h1>Capture a thought</h1>
+  <form method="post" action="/thoughts" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <label for="content">Thought</label>
+    <textarea id="content" name="content" rows="6" placeholder="Write something worth remembering"></textarea>
+
+    <label for="exposure_scope">Exposure</label>
+    <select id="exposure_scope" name="exposure_scope">
+      <option value="local_only">Local only</option>
+      <option value="remote_ok">Remote OK</option>
+    </select>
+
+    <label for="user_tags">Tags</label>
+    <input id="user_tags" name="user_tags" type="text" placeholder="mcp, auth">
+
+    <button type="submit" class="button">Save thought</button>
+  </form>
+</section>
+
+<section class="panel">
+  <div class="section-heading">
+    <h2>Recent thoughts</h2>
+    <a href="/thoughts">View all</a>
+  </div>
+  {{if .Thoughts}}
+  <ul class="thought-list">
+    {{range .Thoughts}}
+    <li class="thought-card">
+      <a class="thought-link" href="/thoughts/{{.ID}}">{{.Content}}</a>
+      <p class="muted">{{.IngestStatus}}</p>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty-state">No thoughts yet. Save one above to get started.</p>
+  {{end}}
+</section>
+{{end}}

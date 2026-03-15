@@ -1,0 +1,85 @@
+package thoughts
+
+import (
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jrhy/sandbox/openbrainfun/internal/metadata"
+)
+
+var (
+	ErrBlankContent    = errors.New("blank content")
+	ErrInvalidExposure = errors.New("invalid exposure scope")
+)
+
+type ExposureScope string
+
+const (
+	ExposureScopeLocalOnly ExposureScope = "local_only"
+	ExposureScopeRemoteOK  ExposureScope = "remote_ok"
+)
+
+type IngestStatus string
+
+const (
+	IngestStatusPending IngestStatus = "pending"
+	IngestStatusReady   IngestStatus = "ready"
+	IngestStatusFailed  IngestStatus = "failed"
+)
+
+type Thought struct {
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	Content        string
+	ExposureScope  ExposureScope
+	UserTags       []string
+	Metadata       metadata.Metadata
+	Embedding      []float32
+	EmbeddingModel string
+	IngestStatus   IngestStatus
+	IngestError    string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type NewThoughtParams struct {
+	UserID        uuid.UUID
+	Content       string
+	ExposureScope ExposureScope
+	UserTags      []string
+}
+
+func NewThought(params NewThoughtParams) (Thought, error) {
+	trimmedContent := strings.TrimSpace(params.Content)
+	if trimmedContent == "" {
+		return Thought{}, ErrBlankContent
+	}
+	if !params.ExposureScope.Valid() {
+		return Thought{}, ErrInvalidExposure
+	}
+
+	tags := append([]string(nil), params.UserTags...)
+	now := time.Now().UTC()
+	return Thought{
+		ID:            uuid.New(),
+		UserID:        params.UserID,
+		Content:       trimmedContent,
+		ExposureScope: params.ExposureScope,
+		UserTags:      tags,
+		Metadata:      metadata.Normalize(nil),
+		IngestStatus:  IngestStatusPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}, nil
+}
+
+func (scope ExposureScope) Valid() bool {
+	switch scope {
+	case ExposureScopeLocalOnly, ExposureScopeRemoteOK:
+		return true
+	default:
+		return false
+	}
+}

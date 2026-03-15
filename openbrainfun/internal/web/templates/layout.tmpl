@@ -1,0 +1,30 @@
+{{define "layout"}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell nav-row">
+      <a class="brand" href="/">Open Brain</a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="/" {{if eq .Page "index"}}aria-current="page"{{end}}>Home</a>
+        <a href="/thoughts" {{if eq .Page "thoughts"}}aria-current="page"{{end}}>Thoughts</a>
+        <form method="post" action="/logout" class="logout-form">
+          <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+          <button type="submit" class="button button-secondary">Log out</button>
+        </form>
+      </nav>
+    </div>
+  </header>
+  <main class="shell page">
+    {{if .Flash}}<p class="flash-message">{{.Flash}}</p>{{end}}
+    {{template "content" .}}
+  </main>
+</body>
+</html>
+{{end}}

@@ -1,0 +1,76 @@
+{{define "content"}}
+<section class="panel">
+  <div class="section-heading">
+    <h1>Your thoughts</h1>
+    <a href="/">Capture another thought</a>
+  </div>
+  <form method="get" action="/thoughts" class="search-grid">
+    <div>
+      <label for="q">Search</label>
+      <input id="q" name="q" type="text" value="{{.SearchQuery}}" placeholder="Search thoughts">
+    </div>
+    <div>
+      <label for="search_mode">Mode</label>
+      <select id="search_mode" name="search_mode">
+        <option value="">Default</option>
+        <option value="keyword" {{if eq .SearchMode "keyword"}}selected{{end}}>Keyword</option>
+        <option value="semantic" {{if eq .SearchMode "semantic"}}selected{{end}}>Semantic</option>
+      </select>
+    </div>
+    <div>
+      <label for="exposure_scope">Exposure</label>
+      <select id="exposure_scope" name="exposure_scope">
+        <option value="">Any</option>
+        <option value="local_only" {{if eq .Exposure "local_only"}}selected{{end}}>Local only</option>
+        <option value="remote_ok" {{if eq .Exposure "remote_ok"}}selected{{end}}>Remote OK</option>
+      </select>
+    </div>
+    <div>
+      <label for="ingest_status">Ingest</label>
+      <select id="ingest_status" name="ingest_status">
+        <option value="">Any</option>
+        <option value="pending" {{if eq .IngestStatus "pending"}}selected{{end}}>Pending</option>
+        <option value="ready" {{if eq .IngestStatus "ready"}}selected{{end}}>Ready</option>
+        <option value="failed" {{if eq .IngestStatus "failed"}}selected{{end}}>Failed</option>
+      </select>
+    </div>
+    <div>
+      <label for="tag">Tag</label>
+      <input id="tag" name="tag" type="text" value="{{.Tag}}" placeholder="Filter by tag">
+    </div>
+    <div class="search-actions">
+      <button type="submit" class="button">Search</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  {{if .Thoughts}}
+  <ul class="thought-list">
+    {{range .Thoughts}}
+    <li class="thought-card">
+      <div class="card-row">
+        <div>
+          <a class="thought-link" href="/thoughts/{{.ID}}">{{.Content}}</a>
+          <p class="muted">Status: {{.IngestStatus}}</p>
+          {{if .IngestError}}<p class="error-text">{{.IngestError}}</p>{{end}}
+        </div>
+        <div class="card-actions">
+          <a class="button button-secondary" href="/thoughts/{{.ID}}">Edit</a>
+          {{if eq .IngestStatus "failed"}}
+          <form method="post" action="/thoughts/{{.ID}}/retry">
+            <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+            <input type="hidden" name="return_to" value="{{$.Path}}">
+            <button type="submit" class="button">Retry ingestion</button>
+          </form>
+          {{end}}
+        </div>
+      </div>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty-state">No thoughts match this view yet.</p>
+  {{end}}
+</section>
+{{end}}

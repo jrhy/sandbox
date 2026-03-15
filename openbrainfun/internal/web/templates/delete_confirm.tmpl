@@ -1,0 +1,14 @@
+{{define "content"}}
+<section class="panel narrow-panel">
+  <h1>Confirm delete</h1>
+  <p>You are about to permanently delete this thought:</p>
+  <blockquote class="thought-quote">{{.Thought.Content}}</blockquote>
+  <div class="button-row">
+    <form method="post" action="/thoughts/{{.Thought.ID}}/delete">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <button type="submit" class="button danger-button">Delete thought</button>
+    </form>
+    <a href="/thoughts/{{.Thought.ID}}" class="button button-secondary">Cancel</a>
+  </div>
+</section>
+{{end}}

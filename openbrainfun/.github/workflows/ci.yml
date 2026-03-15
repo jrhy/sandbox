@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  fake-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh .github/scripts/*.sh
+      - name: Verify fake backend
+        run: ./scripts/verify.sh
+
+  real-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Ollama
+        run: curl -fsSL https://ollama.com/install.sh | sh
+      - name: Start Ollama
+        run: |
+          nohup ollama serve >/tmp/ollama.log 2>&1 &
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh .github/scripts/*.sh
+      - name: Run real embed and metadata tests
+        env:
+          OPENBRAIN_OLLAMA_URL: http://127.0.0.1:11434
+          OPENBRAIN_EMBED_MODEL: all-minilm:22m
+          OPENBRAIN_METADATA_MODEL: qwen3:0.6b
+        run: ./.github/scripts/run-real-embed-tests.sh
+      - name: Generate walkthrough artifacts
+        env:
+          OPENBRAIN_OLLAMA_URL: http://127.0.0.1:11434
+          OPENBRAIN_EMBED_MODEL: all-minilm:22m
+          OPENBRAIN_METADATA_MODEL: qwen3:0.6b
+        run: ./scripts/walkthrough.sh
+      - name: Verify walkthrough artifacts are checked in
+        run: git diff --exit-code README.md docs/walkthrough.demo.md

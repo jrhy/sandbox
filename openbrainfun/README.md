@@ -1,3 +1,57 @@
+# OpenBrainFun
+
+OpenBrainFun is a local-first, multi-user “open brain” system built in Go.
+
+It provides:
+
+- a password-protected browser UI for capturing and editing thoughts
+- a separate MCP endpoint on its own port, authenticated by bearer token
+- Postgres + pgvector storage
+- Ollama-based local embeddings and best-effort metadata extraction
+
+## What runs
+
+- web UI / JSON API on `OPENBRAIN_WEB_ADDR` (default walkthrough address: `127.0.0.1:18080`)
+- MCP on `OPENBRAIN_MCP_ADDR` (default walkthrough address: `127.0.0.1:18081`)
+- PostgreSQL via `compose.yaml`
+- Ollama via `compose.yaml`
+
+## Persistent data
+
+Local persistent data is stored in bind mounts so it is obvious where state
+lives:
+
+- `./var/postgres`
+- `./var/ollama`
+
+## Models used in practice
+
+- embedding model: `all-minilm:22m`
+- metadata model: `qwen3:0.6b`
+
+Both are configurable:
+
+- `OPENBRAIN_EMBED_MODEL`
+- `OPENBRAIN_METADATA_MODEL`
+
+## Quick start
+
+```bash
+docker compose up -d postgres ollama
+./scripts/walkthrough.sh
+```
+
+The walkthrough script provisions a demo user and MCP token directly in the
+database, starts the app, captures real HTTP interactions, and updates both
+`docs/walkthrough.demo.md` and the generated walkthrough section below.
+
+## Operations
+
+See [docs/operations.md](docs/operations.md) for backup/restore notes and the
+recommended re-embedding flow when models change.
+
+<!-- walkthrough:start -->
+
 ## Walkthrough
 
 This section is generated from `./scripts/walkthrough.sh`.
@@ -89,3 +143,5 @@ Content-Length: 504
 
 {"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"{\"thoughts\":[{\"content\":\"Remember MCP auth and local sessions\",\"exposure_scope\":\"remote_ok\",\"id\":\"63bdeef1-6171-4149-a849-6e86be30e5d8\",\"ingest_status\":\"ready\",\"user_tags\":[\"mcp\",\"sessions\"]}]}"}],"structuredContent":{"thoughts":[{"content":"Remember MCP auth and local sessions","exposure_scope":"remote_ok","id":"63bdeef1-6171-4149-a849-6e86be30e5d8","ingest_status":"ready","user_tags":["mcp","sessions"]}]}}}
 ```
+
+<!-- walkthrough:end -->

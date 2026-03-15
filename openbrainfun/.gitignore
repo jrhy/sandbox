@@ -1,1 +1,6 @@
 .worktrees/
+.cache/
+.cover/
+var/
+bin/
+openbrain

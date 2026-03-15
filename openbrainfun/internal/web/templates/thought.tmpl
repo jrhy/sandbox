@@ -1,0 +1,67 @@
+{{define "content"}}
+<section class="panel">
+  <div class="section-heading">
+    <h1>Edit thought</h1>
+    <a href="/thoughts">Back to all thoughts</a>
+  </div>
+  <form method="post" action="/thoughts/{{.Thought.ID}}" class="stack-form">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <label for="content">Thought</label>
+    <textarea id="content" name="content" rows="8">{{.Thought.Content}}</textarea>
+
+    <label for="exposure_scope">Exposure</label>
+    <select id="exposure_scope" name="exposure_scope">
+      <option value="local_only" {{if eq .Thought.ExposureScope "local_only"}}selected{{end}}>Local only</option>
+      <option value="remote_ok" {{if eq .Thought.ExposureScope "remote_ok"}}selected{{end}}>Remote OK</option>
+    </select>
+
+    <label for="user_tags">Tags</label>
+    <input id="user_tags" name="user_tags" type="text" value="{{join .Thought.UserTags ", "}}">
+
+    <div class="button-row">
+      <button type="submit" class="button">Save changes</button>
+      <a href="/thoughts/{{.Thought.ID}}/delete" class="button button-secondary">Delete thought</a>
+    </div>
+  </form>
+</section>
+
+<section class="panel metadata-grid">
+  <div>
+    <h2>Extracted summary</h2>
+    <p>{{.Thought.Metadata.Summary}}</p>
+  </div>
+  <div>
+    <h2>Topics</h2>
+    {{if .Thought.Metadata.Topics}}
+    <ul>
+      {{range .Thought.Metadata.Topics}}<li>{{.}}</li>{{end}}
+    </ul>
+    {{else}}
+    <p class="muted">No topics yet.</p>
+    {{end}}
+  </div>
+  <div>
+    <h2>Entities</h2>
+    {{if .Thought.Metadata.Entities}}
+    <ul>
+      {{range .Thought.Metadata.Entities}}<li>{{.}}</li>{{end}}
+    </ul>
+    {{else}}
+    <p class="muted">No entities yet.</p>
+    {{end}}
+  </div>
+  <div>
+    <h2>Ingestion</h2>
+    <p>Status: {{.Thought.IngestStatus}}</p>
+    {{if .Thought.IngestError}}<p class="error-text">{{.Thought.IngestError}}</p>{{end}}
+    {{if .Thought.EmbeddingModel}}<p>Embedding model: {{.Thought.EmbeddingModel}}</p>{{end}}
+    {{if eq .Thought.IngestStatus "failed"}}
+    <form method="post" action="/thoughts/{{.Thought.ID}}/retry">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="return_to" value="{{.Path}}">
+      <button type="submit" class="button">Retry ingestion</button>
+    </form>
+    {{end}}
+  </div>
+</section>
+{{end}}

@@ -12,7 +12,12 @@
 
 ## Implementation notes before starting
 
-- Keep application code at the repository root (`cmd/`, `internal/`, `migrations/`, `scripts/`, `README.md`).
+- In this monorepo, treat `openbrainfun/` as the project root. Keep
+  application code under this directory (`cmd/`, `internal/`, `migrations/`,
+  `scripts/`, `README.md`) and do not modify the sandbox repo root.
+- For Task 1, a minimal nested `go.mod` and empty package directories are
+  acceptable test harness setup before the first red test. Do not implement
+  application behavior before watching the first test fail.
 - The README walkthrough is a deliverable, not a follow-up. Design the code so the walkthrough can be generated from real interactions.
 - Use `all-minilm:22m` for the README quickstart and the real-provider CI job. Allow `OPENBRAIN_EMBED_MODEL` to override it.
 - Add a separate `OPENBRAIN_METADATA_MODEL` for the metadata-extraction model; do not tie it to vector dimensions.
@@ -21,6 +26,8 @@
 - The same contract/integration suites must be runnable with `OPENBRAIN_EMBED_BACKEND=fake` and `OPENBRAIN_EMBED_BACKEND=ollama`.
 - Manual tags remain first-class. Extracted metadata is read-only and normalized before persistence.
 - MCP stays read-only in v1, but the thought creation service should stay transport-agnostic so a future `capture_thought` MCP tool can reuse it.
+- Do not leave the worker loop implicit: Task 7 must wire and test the polling loop from startup, not just the `RunOnce` processor logic.
+- Do not leave the app on noop wiring: Task 7 must also compose the real auth/thought stores, services, and web/API handlers into startup so Task 11/12 are not the first place integration fails.
 
 ### Task 1: Bootstrap the module, config, and dual-listener server skeleton
 
