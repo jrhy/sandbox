@@ -7,16 +7,17 @@ It is directly inspired by Nate B Jones’ Open Brain guide:
 - <https://promptkit.natebjones.com/20260224_uq1_guide_main>
 
 The goal is similar: keep thoughts in a store that can be searched and reused
-through MCP by external AI clients. The main differences are intentional:
+through MCP by external AI clients. The main infrastructural differences are:
 
 - it is self-hosted and local-first rather than built around hosted services
 - it replaces Supabase with Postgres + pgvector
 - it replaces Slack capture with a built-in web UI and JSON API
 - it replaces remote embedding dependencies with Ollama running locally
-- it adds DB-backed username/password sessions for the browser UI
-- it scopes thoughts and MCP access per user from day one
-- it treats the README walkthrough, local operations docs, and verification
-  scripts as part of the project contract
+
+Separately, OpenBrainFun also chooses DB-backed browser sessions, per-user
+thought and MCP isolation from day one, and a repo that treats the README
+walkthrough, local operations docs, and verification scripts as first-class
+project artifacts.
 
 In practice, OpenBrainFun provides:
 

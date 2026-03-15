@@ -17,13 +17,15 @@ This design is inspired by Nate B Jones’ “Build Your Open Brain” guide: <h
 
 The intended similarity is the core user value: capture thoughts, enrich them with embeddings and metadata, and retrieve them through an open protocol from multiple AI clients.
 
-The intentional divergences are:
+The main infrastructural divergences are:
 
 - use a self-hosted Go application, Postgres + pgvector, and Ollama instead of Supabase, OpenRouter, Slack, and hosted edge functions
 - make the browser UI and authenticated JSON API first-class interfaces rather than relying on Slack as the primary capture interface
-- support explicitly multi-user ownership and isolation from day one instead of a simpler single-brain setup
-- keep MCP read-only in v1 and defer a write-capable `capture_thought` MCP tool until the core create/update service is proven out
-- require stronger project artifacts around walkthroughs, verification, coverage, and local operations than the original guide needs
+
+Separately, this design also chooses explicitly multi-user ownership and
+isolation from day one, keeps MCP read-only in v1 while deferring a
+write-capable `capture_thought` tool, and treats walkthroughs, verification,
+coverage, and local-operations documentation as first-class project artifacts.
 
 ## Goals
 
