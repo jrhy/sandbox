@@ -2,14 +2,14 @@
 
 ## Summary
 
-Build a local-first “open brain” service with a Go application, Postgres + pgvector storage, Ollama embeddings, and best-effort metadata extraction. The product has two externally visible surfaces:
+Build a local-first “open brain” service with a Go application, Postgres + pgvector storage, Ollama embeddings, and best-effort metadata extraction. The system has two externally visible surfaces:
 
 1. an authenticated browser experience for login, capture, browse, search, edit, and delete
 2. a read-only MCP endpoint on a separate port, authenticated by bearer tokens that each map to exactly one user
 
 The system is explicitly multi-user from the beginning. Thoughts belong to a user. Browser access is allowed only through username/password login. MCP access is allowed only through a mapped bearer token, and every MCP read/search is restricted to the mapped user’s `remote_ok` thoughts.
 
-The design also treats the project README as part of the product contract. The README must include a walkthrough generated from real interactions that shows database provisioning, browser/API login via curl, thought creation and retrieval, and an MCP query returning the created thought.
+The design also treats the project README as part of the system contract. The README must include a walkthrough generated from real interactions that shows database provisioning, browser/API login via curl, thought creation and retrieval, and an MCP query returning the created thought.
 
 ## Inspiration and intentional divergences
 
@@ -20,7 +20,7 @@ The intended similarity is the core user value: capture thoughts, enrich them wi
 The intentional divergences are:
 
 - use a self-hosted Go application, Postgres + pgvector, and Ollama instead of Supabase, OpenRouter, Slack, and hosted edge functions
-- make the browser UI and authenticated JSON API first-class product surfaces rather than relying on Slack as the primary capture interface
+- make the browser UI and authenticated JSON API first-class interfaces rather than relying on Slack as the primary capture interface
 - support explicitly multi-user ownership and isolation from day one instead of a simpler single-brain setup
 - keep MCP read-only in v1 and defer a write-capable `capture_thought` MCP tool until the core create/update service is proven out
 - require stronger project artifacts around walkthroughs, verification, coverage, and local operations than the original guide needs
@@ -28,7 +28,7 @@ The intentional divergences are:
 ## Goals
 
 - Own the full data path locally while still supporting remote access.
-- Ship a fully working authenticated product, not a loose prototype.
+- Ship a fully working authenticated system, not a loose prototype.
 - Make every browser page require login except the login page itself.
 - Keep user data isolated by default in both web and MCP paths.
 - Support deterministic browse/search without needing a chat model.
@@ -58,7 +58,7 @@ The intentional divergences are:
 - pgvector officially supports exact and approximate nearest-neighbor search in Postgres and supports HNSW indexes. Source: <https://github.com/pgvector/pgvector>
 - The official MCP Go SDK exists and the release notes show Streamable HTTP JSON response support, which is useful for curl-friendly walkthroughs and test automation. Source: <https://github.com/modelcontextprotocol/go-sdk/releases>
 
-## Product requirements
+## System requirements
 
 - Users are manually provisioned in the database for v1.
 - Browser auth is login/logout only.
@@ -459,7 +459,7 @@ Implementation expectations:
 
 - the walkthrough should be generated from a script, not maintained by hand
 - CI should run the script, keep the generated transcript as an artifact, and fail if the checked-in README walkthrough is out of sync
-- the walkthrough should use the same app paths and auth model that the product actually uses
+- the walkthrough should use the same app paths and auth model that the system actually uses
 - the walkthrough should show retrieved thought data after background processing so extracted metadata is visible in at least one response
 - the README or companion local-ops documentation must explain how to back up local Postgres data and how to recover after changing embedding models and re-embedding thoughts
 
