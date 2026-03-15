@@ -857,7 +857,7 @@ Expected: FAIL because the README renderer and walkthrough assets do not exist.
   - calls the MCP endpoint with curl
   - captures requests and responses into `docs/walkthrough.demo.md`
 - Make the retrieved thought example show extracted metadata in at least one JSON response.
-- Add a README renderer/updater that writes the walkthrough section between markers in `README.md`.
+- Add a README renderer/updater that writes the walkthrough section between markers in `README.md`, wrapping long `curl` commands and pretty-printing JSON request/response bodies for readability while staying faithful to the captured interactions.
 - Keep the README explicit about persistence paths and the exact Ollama model used.
 - Add `docs/operations.md` covering persistence paths, local backup/restore expectations, and the operator steps for changing embedding models and re-embedding/reindexing stored thoughts.
 

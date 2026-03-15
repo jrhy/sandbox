@@ -9,7 +9,7 @@ Build a local-first “open brain” service with a Go application, Postgres + p
 
 The system is explicitly multi-user from the beginning. Thoughts belong to a user. Browser access is allowed only through username/password login. MCP access is allowed only through a mapped bearer token, and every MCP read/search is restricted to the mapped user’s `remote_ok` thoughts.
 
-The design also treats the project README as part of the system contract. The README must include a walkthrough generated from real interactions that shows database provisioning, browser/API login via curl, thought creation and retrieval, and an MCP query returning the created thought.
+The design also treats the project README as part of the system contract. The README must include a walkthrough generated from real interactions that shows admin-CLI provisioning, browser/API login via curl, thought creation and retrieval, and an MCP query returning the created thought.
 
 ## Inspiration and intentional divergences
 
@@ -60,7 +60,7 @@ The intentional divergences are:
 
 ## System requirements
 
-- Users are manually provisioned in the database for v1.
+- Users are operator-provisioned for v1 through an admin CLI backed by the database. There is no self-service signup flow.
 - Browser auth is login/logout only.
 - Every thought belongs to exactly one user.
 - In the web UI, users can only read, search, edit, and delete their own thoughts.
@@ -217,6 +217,15 @@ Rules:
 - `POST /api/session` should return the session cookie plus a CSRF token for subsequent cookie-authenticated API writes.
 - Disabled users must be rejected not only at login but also on subsequent authenticated requests made with an existing session.
 - Expired or invalid sessions must fail closed.
+
+### Admin CLI
+
+- The `openbrain` command should default to helpful usage output rather than starting the server implicitly.
+- `openbrain start` starts the web listener, MCP listener, and background worker.
+- `openbrain user update <username>` upserts a user password and may mint an initial default MCP token when the user has none.
+- `openbrain user delete <username>` removes an operator-managed user.
+- `openbrain token create|list|delete <username>` manages per-user MCP tokens without exposing existing token plaintext after creation.
+- The walkthrough and local-ops docs should use these subcommands rather than direct SQL for normal operator setup.
 
 ### MCP auth
 
@@ -460,6 +469,7 @@ Implementation expectations:
 - the walkthrough should be generated from a script, not maintained by hand
 - CI should run the script, keep the generated transcript as an artifact, and fail if the checked-in README walkthrough is out of sync
 - the walkthrough should use the same app paths and auth model that the system actually uses
+- the walkthrough renderer may format captured interactions for readability, including wrapped long `curl` commands and pretty-printed JSON request/response bodies, but it must stay faithful to the real commands and responses that were captured
 - the walkthrough should show retrieved thought data after background processing so extracted metadata is visible in at least one response
 - the README or companion local-ops documentation must explain how to back up local Postgres data and how to recover after changing embedding models and re-embedding thoughts
 
