@@ -10,6 +10,24 @@
 Both paths are gitignored and safe to remove only if you intend to destroy local
 state.
 
+## Admin CLI
+
+The `openbrain` command now has explicit admin subcommands instead of assuming
+the server should start immediately.
+
+Examples:
+
+```bash
+go run ./cmd/openbrain
+go run ./cmd/openbrain start
+OPENBRAIN_DATABASE_URL=postgres://openbrain:openbrain@127.0.0.1:5432/openbrain?sslmode=disable \
+  go run ./cmd/openbrain user update demo --password demo-password
+OPENBRAIN_DATABASE_URL=postgres://openbrain:openbrain@127.0.0.1:5432/openbrain?sslmode=disable \
+  go run ./cmd/openbrain token create demo --label laptop
+```
+
+MCP token plaintext is shown only when a token is created or rotated.
+
 ## Local backup and restore
 
 ### PostgreSQL backup

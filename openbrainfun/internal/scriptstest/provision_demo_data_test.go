@@ -1,7 +1,6 @@
 package scriptstest
 
 import (
-	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,62 +22,6 @@ func writeExecutable(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o755); err != nil {
 		t.Fatalf("write executable %s: %v", path, err)
-	}
-}
-
-func TestProvisionDemoDataUsesWorkspaceLocalGoCachesWhenUnset(t *testing.T) {
-	repo := repoRoot(t)
-	tempDir := t.TempDir()
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin: %v", err)
-	}
-
-	goEnvFile := filepath.Join(tempDir, "go-env.txt")
-	writeExecutable(t, filepath.Join(binDir, "go"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'GOCACHE=%s\n' \"${GOCACHE-}\" > \"$GO_ENV_FILE\"\nprintf 'GOMODCACHE=%s\n' \"${GOMODCACHE-}\" >> \"$GO_ENV_FILE\"\nprintf 'GOWORK=%s\n' \"${GOWORK-}\" >> \"$GO_ENV_FILE\"\nprintf 'password_hash=fake-password-hash\n'\nprintf 'token_hash=fake-token-hash\n'\n")
-	writeExecutable(t, filepath.Join(binDir, "podman-compose"), "#!/usr/bin/env bash\nset -euo pipefail\ncat >/dev/null\n")
-
-	cmd := exec.Command("bash", "scripts/provision-demo-data.sh")
-	cmd.Dir = repo
-	cmd.Env = append(os.Environ(),
-		"PATH="+binDir+":/usr/bin:/bin",
-		"GO_ENV_FILE="+goEnvFile,
-		"GOCACHE=",
-		"GOMODCACHE=",
-		"GOWORK=",
-		"OPENBRAIN_DEMO_USERNAME=test-user",
-		"OPENBRAIN_DEMO_PASSWORD=test-password",
-		"OPENBRAIN_DEMO_MCP_TOKEN=test-token",
-	)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("provision-demo-data.sh failed: %v\n%s", err, output)
-	}
-
-	rawEnv, err := os.ReadFile(goEnvFile)
-	if err != nil {
-		t.Fatalf("read go env file: %v", err)
-	}
-
-	values := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(rawEnv)), "\n") {
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			t.Fatalf("unexpected env line: %q", line)
-		}
-		values[parts[0]] = parts[1]
-	}
-
-	wantCache := filepath.Join(repo, ".cache", "go-build")
-	wantModCache := filepath.Join(repo, ".cache", "gomod")
-	if got := values["GOCACHE"]; got != wantCache {
-		t.Fatalf("GOCACHE = %q, want %q\nscript output:\n%s", got, wantCache, bytes.TrimSpace(output))
-	}
-	if got := values["GOMODCACHE"]; got != wantModCache {
-		t.Fatalf("GOMODCACHE = %q, want %q", got, wantModCache)
-	}
-	if got := values["GOWORK"]; got != "off" {
-		t.Fatalf("GOWORK = %q, want %q", got, "off")
 	}
 }
 
@@ -115,30 +58,21 @@ func TestContainerComposePrefersPodmanCompose(t *testing.T) {
 	}
 }
 
-func TestProvisionDemoDataRunsRealGoHelperWithinModule(t *testing.T) {
+func TestWalkthroughScriptUsesOpenbrainCLIForProvisioningAndStart(t *testing.T) {
 	repo := repoRoot(t)
-	tempDir := t.TempDir()
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin: %v", err)
-	}
-
-	writeExecutable(t, filepath.Join(binDir, "podman-compose"), "#!/usr/bin/env bash\nset -euo pipefail\ncat >/dev/null\n")
-
-	cmd := exec.Command("bash", "scripts/provision-demo-data.sh")
-	cmd.Dir = repo
-	cmd.Env = append(os.Environ(),
-		"PATH="+binDir+":"+os.Getenv("PATH"),
-		"GOCACHE=",
-		"GOMODCACHE=",
-		"GOWORK=",
-		"OPENBRAIN_DEMO_USERNAME=test-user",
-		"OPENBRAIN_DEMO_PASSWORD=test-password",
-		"OPENBRAIN_DEMO_MCP_TOKEN=test-token",
-	)
-	output, err := cmd.CombinedOutput()
+	script, err := os.ReadFile(filepath.Join(repo, "scripts", "walkthrough.sh"))
 	if err != nil {
-		t.Fatalf("provision-demo-data.sh failed with real go: %v\n%s", err, output)
+		t.Fatalf("read walkthrough.sh: %v", err)
+	}
+	text := string(script)
+	if strings.Contains(text, "provision-demo-data.sh") {
+		t.Fatalf("walkthrough should no longer call provision-demo-data.sh:\n%s", text)
+	}
+	if !strings.Contains(text, "go run ./cmd/openbrain user update") {
+		t.Fatalf("walkthrough should provision through openbrain user update:\n%s", text)
+	}
+	if !strings.Contains(text, "go run ./cmd/openbrain start") {
+		t.Fatalf("walkthrough should start the server through openbrain start:\n%s", text)
 	}
 }
 

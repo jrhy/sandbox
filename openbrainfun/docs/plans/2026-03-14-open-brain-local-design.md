@@ -448,8 +448,8 @@ It must contain:
 4. exact setup for the embedding model used in the walkthrough
 5. a walkthrough generated from real interactions that shows:
    - starting the stack
-   - provisioning a demo user in Postgres
-   - provisioning a demo MCP token mapped to that user
+   - provisioning or updating a demo user with the `openbrain` CLI
+   - printing a newly created demo MCP token from the `openbrain` CLI when no token exists yet
    - logging in with curl, storing a cookie jar, and capturing the CSRF token needed for write requests
    - creating a thought with curl
    - retrieving that thought with curl
@@ -566,7 +566,7 @@ The same backend-agnostic contract cases should run against both implementations
 
 ## Deferred decisions
 
-- whether to add an admin CLI for provisioning users/tokens instead of raw SQL walkthrough steps
+- whether the admin CLI should grow password-stdin or interactive password prompts after the basic subcommand flow proves useful
 - whether to add a write-capable MCP `capture_thought` tool after the transport-agnostic create-thought service is proven out
 - whether to expose a parallel OpenAPI-only search endpoint for easier third-party debugging
 - whether to split the worker into a second process after the system proves useful

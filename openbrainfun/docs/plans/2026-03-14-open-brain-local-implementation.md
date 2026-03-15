@@ -804,7 +804,6 @@ git commit -m "openbrainfun: add isolated mcp server"
 **Files:**
 - Create: `compose.yaml`
 - Create: `scripts/wait-for-stack.sh`
-- Create: `scripts/provision-demo-data.sh`
 - Create: `scripts/walkthrough.sh`
 - Create: `internal/readmegen/render.go`
 - Create: `internal/readmegen/render_test.go`
@@ -837,11 +836,19 @@ Expected: FAIL because the README renderer and walkthrough assets do not exist.
 **Step 3: Write minimal implementation**
 
 - Add `compose.yaml` with explicit bind mounts `./var/postgres` and `./var/ollama`.
-- Add a provisioning script that inserts a demo user and a demo MCP token into Postgres.
+- Add admin CLI subcommands under `cmd/openbrain` so the walkthrough can provision a demo user and token through the real application entrypoint:
+  - `openbrain start`
+  - `openbrain user update <username> --password <password>`
+  - `openbrain user delete <username>`
+  - `openbrain token create <username> [--label <label>]`
+  - `openbrain token list <username>`
+  - `openbrain token delete <username> --label <label>`
+- Make `openbrain` with no subcommand print helpful usage instead of attempting to start the server.
 - Add a walkthrough script that:
   - starts the stack
   - waits for readiness
-  - provisions the demo user/token
+  - provisions the demo user through `openbrain user update`
+  - captures the printed demo MCP token for the later curl example
   - logs in with curl using `/api/session`
   - stores the returned CSRF token alongside the cookie jar
   - creates a thought with curl using both the cookie jar and CSRF header
@@ -867,7 +874,7 @@ Expected: `docs/walkthrough.demo.md` and the README walkthrough section update f
 **Step 6: Commit**
 
 ```bash
-git add compose.yaml scripts/wait-for-stack.sh scripts/provision-demo-data.sh scripts/walkthrough.sh internal/readmegen/render.go internal/readmegen/render_test.go docs/operations.md docs/walkthrough.demo.md README.md
+git add compose.yaml scripts/wait-for-stack.sh scripts/walkthrough.sh internal/readmegen/render.go internal/readmegen/render_test.go docs/operations.md docs/walkthrough.demo.md README.md cmd/openbrain
 git commit -m "openbrainfun: add real walkthrough and local ops docs"
 ```
 

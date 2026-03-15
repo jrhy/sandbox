@@ -136,7 +136,7 @@ func (f *fakeThoughtDB) Exec(ctx context.Context, query string, args ...any) (pg
 
 func (f *fakeThoughtDB) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
 	if f.queryFunc == nil {
-		return fakeRows{}, nil
+		return &fakeRows{}, nil
 	}
 	return f.queryFunc(ctx, query, args...)
 }
@@ -149,13 +149,13 @@ func (f fakePGXRow) Scan(dest ...any) error { return f.scanFunc(dest...) }
 
 type fakeRows struct{}
 
-func (fakeRows) Close()                                       {}
-func (fakeRows) Err() error                                   { return nil }
-func (fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("SELECT 0") }
-func (fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
-func (fakeRows) Next() bool                                   { return false }
-func (fakeRows) Scan(dest ...any) error                       { return nil }
-func (fakeRows) Values() ([]any, error)                       { return nil, nil }
-func (fakeRows) RawValues() [][]byte                          { return nil }
-func (fakeRows) Conn() *pgx.Conn                              { return nil }
-func (fakeRows) NextRow() bool                                { return false }
+func (*fakeRows) Close()                                       {}
+func (*fakeRows) Err() error                                   { return nil }
+func (*fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("SELECT 0") }
+func (*fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (*fakeRows) Next() bool                                   { return false }
+func (*fakeRows) Scan(dest ...any) error                       { return nil }
+func (*fakeRows) Values() ([]any, error)                       { return nil, nil }
+func (*fakeRows) RawValues() [][]byte                          { return nil }
+func (*fakeRows) Conn() *pgx.Conn                              { return nil }
+func (*fakeRows) NextRow() bool                                { return false }

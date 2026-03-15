@@ -16,17 +16,26 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+type rowsScanner interface {
+	Next() bool
+	Scan(dest ...any) error
+	Err() error
+	Close()
+}
+
 type commandTag interface {
 	RowsAffected() int64
 }
 
 type queryer interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) rowScanner
+	QueryContext(ctx context.Context, query string, args ...any) (rowsScanner, error)
 	ExecContext(ctx context.Context, query string, args ...any) (commandTag, error)
 }
 
 type pgxQueryer interface {
 	QueryRow(ctx context.Context, query string, args ...any) pgx.Row
+	Query(ctx context.Context, query string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
 }
 
@@ -36,6 +45,10 @@ type pgxAuthAdapter struct {
 
 func (a pgxAuthAdapter) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
 	return a.db.QueryRow(ctx, query, args...)
+}
+
+func (a pgxAuthAdapter) QueryContext(ctx context.Context, query string, args ...any) (rowsScanner, error) {
+	return a.db.Query(ctx, query, args...)
 }
 
 func (a pgxAuthAdapter) ExecContext(ctx context.Context, query string, args ...any) (commandTag, error) {
@@ -200,5 +213,105 @@ func (s *AuthStore) TouchSessionActivity(ctx context.Context, sessionID uuid.UUI
 func (s *AuthStore) TouchMCPTokenActivity(ctx context.Context, tokenID uuid.UUID, usedAt time.Time) error {
 	const query = `update mcp_tokens set last_used_at = $2 where id = $1`
 	_, err := s.db.ExecContext(ctx, query, tokenID, usedAt)
+	return err
+}
+
+func (s *AuthStore) UpsertUser(ctx context.Context, username, passwordHash string, now time.Time) (auth.User, error) {
+	const query = `
+insert into users (username, password_hash, created_at, updated_at)
+values ($1, $2, $3, $4)
+on conflict (username) do update
+set password_hash = excluded.password_hash,
+    updated_at = excluded.updated_at
+returning id, username, password_hash, created_at, updated_at, disabled_at
+`
+
+	var user auth.User
+	var disabledAt sql.NullTime
+	err := s.db.QueryRowContext(ctx, query, username, passwordHash, now, now).Scan(
+		&user.ID,
+		&user.Username,
+		&user.PasswordHash,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+		&disabledAt,
+	)
+	if err != nil {
+		return auth.User{}, err
+	}
+	if disabledAt.Valid {
+		user.DisabledAt = &disabledAt.Time
+	}
+	return user, nil
+}
+
+func (s *AuthStore) DeleteUserByUsername(ctx context.Context, username string) (int64, error) {
+	const query = `delete from users where username = $1`
+	tag, err := s.db.ExecContext(ctx, query, username)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *AuthStore) ListTokensByUserID(ctx context.Context, userID uuid.UUID) ([]auth.MCPToken, error) {
+	const query = `
+select id, user_id, token_hash, label, created_at, last_used_at, revoked_at
+from mcp_tokens
+where user_id = $1
+order by created_at asc, label asc
+`
+
+	rows, err := s.db.QueryContext(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tokens := make([]auth.MCPToken, 0)
+	for rows.Next() {
+		var token auth.MCPToken
+		var lastUsedAt sql.NullTime
+		var revokedAt sql.NullTime
+		if err := rows.Scan(
+			&token.ID,
+			&token.UserID,
+			&token.TokenHash,
+			&token.Label,
+			&token.CreatedAt,
+			&lastUsedAt,
+			&revokedAt,
+		); err != nil {
+			return nil, err
+		}
+		if lastUsedAt.Valid {
+			token.LastUsedAt = lastUsedAt.Time
+		}
+		if revokedAt.Valid {
+			token.RevokedAt = &revokedAt.Time
+		}
+		tokens = append(tokens, token)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return tokens, nil
+}
+
+func (s *AuthStore) DeleteTokensByUserIDAndLabel(ctx context.Context, userID uuid.UUID, label string) (int64, error) {
+	const query = `delete from mcp_tokens where user_id = $1 and label = $2`
+	tag, err := s.db.ExecContext(ctx, query, userID, label)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *AuthStore) CreateToken(ctx context.Context, token auth.MCPToken) error {
+	const query = `
+insert into mcp_tokens (id, user_id, token_hash, label, created_at)
+values ($1, $2, $3, $4, $5)
+`
+	_, err := s.db.ExecContext(ctx, query, token.ID, token.UserID, token.TokenHash, token.Label, token.CreatedAt)
 	return err
 }

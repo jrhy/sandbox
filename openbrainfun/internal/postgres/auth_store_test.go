@@ -55,11 +55,19 @@ func TestAuthStoreFindUserByUsernameTranslatesNotFound(t *testing.T) {
 
 type fakeDB struct {
 	queryRowFunc func(ctx context.Context, query string, args ...any) rowScanner
+	queryFunc    func(ctx context.Context, query string, args ...any) (rowsScanner, error)
 	execFunc     func(ctx context.Context, query string, args ...any) (commandTag, error)
 }
 
 func (f *fakeDB) QueryRowContext(ctx context.Context, query string, args ...any) rowScanner {
 	return f.queryRowFunc(ctx, query, args...)
+}
+
+func (f *fakeDB) QueryContext(ctx context.Context, query string, args ...any) (rowsScanner, error) {
+	if f.queryFunc == nil {
+		return &fakeAuthRows{}, nil
+	}
+	return f.queryFunc(ctx, query, args...)
 }
 
 func (f *fakeDB) ExecContext(ctx context.Context, query string, args ...any) (commandTag, error) {
@@ -80,3 +88,23 @@ func (f fakeRow) Scan(dest ...any) error {
 type fakeCommandTag struct{}
 
 func (fakeCommandTag) RowsAffected() int64 { return 1 }
+
+type fakeAuthRows struct {
+	nextIndex int
+	values    []func(dest ...any) error
+	err       error
+}
+
+func (f *fakeAuthRows) Next() bool {
+	return f.nextIndex < len(f.values)
+}
+
+func (f *fakeAuthRows) Scan(dest ...any) error {
+	scan := f.values[f.nextIndex]
+	f.nextIndex++
+	return scan(dest...)
+}
+
+func (f *fakeAuthRows) Err() error { return f.err }
+
+func (f *fakeAuthRows) Close() {}

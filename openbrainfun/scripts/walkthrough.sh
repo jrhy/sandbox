@@ -18,7 +18,7 @@ export OPENBRAIN_CSRF_KEY="${OPENBRAIN_CSRF_KEY:-walkthrough-csrf-key}"
 export OPENBRAIN_LOG_LEVEL="${OPENBRAIN_LOG_LEVEL:-info}"
 export OPENBRAIN_DEMO_USERNAME="${OPENBRAIN_DEMO_USERNAME:-demo}"
 export OPENBRAIN_DEMO_PASSWORD="${OPENBRAIN_DEMO_PASSWORD:-demo-password}"
-export OPENBRAIN_DEMO_MCP_TOKEN="${OPENBRAIN_DEMO_MCP_TOKEN:-demo-mcp-token}"
+export OPENBRAIN_DEMO_TOKEN_LABEL="${OPENBRAIN_DEMO_TOKEN_LABEL:-default}"
 
 mkdir -p docs var/postgres var/ollama
 
@@ -42,6 +42,7 @@ trap cleanup EXIT
 step_titles=()
 step_commands=()
 step_responses=()
+last_capture_output=""
 
 record_step() {
   step_titles+=("$1")
@@ -54,6 +55,7 @@ run_capture() {
   local command="$2"
   local output
   output="$(bash -c "$command")"
+  last_capture_output="$output"
   record_step "$title" "$command" "$output"
 }
 
@@ -96,9 +98,15 @@ SQL
 
 container_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U openbrain -d openbrain < migrations/0001_initial.sql
 
-run_capture "Provision demo user and MCP token" "./scripts/provision-demo-data.sh"
+run_capture "Create or update the demo user" "go run ./cmd/openbrain user update '${OPENBRAIN_DEMO_USERNAME}' --password '${OPENBRAIN_DEMO_PASSWORD}' --token-label '${OPENBRAIN_DEMO_TOKEN_LABEL}'"
 
-go run ./cmd/openbrain >"$app_log" 2>&1 &
+demo_mcp_token="$(printf '%s\n' "$last_capture_output" | awk -F= '/^token=/{print $2}')"
+if [[ -z "$demo_mcp_token" ]]; then
+  printf 'failed to parse demo MCP token from openbrain user update output\n%s\n' "$last_capture_output" >&2
+  exit 1
+fi
+
+go run ./cmd/openbrain start >"$app_log" 2>&1 &
 app_pid=$!
 export OPENBRAIN_WEB_HEALTH_URL="http://${OPENBRAIN_WEB_ADDR}/healthz"
 bash ./scripts/wait-for-stack.sh
@@ -124,10 +132,10 @@ thought_ready_timeout_seconds="${OPENBRAIN_WALKTHROUGH_READY_TIMEOUT_SECONDS:-60
 get_response="$(wait_for_ready_response "$thought_id" "$thought_ready_timeout_seconds")"
 record_step "Retrieve the thought after background processing" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}'" "$get_response"
 
-mcp_response="$(curl -sS -i -H 'Content-Type: application/json' -H "Authorization: Bearer ${OPENBRAIN_DEMO_MCP_TOKEN}" \
+mcp_response="$(curl -sS -i -H 'Content-Type: application/json' -H "Authorization: Bearer ${demo_mcp_token}" \
   -X POST "http://${OPENBRAIN_MCP_ADDR}/mcp" \
   --data '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_thoughts","arguments":{"query":"MCP auth"}}}')"
-record_step "Query MCP" "curl -sS -i -H 'Content-Type: application/json' -H 'Authorization: Bearer ${OPENBRAIN_DEMO_MCP_TOKEN}' -X POST 'http://${OPENBRAIN_MCP_ADDR}/mcp' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"search_thoughts\",\"arguments\":{\"query\":\"MCP auth\"}}}'" "$mcp_response"
+record_step "Query MCP" "curl -sS -i -H 'Content-Type: application/json' -H 'Authorization: Bearer ${demo_mcp_token}' -X POST 'http://${OPENBRAIN_MCP_ADDR}/mcp' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"search_thoughts\",\"arguments\":{\"query\":\"MCP auth\"}}}'" "$mcp_response"
 
 export STEP_TITLES="$(IFS=$'\x1f'; printf '%s' "${step_titles[*]}")"
 export STEP_COMMANDS="$(IFS=$'\x1f'; printf '%s' "${step_commands[*]}")"
