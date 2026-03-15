@@ -45,7 +45,29 @@
 </section>
 
 <section class="panel">
-  {{if .Thoughts}}
+  {{if .SemanticSearch}}
+  {{if .SearchResults}}
+  <ul class="thought-list">
+    {{range .SearchResults}}
+    <li class="thought-card">
+      <div class="card-row">
+        <div>
+          <a class="thought-link" href="/thoughts/{{.Thought.ID}}">{{.Thought.Content}}</a>
+          <p class="muted">Status: {{.Thought.IngestStatus}}</p>
+          <p class="muted">Similarity: {{printf "%.1f" (mul100 .Similarity)}}%</p>
+          {{if .Thought.IngestError}}<p class="error-text">{{.Thought.IngestError}}</p>{{end}}
+        </div>
+        <div class="card-actions">
+          <a class="button button-secondary" href="/thoughts/{{.Thought.ID}}">Edit</a>
+        </div>
+      </div>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="empty-state">No semantic matches yet.</p>
+  {{end}}
+  {{else if .Thoughts}}
   <ul class="thought-list">
     {{range .Thoughts}}
     <li class="thought-card">

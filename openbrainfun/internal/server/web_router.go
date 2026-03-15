@@ -35,6 +35,7 @@ type APIThoughtHandler interface {
 	Create(w http.ResponseWriter, r *http.Request)
 	List(w http.ResponseWriter, r *http.Request)
 	Get(w http.ResponseWriter, r *http.Request)
+	Related(w http.ResponseWriter, r *http.Request)
 	Update(w http.ResponseWriter, r *http.Request)
 	Delete(w http.ResponseWriter, r *http.Request)
 	Retry(w http.ResponseWriter, r *http.Request)
@@ -108,6 +109,13 @@ func NewWebRouter(cfg config.Config, authService WebAuthService, webHandlers *we
 				return
 			}
 			apiThoughtHandlers.Retry(w, r)
+		case hasPathSuffix(r.URL.Path, "/related"):
+			if r.Method != http.MethodGet {
+				w.Header().Set("Allow", http.MethodGet)
+				http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+				return
+			}
+			apiThoughtHandlers.Related(w, r)
 		case r.Method == http.MethodGet:
 			apiThoughtHandlers.Get(w, r)
 		case r.Method == http.MethodPatch:
@@ -237,6 +245,14 @@ func (noopThoughtService) DeleteThought(ctx context.Context, userID, thoughtID u
 
 func (noopThoughtService) ListThoughts(ctx context.Context, params thoughts.ListThoughtsParams) ([]thoughts.Thought, error) {
 	return []thoughts.Thought{}, nil
+}
+
+func (noopThoughtService) SearchThoughts(ctx context.Context, input thoughts.SearchThoughtsInput) ([]thoughts.ScoredThought, error) {
+	return []thoughts.ScoredThought{}, nil
+}
+
+func (noopThoughtService) RelatedThoughts(ctx context.Context, input thoughts.RelatedThoughtsInput) ([]thoughts.ScoredThought, error) {
+	return []thoughts.ScoredThought{}, nil
 }
 
 func (noopThoughtService) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error) {

@@ -165,7 +165,11 @@ func (f *fakeThoughtRepo) SearchKeyword(ctx context.Context, params thoughts.Sea
 	return nil, nil
 }
 
-func (f *fakeThoughtRepo) SearchSemantic(ctx context.Context, params thoughts.SearchSemanticParams) ([]thoughts.Thought, error) {
+func (f *fakeThoughtRepo) SearchSemantic(ctx context.Context, params thoughts.SearchSemanticParams) ([]thoughts.ScoredThought, error) {
+	return nil, nil
+}
+
+func (f *fakeThoughtRepo) RelatedThoughts(ctx context.Context, params thoughts.RelatedThoughtsParams) ([]thoughts.ScoredThought, error) {
 	return nil, nil
 }
 

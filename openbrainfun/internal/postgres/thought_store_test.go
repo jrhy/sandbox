@@ -117,6 +117,110 @@ func TestThoughtStoreDeleteThoughtTranslatesMissingRow(t *testing.T) {
 	}
 }
 
+func TestThoughtStoreSearchSemanticUsesCosineSimilarityAndThreshold(t *testing.T) {
+	userID := uuid.New()
+	updatedAt := time.Unix(1700000000, 0).UTC()
+	db := &fakeThoughtDB{
+		queryFunc: func(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+			if len(args) != 8 {
+				t.Fatalf("len(args) = %d, want 8", len(args))
+			}
+			if args[0] != userID {
+				t.Fatalf("args[0] = %v, want userID", args[0])
+			}
+			if args[1] != "[0.1,0.2,0.3]" {
+				t.Fatalf("args[1] = %v, want vector literal", args[1])
+			}
+			if args[5] != 0.5 {
+				t.Fatalf("args[5] = %v, want threshold 0.5", args[5])
+			}
+			return &fakeRows{scanRows: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*uuid.UUID)) = uuid.New()
+					*(dest[1].(*uuid.UUID)) = userID
+					*(dest[2].(*string)) = "career change note"
+					*(dest[3].(*string)) = string(thoughts.ExposureScopeRemoteOK)
+					*(dest[4].(*[]string)) = []string{"career"}
+					*(dest[5].(*[]byte)) = []byte(`{"summary":"career","topics":["career"],"entities":[]}`)
+					*(dest[6].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[7].(*string)) = "all-minilm:22m"
+					*(dest[8].(*string)) = ""
+					*(dest[9].(*time.Time)) = updatedAt
+					*(dest[10].(*time.Time)) = updatedAt
+					*(dest[11].(*float64)) = 0.88
+					return nil
+				},
+			}}, nil
+		},
+	}
+
+	store := NewThoughtStore(db)
+	got, err := store.SearchSemantic(context.Background(), thoughts.SearchSemanticParams{
+		UserID:         userID,
+		QueryEmbedding: []float32{0.1, 0.2, 0.3},
+		Threshold:      0.5,
+		Exposure:       string(thoughts.ExposureScopeRemoteOK),
+		Tag:            "career",
+		Page:           2,
+		PageSize:       5,
+	})
+	if err != nil {
+		t.Fatalf("SearchSemantic() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Similarity != 0.88 || got[0].Thought.Content != "career change note" {
+		t.Fatalf("got = %+v, want scored semantic result", got)
+	}
+}
+
+func TestThoughtStoreRelatedThoughtsUsesAnchorEmbedding(t *testing.T) {
+	userID := uuid.New()
+	anchorID := uuid.New()
+	updatedAt := time.Unix(1700000000, 0).UTC()
+	db := &fakeThoughtDB{
+		queryFunc: func(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+			if len(args) != 5 {
+				t.Fatalf("len(args) = %d, want 5", len(args))
+			}
+			if args[0] != userID || args[1] != anchorID {
+				t.Fatalf("args = %#v, want userID and anchorID first", args)
+			}
+			if args[4] != 3 {
+				t.Fatalf("args[4] = %v, want limit 3", args[4])
+			}
+			return &fakeRows{scanRows: []func(dest ...any) error{
+				func(dest ...any) error {
+					*(dest[0].(*uuid.UUID)) = uuid.New()
+					*(dest[1].(*uuid.UUID)) = userID
+					*(dest[2].(*string)) = "similar thought"
+					*(dest[3].(*string)) = string(thoughts.ExposureScopeLocalOnly)
+					*(dest[4].(*[]string)) = []string{"career"}
+					*(dest[5].(*[]byte)) = []byte(`{"summary":"similar","topics":["career"],"entities":[]}`)
+					*(dest[6].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[7].(*string)) = "all-minilm:22m"
+					*(dest[8].(*string)) = ""
+					*(dest[9].(*time.Time)) = updatedAt
+					*(dest[10].(*time.Time)) = updatedAt
+					*(dest[11].(*float64)) = 0.91
+					return nil
+				},
+			}}, nil
+		},
+	}
+
+	store := NewThoughtStore(db)
+	got, err := store.RelatedThoughts(context.Background(), thoughts.RelatedThoughtsParams{
+		UserID:    userID,
+		ThoughtID: anchorID,
+		Limit:     3,
+	})
+	if err != nil {
+		t.Fatalf("RelatedThoughts() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Similarity != 0.91 || got[0].Thought.Content != "similar thought" {
+		t.Fatalf("got = %+v, want scored related result", got)
+	}
+}
+
 type fakeThoughtDB struct {
 	queryRowFunc func(ctx context.Context, query string, args ...any) pgx.Row
 	execFunc     func(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error)
@@ -147,15 +251,27 @@ type fakePGXRow struct {
 
 func (f fakePGXRow) Scan(dest ...any) error { return f.scanFunc(dest...) }
 
-type fakeRows struct{}
+type fakeRows struct {
+	scanRows []func(dest ...any) error
+	index    int
+}
 
 func (*fakeRows) Close()                                       {}
 func (*fakeRows) Err() error                                   { return nil }
 func (*fakeRows) CommandTag() pgconn.CommandTag                { return pgconn.NewCommandTag("SELECT 0") }
 func (*fakeRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
-func (*fakeRows) Next() bool                                   { return false }
-func (*fakeRows) Scan(dest ...any) error                       { return nil }
-func (*fakeRows) Values() ([]any, error)                       { return nil, nil }
-func (*fakeRows) RawValues() [][]byte                          { return nil }
-func (*fakeRows) Conn() *pgx.Conn                              { return nil }
-func (*fakeRows) NextRow() bool                                { return false }
+func (f *fakeRows) Next() bool {
+	return f.index < len(f.scanRows)
+}
+func (f *fakeRows) Scan(dest ...any) error {
+	if f.index >= len(f.scanRows) {
+		return nil
+	}
+	scan := f.scanRows[f.index]
+	f.index++
+	return scan(dest...)
+}
+func (*fakeRows) Values() ([]any, error) { return nil, nil }
+func (*fakeRows) RawValues() [][]byte    { return nil }
+func (*fakeRows) Conn() *pgx.Conn        { return nil }
+func (f *fakeRows) NextRow() bool        { return f.Next() }

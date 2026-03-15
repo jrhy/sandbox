@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -69,6 +71,7 @@ type ThoughtResponse struct {
 	ExposureScope string            `json:"exposure_scope"`
 	UserTags      []string          `json:"user_tags"`
 	Metadata      metadata.Metadata `json:"metadata"`
+	Similarity    *float64          `json:"similarity,omitempty"`
 	IngestStatus  string            `json:"ingest_status"`
 	IngestError   string            `json:"ingest_error,omitempty"`
 }
@@ -263,6 +266,56 @@ func (e *TestEnv) UpdateThought(t *testing.T, client AuthenticatedClient, though
 	return thought
 }
 
+func (e *TestEnv) SearchThoughts(t *testing.T, client AuthenticatedClient, query string) []ThoughtResponse {
+	t.Helper()
+
+	httpReq, err := http.NewRequest(http.MethodGet, e.webBaseURL+"/api/thoughts?q="+url.QueryEscape(query)+"&search_mode=semantic", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	resp, err := client.HTTPClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("GET /api/thoughts semantic search error = %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/thoughts semantic search status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var payload struct {
+		Thoughts []ThoughtResponse `json:"thoughts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode search response: %v", err)
+	}
+	return payload.Thoughts
+}
+
+func (e *TestEnv) RelatedThoughts(t *testing.T, client AuthenticatedClient, thoughtID string) []ThoughtResponse {
+	t.Helper()
+
+	httpReq, err := http.NewRequest(http.MethodGet, e.webBaseURL+"/api/thoughts/"+thoughtID+"/related?limit=5", nil)
+	if err != nil {
+		t.Fatalf("http.NewRequest() error = %v", err)
+	}
+	resp, err := client.HTTPClient.Do(httpReq)
+	if err != nil {
+		t.Fatalf("GET /api/thoughts/%s/related error = %v", thoughtID, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/thoughts/%s/related status = %d, want %d", thoughtID, resp.StatusCode, http.StatusOK)
+	}
+
+	var payload struct {
+		Thoughts []ThoughtResponse `json:"thoughts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode related response: %v", err)
+	}
+	return payload.Thoughts
+}
+
 func (e *TestEnv) DeleteThought(t *testing.T, client AuthenticatedClient, thoughtID string) {
 	t.Helper()
 
@@ -332,6 +385,24 @@ func (e *TestEnv) AssertOtherUsersMCPTokenCannotSeeThought(t *testing.T, thought
 	}
 	if !result.IsError || !toolResultContains(result, "thought not found") {
 		t.Fatalf("CallTool(get_thought) = %+v, want tool-level not found error", result)
+	}
+}
+
+func (e *TestEnv) AssertMCPRelatedThoughts(t *testing.T, token, thoughtID, want string) {
+	t.Helper()
+
+	session := e.mcpSession(t, token)
+	defer session.Close()
+
+	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
+		Name:      "related_thoughts",
+		Arguments: map[string]any{"id": thoughtID},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(related_thoughts) error = %v", err)
+	}
+	if !toolResultContains(result, want) {
+		t.Fatalf("related_thoughts result does not contain %q: %+v", want, result)
 	}
 }
 
@@ -633,15 +704,79 @@ func (r *memoryThoughtRepo) SearchKeyword(ctx context.Context, params thoughts.S
 	return filterAndSortThoughts(r.thoughts, listParams), nil
 }
 
-func (r *memoryThoughtRepo) SearchSemantic(ctx context.Context, params thoughts.SearchSemanticParams) ([]thoughts.Thought, error) {
+func (r *memoryThoughtRepo) SearchSemantic(ctx context.Context, params thoughts.SearchSemanticParams) ([]thoughts.ScoredThought, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return filterAndSortThoughts(r.thoughts, thoughts.ListThoughtsParams{
-		UserID:   params.UserID,
-		Q:        params.Query,
-		Page:     params.Page,
-		PageSize: params.PageSize,
-	}), nil
+	items := make([]thoughts.ScoredThought, 0)
+	for _, thought := range r.thoughts {
+		if thought.UserID != params.UserID || thought.IngestStatus != thoughts.IngestStatusReady || len(thought.Embedding) == 0 {
+			continue
+		}
+		if params.Exposure != "" && string(thought.ExposureScope) != params.Exposure {
+			continue
+		}
+		if params.Tag != "" && !containsTag(thought.UserTags, params.Tag) {
+			continue
+		}
+		similarity := cosineSimilarity(thought.Embedding, params.QueryEmbedding)
+		if params.Threshold > 0 && similarity <= params.Threshold {
+			continue
+		}
+		items = append(items, thoughts.ScoredThought{Thought: cloneThought(thought), Similarity: similarity})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Similarity == items[j].Similarity {
+			return items[i].Thought.ID.String() > items[j].Thought.ID.String()
+		}
+		return items[i].Similarity > items[j].Similarity
+	})
+	if len(items) > 0 {
+		start := semanticOffset(params.Page, params.PageSize)
+		if start >= len(items) {
+			return []thoughts.ScoredThought{}, nil
+		}
+		end := start + semanticPageSize(params.PageSize)
+		if end > len(items) {
+			end = len(items)
+		}
+		items = items[start:end]
+	}
+	return items, nil
+}
+
+func (r *memoryThoughtRepo) RelatedThoughts(ctx context.Context, params thoughts.RelatedThoughtsParams) ([]thoughts.ScoredThought, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	anchor, ok := r.thoughts[params.ThoughtID]
+	if !ok || anchor.UserID != params.UserID {
+		return nil, thoughts.ErrThoughtNotFound
+	}
+	if anchor.IngestStatus != thoughts.IngestStatusReady || len(anchor.Embedding) == 0 {
+		return []thoughts.ScoredThought{}, nil
+	}
+	items := make([]thoughts.ScoredThought, 0)
+	for _, thought := range r.thoughts {
+		if thought.UserID != params.UserID || thought.ID == params.ThoughtID || thought.IngestStatus != thoughts.IngestStatusReady || len(thought.Embedding) == 0 {
+			continue
+		}
+		if params.Exposure != "" && string(thought.ExposureScope) != params.Exposure {
+			continue
+		}
+		items = append(items, thoughts.ScoredThought{
+			Thought:    cloneThought(thought),
+			Similarity: cosineSimilarity(anchor.Embedding, thought.Embedding),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].Similarity == items[j].Similarity {
+			return items[i].Thought.ID.String() > items[j].Thought.ID.String()
+		}
+		return items[i].Similarity > items[j].Similarity
+	})
+	if limit := semanticPageSize(params.Limit); len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 
 func (r *memoryThoughtRepo) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error) {
@@ -737,6 +872,35 @@ func containsTag(tags []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func cosineSimilarity(left, right []float32) float64 {
+	var dot, leftNorm, rightNorm float64
+	for i := 0; i < len(left) && i < len(right); i++ {
+		l := float64(left[i])
+		r := float64(right[i])
+		dot += l * r
+		leftNorm += l * l
+		rightNorm += r * r
+	}
+	if leftNorm == 0 || rightNorm == 0 {
+		return 0
+	}
+	return dot / (math.Sqrt(leftNorm) * math.Sqrt(rightNorm))
+}
+
+func semanticPageSize(pageSize int) int {
+	if pageSize <= 0 {
+		return 20
+	}
+	return pageSize
+}
+
+func semanticOffset(page, pageSize int) int {
+	if page <= 1 {
+		return 0
+	}
+	return (page - 1) * semanticPageSize(pageSize)
 }
 
 func paginate(items []thoughts.Thought, page, pageSize int) []thoughts.Thought {

@@ -87,6 +87,12 @@ use `token create` to mint or rotate a token for an existing user.
 See [docs/operations.md](docs/operations.md) for backup/restore notes and the
 recommended re-embedding flow when models change.
 
+## TODO
+
+- Expose the semantic-search threshold knob in the web UI and JSON API.
+  MCP search already accepts a `threshold` argument, but the browser flow still
+  uses the default threshold implicitly.
+
 <!-- walkthrough:start -->
 
 ## Walkthrough

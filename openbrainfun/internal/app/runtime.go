@@ -22,7 +22,7 @@ type Runtime struct {
 
 func Build(cfg config.Config, authRepo auth.Repository, thoughtRepo thoughts.Repository, embedder embed.Embedder, extractor metadata.Extractor) Runtime {
 	authService := auth.NewService(authRepo, cfg.SessionTTL)
-	thoughtService := thoughts.NewService(thoughtRepo)
+	thoughtService := thoughts.NewService(thoughtRepo, embedder)
 	webAuthHandlers := web.NewAuthHandlers(authService, cfg.CookieSecure, cfg.CSRFKey)
 	apiSessionHandlers := api.NewSessionHandlers(authService, cfg.CookieSecure, cfg.CSRFKey)
 	webThoughtHandlers := web.NewHandlers(thoughtService, cfg.CSRFKey)

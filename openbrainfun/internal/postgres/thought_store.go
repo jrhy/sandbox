@@ -129,8 +129,61 @@ limit $3 offset $4
 	return s.queryThoughts(ctx, query, params.UserID, params.Query, normalizePageSize(params.PageSize), offset(params.Page, params.PageSize))
 }
 
-func (s *ThoughtStore) SearchSemantic(ctx context.Context, params thoughts.SearchSemanticParams) ([]thoughts.Thought, error) {
-	return s.SearchKeyword(ctx, thoughts.SearchKeywordParams{UserID: params.UserID, Query: params.Query, Page: params.Page, PageSize: params.PageSize})
+func (s *ThoughtStore) SearchSemantic(ctx context.Context, params thoughts.SearchSemanticParams) ([]thoughts.ScoredThought, error) {
+	const query = `
+select id, user_id, content, exposure_scope, user_tags, coalesce(metadata, '{}'::jsonb), ingest_status, coalesce(embedding_model, ''), coalesce(ingest_error, ''), created_at, updated_at,
+       1 - (embedding <=> $2::vector) as similarity
+from thoughts
+where user_id = $1
+  and ingest_status = $3
+  and embedding is not null
+  and ($4 = '' or exposure_scope = $4)
+  and ($5 = '' or $5 = any(user_tags))
+  and ($6 <= 0 or 1 - (embedding <=> $2::vector) > $6)
+order by embedding <=> $2::vector, id desc
+limit $7 offset $8
+`
+	return s.queryScoredThoughts(
+		ctx,
+		query,
+		params.UserID,
+		formatVector(params.QueryEmbedding),
+		string(thoughts.IngestStatusReady),
+		params.Exposure,
+		params.Tag,
+		params.Threshold,
+		normalizePageSize(params.PageSize),
+		offset(params.Page, params.PageSize),
+	)
+}
+
+func (s *ThoughtStore) RelatedThoughts(ctx context.Context, params thoughts.RelatedThoughtsParams) ([]thoughts.ScoredThought, error) {
+	const query = `
+with anchor as (
+  select embedding
+  from thoughts
+  where user_id = $1 and id = $2 and ingest_status = $3 and embedding is not null
+)
+select t.id, t.user_id, t.content, t.exposure_scope, t.user_tags, coalesce(t.metadata, '{}'::jsonb), t.ingest_status, coalesce(t.embedding_model, ''), coalesce(t.ingest_error, ''), t.created_at, t.updated_at,
+       1 - (t.embedding <=> anchor.embedding) as similarity
+from anchor
+join thoughts t on t.user_id = $1
+where t.id <> $2
+  and t.ingest_status = $3
+  and t.embedding is not null
+  and ($4 = '' or t.exposure_scope = $4)
+order by t.embedding <=> anchor.embedding, t.id desc
+limit $5
+`
+	return s.queryScoredThoughts(
+		ctx,
+		query,
+		params.UserID,
+		params.ThoughtID,
+		string(thoughts.IngestStatusReady),
+		params.Exposure,
+		normalizePageSize(params.Limit),
+	)
 }
 
 func (s *ThoughtStore) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error) {
@@ -202,6 +255,27 @@ func (s *ThoughtStore) queryThoughts(ctx context.Context, query string, args ...
 	return result, nil
 }
 
+func (s *ThoughtStore) queryScoredThoughts(ctx context.Context, query string, args ...any) ([]thoughts.ScoredThought, error) {
+	rows, err := s.db.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := make([]thoughts.ScoredThought, 0)
+	for rows.Next() {
+		item, err := scanScoredThought(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 func scanThought(row interface{ Scan(dest ...any) error }) (thoughts.Thought, error) {
 	var thought thoughts.Thought
 	var exposureScope string
@@ -226,6 +300,42 @@ func scanThought(row interface{ Scan(dest ...any) error }) (thoughts.Thought, er
 	thought.IngestStatus = thoughts.IngestStatus(ingestStatus)
 	thought.Metadata = decodeMetadata(metadataJSON)
 	return thought, nil
+}
+
+func scanScoredThought(row interface{ Scan(dest ...any) error }) (thoughts.ScoredThought, error) {
+	thought, similarity, err := scanThoughtWithSimilarity(row)
+	if err != nil {
+		return thoughts.ScoredThought{}, err
+	}
+	return thoughts.ScoredThought{Thought: thought, Similarity: similarity}, nil
+}
+
+func scanThoughtWithSimilarity(row interface{ Scan(dest ...any) error }) (thoughts.Thought, float64, error) {
+	var thought thoughts.Thought
+	var exposureScope string
+	var metadataJSON []byte
+	var ingestStatus string
+	var similarity float64
+	if err := row.Scan(
+		&thought.ID,
+		&thought.UserID,
+		&thought.Content,
+		&exposureScope,
+		&thought.UserTags,
+		&metadataJSON,
+		&ingestStatus,
+		&thought.EmbeddingModel,
+		&thought.IngestError,
+		&thought.CreatedAt,
+		&thought.UpdatedAt,
+		&similarity,
+	); err != nil {
+		return thoughts.Thought{}, 0, err
+	}
+	thought.ExposureScope = thoughts.ExposureScope(exposureScope)
+	thought.IngestStatus = thoughts.IngestStatus(ingestStatus)
+	thought.Metadata = decodeMetadata(metadataJSON)
+	return thought, similarity, nil
 }
 
 func normalizePageSize(pageSize int) int {

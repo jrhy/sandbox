@@ -50,3 +50,11 @@ func (fakeMCPQueryService) ListThoughts(ctx context.Context, params thoughts.Lis
 func (fakeMCPQueryService) GetThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error) {
 	return thoughts.Thought{}, thoughts.ErrThoughtNotFound
 }
+
+func (fakeMCPQueryService) SearchThoughts(ctx context.Context, input thoughts.SearchThoughtsInput) ([]thoughts.ScoredThought, error) {
+	return nil, nil
+}
+
+func (fakeMCPQueryService) RelatedThoughts(ctx context.Context, input thoughts.RelatedThoughtsInput) ([]thoughts.ScoredThought, error) {
+	return nil, nil
+}

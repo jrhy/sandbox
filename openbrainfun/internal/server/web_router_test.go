@@ -80,6 +80,24 @@ func TestAuthenticatedAPIThoughtListUsesHandler(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedAPIRelatedThoughtsUsesHandler(t *testing.T) {
+	handler := &fakeAPIThoughtHandlers{}
+	token := "session-token"
+	router := NewWebRouter(config.Config{CookieSecure: false, CSRFKey: "test-csrf-key"}, fakeValidSessionResolver{user: auth.User{ID: uuid.New(), Username: "alice"}}, nil, nil, nil, handler)
+	req := httptest.NewRequest(http.MethodGet, "/api/thoughts/"+uuid.New().String()+"/related", nil)
+	req.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: token})
+	rr := httptest.NewRecorder()
+
+	router.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rr.Code, http.StatusOK)
+	}
+	if !handler.relatedCalled {
+		t.Fatal("related handler was not called")
+	}
+}
+
 func TestAuthenticatedAPIThoughtCreateUsesHandlerWithCSRF(t *testing.T) {
 	handler := &fakeAPIThoughtHandlers{}
 	token := "session-token"
@@ -177,8 +195,9 @@ func (f *fakeWebThoughtHandlers) Create(w http.ResponseWriter, r *http.Request) 
 }
 
 type fakeAPIThoughtHandlers struct {
-	listCalled   bool
-	createCalled bool
+	listCalled    bool
+	createCalled  bool
+	relatedCalled bool
 }
 
 func (f *fakeAPIThoughtHandlers) Create(w http.ResponseWriter, r *http.Request) {
@@ -190,6 +209,10 @@ func (f *fakeAPIThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 func (f *fakeAPIThoughtHandlers) Get(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+}
+func (f *fakeAPIThoughtHandlers) Related(w http.ResponseWriter, r *http.Request) {
+	f.relatedCalled = true
 	w.WriteHeader(http.StatusOK)
 }
 func (f *fakeAPIThoughtHandlers) Update(w http.ResponseWriter, r *http.Request) {

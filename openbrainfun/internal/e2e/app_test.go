@@ -57,3 +57,39 @@ func TestMetadataExtractionSmokeWhenEnabled(t *testing.T) {
 		t.Fatalf("metadata summary = %q, want real extracted summary", got.Metadata.Summary)
 	}
 }
+
+func TestSemanticSearchAndRelatedThoughts(t *testing.T) {
+	env := NewTestEnv(t)
+	client := env.LoginAsDemoUser(t)
+
+	env.CreateThought(t, client, CreateThoughtRequest{
+		Content:       "Remember MCP auth",
+		ExposureScope: "remote_ok",
+	})
+	middle := env.CreateThought(t, client, CreateThoughtRequest{
+		Content:       "Remember MCP auth and sessions",
+		ExposureScope: "remote_ok",
+	})
+	env.CreateThought(t, client, CreateThoughtRequest{
+		Content:       "Remember MCP auth for Open WebUI local sessions",
+		ExposureScope: "remote_ok",
+	})
+
+	searchResults := env.SearchThoughts(t, client, "Remember MCP auth and sessions")
+	if len(searchResults) == 0 {
+		t.Fatal("semantic search returned no results")
+	}
+	if searchResults[0].Content != "Remember MCP auth and sessions" || searchResults[0].Similarity == nil {
+		t.Fatalf("top semantic result = %+v, want exact anchor with similarity", searchResults[0])
+	}
+
+	related := env.RelatedThoughts(t, client, middle.ID)
+	if len(related) == 0 {
+		t.Fatal("related thoughts returned no results")
+	}
+	if related[0].Content != "Remember MCP auth for Open WebUI local sessions" || related[0].Similarity == nil {
+		t.Fatalf("top related result = %+v, want Open WebUI sessions match", related[0])
+	}
+
+	env.AssertMCPRelatedThoughts(t, env.DemoToken(), middle.ID, "Open WebUI local sessions")
+}

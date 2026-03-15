@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jrhy/sandbox/openbrainfun/internal/embed"
 )
 
 func TestDeleteThoughtRejectsWrongOwner(t *testing.T) {
 	repo := &fakeRepo{thought: Thought{ID: uuid.New(), UserID: uuid.New(), Content: "secret"}, getErr: ErrThoughtNotFound}
-	svc := NewService(repo)
+	svc := NewService(repo, embed.NewFake(nil))
 
 	err := svc.DeleteThought(context.Background(), uuid.New(), repo.thought.ID)
 	if !errors.Is(err, ErrThoughtNotFound) {
@@ -20,7 +21,7 @@ func TestDeleteThoughtRejectsWrongOwner(t *testing.T) {
 
 func TestCreateThoughtStoresPendingRecord(t *testing.T) {
 	repo := &fakeRepo{}
-	svc := NewService(repo)
+	svc := NewService(repo, embed.NewFake(nil))
 	userID := uuid.New()
 
 	got, err := svc.CreateThought(context.Background(), CreateThoughtInput{
@@ -48,7 +49,7 @@ func TestRetryThoughtResetsFailedIngest(t *testing.T) {
 		IngestStatus: IngestStatusFailed,
 		IngestError:  "ollama down",
 	}}
-	svc := NewService(repo)
+	svc := NewService(repo, embed.NewFake(nil))
 
 	got, err := svc.RetryThought(context.Background(), repo.thought.UserID, repo.thought.ID)
 	if err != nil {
@@ -59,11 +60,79 @@ func TestRetryThoughtResetsFailedIngest(t *testing.T) {
 	}
 }
 
+func TestSearchThoughtsEmbedsQueryAndReturnsScoredMatches(t *testing.T) {
+	repo := &fakeRepo{
+		semanticResults: []ScoredThought{{
+			Thought:    Thought{ID: uuid.New(), UserID: uuid.New(), Content: "career change note"},
+			Similarity: 0.88,
+		}},
+	}
+	embedder := embed.NewFake(map[string][]float32{"career change": {0.1, 0.2, 0.3}})
+	svc := NewService(repo, embedder)
+	userID := uuid.New()
+
+	got, err := svc.SearchThoughts(context.Background(), SearchThoughtsInput{
+		UserID:     userID,
+		Query:      "career change",
+		SearchMode: SearchModeSemantic,
+		Threshold:  0.5,
+		Exposure:   string(ExposureScopeRemoteOK),
+		Tag:        "career",
+		Page:       2,
+		PageSize:   5,
+	})
+	if err != nil {
+		t.Fatalf("SearchThoughts() error = %v", err)
+	}
+	if len(got) != 1 || got[0].Similarity != 0.88 {
+		t.Fatalf("got = %+v, want scored semantic results", got)
+	}
+	if repo.semanticParams.UserID != userID || repo.semanticParams.Threshold != 0.5 {
+		t.Fatalf("semantic params = %+v", repo.semanticParams)
+	}
+	if repo.semanticParams.Exposure != string(ExposureScopeRemoteOK) || repo.semanticParams.Tag != "career" || repo.semanticParams.Page != 2 || repo.semanticParams.PageSize != 5 {
+		t.Fatalf("semantic params = %+v", repo.semanticParams)
+	}
+	if len(repo.semanticParams.QueryEmbedding) != 3 || repo.semanticParams.QueryEmbedding[0] != 0.1 {
+		t.Fatalf("QueryEmbedding = %#v, want embedded query vector", repo.semanticParams.QueryEmbedding)
+	}
+}
+
+func TestRelatedThoughtsReturnsEmptyForNonReadyAnchor(t *testing.T) {
+	repo := &fakeRepo{thought: Thought{
+		ID:           uuid.New(),
+		UserID:       uuid.New(),
+		Content:      "pending thought",
+		IngestStatus: IngestStatusPending,
+	}}
+	svc := NewService(repo, embed.NewFake(nil))
+
+	got, err := svc.RelatedThoughts(context.Background(), RelatedThoughtsInput{
+		UserID:    repo.thought.UserID,
+		ThoughtID: repo.thought.ID,
+		Limit:     3,
+	})
+	if err != nil {
+		t.Fatalf("RelatedThoughts() error = %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %+v, want no related thoughts for non-ready anchor", got)
+	}
+	if repo.relatedCalled {
+		t.Fatal("RelatedThoughts repository call happened for non-ready anchor")
+	}
+}
+
 type fakeRepo struct {
-	thought   Thought
-	created   Thought
-	getErr    error
-	deleteErr error
+	thought         Thought
+	created         Thought
+	getErr          error
+	deleteErr       error
+	semanticResults []ScoredThought
+	semanticParams  SearchSemanticParams
+	relatedResults  []ScoredThought
+	relatedParams   RelatedThoughtsParams
+	relatedCalled   bool
 }
 
 func (f *fakeRepo) CreateThought(ctx context.Context, thought Thought) (Thought, error) {
@@ -101,8 +170,9 @@ func (f *fakeRepo) SearchKeyword(ctx context.Context, params SearchKeywordParams
 	return nil, nil
 }
 
-func (f *fakeRepo) SearchSemantic(ctx context.Context, params SearchSemanticParams) ([]Thought, error) {
-	return nil, nil
+func (f *fakeRepo) SearchSemantic(ctx context.Context, params SearchSemanticParams) ([]ScoredThought, error) {
+	f.semanticParams = params
+	return append([]ScoredThought(nil), f.semanticResults...), nil
 }
 
 func (f *fakeRepo) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (Thought, error) {
@@ -112,6 +182,12 @@ func (f *fakeRepo) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID
 	f.thought.IngestStatus = IngestStatusPending
 	f.thought.IngestError = ""
 	return f.thought, nil
+}
+
+func (f *fakeRepo) RelatedThoughts(ctx context.Context, params RelatedThoughtsParams) ([]ScoredThought, error) {
+	f.relatedCalled = true
+	f.relatedParams = params
+	return append([]ScoredThought(nil), f.relatedResults...), nil
 }
 
 func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]Thought, error)    { return nil, nil }

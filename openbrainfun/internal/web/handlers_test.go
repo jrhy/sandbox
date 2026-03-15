@@ -136,7 +136,7 @@ func TestThoughtsPageShowsRetryActionForFailedThought(t *testing.T) {
 func TestThoughtsPageParsesSearchParamsAndShowsSearchControls(t *testing.T) {
 	userID := uuid.New()
 	service := &fakeThoughtService{list: []thoughts.Thought{{ID: uuid.New(), UserID: userID, Content: "mcp auth", IngestStatus: thoughts.IngestStatusReady}}}
-	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts?q=mcp&search_mode=semantic&exposure_scope=remote_ok&ingest_status=ready&tag=auth&page=2&page_size=10", nil), userID)
+	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts?q=mcp&search_mode=keyword&exposure_scope=remote_ok&ingest_status=ready&tag=auth&page=2&page_size=10", nil), userID)
 	rr := httptest.NewRecorder()
 
 	NewHandlers(service, "test-csrf-key").Thoughts(rr, req)
@@ -144,7 +144,7 @@ func TestThoughtsPageParsesSearchParamsAndShowsSearchControls(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rr.Code)
 	}
-	if service.listParams.UserID != userID || service.listParams.Q != "mcp" || service.listParams.SearchMode != thoughts.SearchModeSemantic {
+	if service.listParams.UserID != userID || service.listParams.Q != "mcp" || service.listParams.SearchMode != thoughts.SearchModeKeyword {
 		t.Fatalf("list params = %+v", service.listParams)
 	}
 	if service.listParams.Exposure != "remote_ok" || service.listParams.IngestStatus != "ready" || service.listParams.Tag != "auth" || service.listParams.Page != 2 || service.listParams.PageSize != 10 {
@@ -153,6 +153,28 @@ func TestThoughtsPageParsesSearchParamsAndShowsSearchControls(t *testing.T) {
 	body := rr.Body.String()
 	if !strings.Contains(body, `name="q"`) || !strings.Contains(body, `name="search_mode"`) {
 		t.Fatalf("body missing search controls: %s", body)
+	}
+}
+
+func TestThoughtsPageShowsSemanticSimilarity(t *testing.T) {
+	userID := uuid.New()
+	service := &fakeThoughtService{searchResults: []thoughts.ScoredThought{{
+		Thought:    thoughts.Thought{ID: uuid.New(), UserID: userID, Content: "career note", IngestStatus: thoughts.IngestStatusReady},
+		Similarity: 0.88,
+	}}}
+	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts?q=career&search_mode=semantic", nil), userID)
+	rr := httptest.NewRecorder()
+
+	NewHandlers(service, "test-csrf-key").Thoughts(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if service.searchInput.Query != "career" || service.searchInput.SearchMode != thoughts.SearchModeSemantic {
+		t.Fatalf("search input = %+v", service.searchInput)
+	}
+	if !strings.Contains(rr.Body.String(), "Similarity: 88.0%") {
+		t.Fatalf("body missing semantic similarity: %s", rr.Body.String())
 	}
 }
 
@@ -212,16 +234,49 @@ func TestDeleteThoughtRedirectsToThoughts(t *testing.T) {
 	}
 }
 
+func TestThoughtPageShowsRelatedThoughts(t *testing.T) {
+	userID := uuid.New()
+	thoughtID := uuid.New()
+	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts/"+thoughtID.String(), nil), userID)
+	rr := httptest.NewRecorder()
+
+	NewHandlers(&fakeThoughtService{
+		thought: thoughts.Thought{
+			ID:           thoughtID,
+			UserID:       userID,
+			Content:      "anchor thought",
+			IngestStatus: thoughts.IngestStatusReady,
+			Metadata:     metadata.Metadata{Summary: "anchor"},
+		},
+		related: []thoughts.ScoredThought{{
+			Thought:    thoughts.Thought{ID: uuid.New(), UserID: userID, Content: "nearby thought", IngestStatus: thoughts.IngestStatusReady},
+			Similarity: 0.91,
+		}},
+	}, "test-csrf-key").ThoughtDetail(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "Related thoughts") || !strings.Contains(body, "Similarity: 91.0%") || !strings.Contains(body, "nearby thought") {
+		t.Fatalf("body missing related-thoughts section: %s", body)
+	}
+}
+
 type fakeThoughtService struct {
 	created          thoughts.Thought
 	thought          thoughts.Thought
 	list             []thoughts.Thought
+	searchResults    []thoughts.ScoredThought
+	related          []thoughts.ScoredThought
 	updated          thoughts.Thought
 	retried          thoughts.Thought
 	err              error
 	createInput      thoughts.CreateThoughtInput
 	listParams       thoughts.ListThoughtsParams
+	searchInput      thoughts.SearchThoughtsInput
 	updateInput      thoughts.UpdateThoughtInput
+	relatedInput     thoughts.RelatedThoughtsInput
 	deletedUserID    uuid.UUID
 	deletedThoughtID uuid.UUID
 	retriedUserID    uuid.UUID
@@ -275,6 +330,22 @@ func (f *fakeThoughtService) ListThoughts(ctx context.Context, params thoughts.L
 		return nil, f.err
 	}
 	return append([]thoughts.Thought(nil), f.list...), nil
+}
+
+func (f *fakeThoughtService) SearchThoughts(ctx context.Context, input thoughts.SearchThoughtsInput) ([]thoughts.ScoredThought, error) {
+	f.searchInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]thoughts.ScoredThought(nil), f.searchResults...), nil
+}
+
+func (f *fakeThoughtService) RelatedThoughts(ctx context.Context, input thoughts.RelatedThoughtsInput) ([]thoughts.ScoredThought, error) {
+	f.relatedInput = input
+	if f.err != nil {
+		return nil, f.err
+	}
+	return append([]thoughts.ScoredThought(nil), f.related...), nil
 }
 
 func (f *fakeThoughtService) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error) {

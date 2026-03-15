@@ -22,6 +22,8 @@ type ThoughtService interface {
 	UpdateThought(ctx context.Context, input thoughts.UpdateThoughtInput) (thoughts.Thought, error)
 	DeleteThought(ctx context.Context, userID, thoughtID uuid.UUID) error
 	ListThoughts(ctx context.Context, params thoughts.ListThoughtsParams) ([]thoughts.Thought, error)
+	SearchThoughts(ctx context.Context, input thoughts.SearchThoughtsInput) ([]thoughts.ScoredThought, error)
+	RelatedThoughts(ctx context.Context, input thoughts.RelatedThoughtsInput) ([]thoughts.ScoredThought, error)
 	RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error)
 }
 
@@ -47,6 +49,7 @@ type thoughtResponse struct {
 	ExposureScope  string            `json:"exposure_scope"`
 	UserTags       []string          `json:"user_tags"`
 	Metadata       metadata.Metadata `json:"metadata"`
+	Similarity     *float64          `json:"similarity,omitempty"`
 	EmbeddingModel string            `json:"embedding_model,omitempty"`
 	IngestStatus   string            `json:"ingest_status"`
 	IngestError    string            `json:"ingest_error,omitempty"`
@@ -81,7 +84,7 @@ func (h *ThoughtHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		h.writeThoughtError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, toThoughtResponse(thought))
+	writeJSON(w, http.StatusCreated, toThoughtResponse(thought, nil))
 }
 
 func (h *ThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
@@ -102,10 +105,35 @@ func (h *ThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	searchMode := thoughts.SearchMode(r.URL.Query().Get("search_mode"))
+	searchQuery := r.URL.Query().Get("q")
+	if searchMode == thoughts.SearchModeSemantic && strings.TrimSpace(searchQuery) != "" {
+		items, err := h.service.SearchThoughts(r.Context(), thoughts.SearchThoughtsInput{
+			UserID:       user.ID,
+			Query:        searchQuery,
+			SearchMode:   searchMode,
+			Exposure:     r.URL.Query().Get("exposure_scope"),
+			IngestStatus: r.URL.Query().Get("ingest_status"),
+			Tag:          r.URL.Query().Get("tag"),
+			Page:         page,
+			PageSize:     pageSize,
+		})
+		if err != nil {
+			writeJSONError(w, http.StatusInternalServerError, "search thoughts")
+			return
+		}
+		response := make([]thoughtResponse, 0, len(items))
+		for _, item := range items {
+			response = append(response, toThoughtResponse(item.Thought, &item.Similarity))
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"thoughts": response})
+		return
+	}
+
 	items, err := h.service.ListThoughts(r.Context(), thoughts.ListThoughtsParams{
 		UserID:       user.ID,
-		Q:            r.URL.Query().Get("q"),
-		SearchMode:   thoughts.SearchMode(r.URL.Query().Get("search_mode")),
+		Q:            searchQuery,
+		SearchMode:   searchMode,
 		Exposure:     r.URL.Query().Get("exposure_scope"),
 		IngestStatus: r.URL.Query().Get("ingest_status"),
 		Tag:          r.URL.Query().Get("tag"),
@@ -119,7 +147,7 @@ func (h *ThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
 
 	response := make([]thoughtResponse, 0, len(items))
 	for _, item := range items {
-		response = append(response, toThoughtResponse(item))
+		response = append(response, toThoughtResponse(item, nil))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"thoughts": response})
 }
@@ -135,7 +163,7 @@ func (h *ThoughtHandlers) Get(w http.ResponseWriter, r *http.Request) {
 		h.writeThoughtError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toThoughtResponse(thought))
+	writeJSON(w, http.StatusOK, toThoughtResponse(thought, nil))
 }
 
 func (h *ThoughtHandlers) Update(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +189,7 @@ func (h *ThoughtHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		h.writeThoughtError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toThoughtResponse(thought))
+	writeJSON(w, http.StatusOK, toThoughtResponse(thought, nil))
 }
 
 func (h *ThoughtHandlers) Delete(w http.ResponseWriter, r *http.Request) {
@@ -175,6 +203,40 @@ func (h *ThoughtHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *ThoughtHandlers) Related(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		writeJSONError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	thoughtID, err := thoughtIDWithSuffix(r.URL.Path, "/related")
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid thought ID")
+		return
+	}
+	limit, err := parseOptionalInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid limit")
+		return
+	}
+
+	items, err := h.service.RelatedThoughts(r.Context(), thoughts.RelatedThoughtsInput{
+		UserID:    user.ID,
+		ThoughtID: thoughtID,
+		Limit:     limit,
+	})
+	if err != nil {
+		h.writeThoughtError(w, err)
+		return
+	}
+
+	response := make([]thoughtResponse, 0, len(items))
+	for _, item := range items {
+		response = append(response, toThoughtResponse(item.Thought, &item.Similarity))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"thoughts": response})
 }
 
 func (h *ThoughtHandlers) Retry(w http.ResponseWriter, r *http.Request) {
@@ -194,7 +256,7 @@ func (h *ThoughtHandlers) Retry(w http.ResponseWriter, r *http.Request) {
 		h.writeThoughtError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toThoughtResponse(thought))
+	writeJSON(w, http.StatusOK, toThoughtResponse(thought, nil))
 }
 
 func (h *ThoughtHandlers) userAndThoughtID(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, bool) {
@@ -222,13 +284,14 @@ func (h *ThoughtHandlers) writeThoughtError(w http.ResponseWriter, err error) {
 	}
 }
 
-func toThoughtResponse(thought thoughts.Thought) thoughtResponse {
+func toThoughtResponse(thought thoughts.Thought, similarity *float64) thoughtResponse {
 	return thoughtResponse{
 		ID:             thought.ID.String(),
 		Content:        thought.Content,
 		ExposureScope:  string(thought.ExposureScope),
 		UserTags:       append([]string(nil), thought.UserTags...),
 		Metadata:       thought.Metadata,
+		Similarity:     similarity,
 		EmbeddingModel: thought.EmbeddingModel,
 		IngestStatus:   string(thought.IngestStatus),
 		IngestError:    thought.IngestError,

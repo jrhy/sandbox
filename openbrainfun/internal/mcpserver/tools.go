@@ -12,6 +12,7 @@ import (
 func NewServer(service *Service) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "openbrainfun", Version: "v0.1.0"}, nil)
 	mcp.AddTool(server, &mcp.Tool{Name: "search_thoughts", Description: "Search remote_ok thoughts for the authenticated user."}, service.searchTool)
+	mcp.AddTool(server, &mcp.Tool{Name: "related_thoughts", Description: "Find the most similar remote_ok thoughts for one authenticated user's thought."}, service.relatedTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "recent_thoughts", Description: "List recent remote_ok thoughts for the authenticated user."}, service.recentTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "get_thought", Description: "Fetch one remote_ok thought by id for the authenticated user."}, service.getTool)
 	mcp.AddTool(server, &mcp.Tool{Name: "stats", Description: "Summarize remote_ok thoughts for the authenticated user."}, service.statsTool)
@@ -46,6 +47,18 @@ func (s *Service) recentTool(ctx context.Context, req *mcp.CallToolRequest, inpu
 	output, err := s.RecentThoughts(ctx, user, input)
 	if err != nil {
 		return nil, RecentThoughtsOutput{}, err
+	}
+	return nil, output, nil
+}
+
+func (s *Service) relatedTool(ctx context.Context, req *mcp.CallToolRequest, input RelatedThoughtsInput) (*mcp.CallToolResult, RelatedThoughtsOutput, error) {
+	user, err := currentUser(ctx)
+	if err != nil {
+		return nil, RelatedThoughtsOutput{}, err
+	}
+	output, err := s.RelatedThoughts(ctx, user, input)
+	if err != nil {
+		return nil, RelatedThoughtsOutput{}, err
 	}
 	return nil, output, nil
 }

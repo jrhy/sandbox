@@ -2,18 +2,23 @@ package thoughts
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jrhy/sandbox/openbrainfun/internal/embed"
 )
 
 type Service struct {
-	repo Repository
-	now  func() time.Time
+	repo     Repository
+	embedder embed.Embedder
+	now      func() time.Time
 }
 
-func NewService(repo Repository) *Service {
-	return &Service{repo: repo, now: func() time.Time { return time.Now().UTC() }}
+var ErrSearchUnavailable = errors.New("semantic search unavailable")
+
+func NewService(repo Repository, embedder embed.Embedder) *Service {
+	return &Service{repo: repo, embedder: embedder, now: func() time.Time { return time.Now().UTC() }}
 }
 
 func (s *Service) CreateThought(ctx context.Context, input CreateThoughtInput) (Thought, error) {
@@ -64,13 +69,51 @@ func (s *Service) DeleteThought(ctx context.Context, userID, thoughtID uuid.UUID
 }
 
 func (s *Service) ListThoughts(ctx context.Context, params ListThoughtsParams) ([]Thought, error) {
-	if params.SearchMode == SearchModeSemantic && params.Q != "" {
-		return s.repo.SearchSemantic(ctx, SearchSemanticParams{UserID: params.UserID, Query: params.Q, Page: params.Page, PageSize: params.PageSize})
-	}
 	if params.Q != "" {
 		return s.repo.SearchKeyword(ctx, SearchKeywordParams{UserID: params.UserID, Query: params.Q, Exposure: params.Exposure, IngestStatus: params.IngestStatus, Tag: params.Tag, Page: params.Page, PageSize: params.PageSize})
 	}
 	return s.repo.ListThoughts(ctx, params)
+}
+
+func (s *Service) SearchThoughts(ctx context.Context, input SearchThoughtsInput) ([]ScoredThought, error) {
+	if input.SearchMode != SearchModeSemantic || input.Query == "" {
+		return nil, nil
+	}
+	if s.embedder == nil {
+		return nil, ErrSearchUnavailable
+	}
+	vectors, err := s.embedder.Embed(ctx, []string{input.Query})
+	if err != nil {
+		return nil, err
+	}
+	if len(vectors) == 0 {
+		return []ScoredThought{}, nil
+	}
+	return s.repo.SearchSemantic(ctx, SearchSemanticParams{
+		UserID:         input.UserID,
+		QueryEmbedding: vectors[0],
+		Threshold:      input.Threshold,
+		Exposure:       input.Exposure,
+		Tag:            input.Tag,
+		Page:           input.Page,
+		PageSize:       input.PageSize,
+	})
+}
+
+func (s *Service) RelatedThoughts(ctx context.Context, input RelatedThoughtsInput) ([]ScoredThought, error) {
+	anchor, err := s.repo.GetThought(ctx, input.UserID, input.ThoughtID)
+	if err != nil {
+		return nil, err
+	}
+	if anchor.IngestStatus != IngestStatusReady {
+		return []ScoredThought{}, nil
+	}
+	return s.repo.RelatedThoughts(ctx, RelatedThoughtsParams{
+		UserID:    input.UserID,
+		ThoughtID: input.ThoughtID,
+		Exposure:  input.Exposure,
+		Limit:     input.Limit,
+	})
 }
 
 func (s *Service) RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (Thought, error) {

@@ -22,6 +22,8 @@ type ThoughtService interface {
 	UpdateThought(ctx context.Context, input thoughts.UpdateThoughtInput) (thoughts.Thought, error)
 	DeleteThought(ctx context.Context, userID, thoughtID uuid.UUID) error
 	ListThoughts(ctx context.Context, params thoughts.ListThoughtsParams) ([]thoughts.Thought, error)
+	SearchThoughts(ctx context.Context, input thoughts.SearchThoughtsInput) ([]thoughts.ScoredThought, error)
+	RelatedThoughts(ctx context.Context, input thoughts.RelatedThoughtsInput) ([]thoughts.ScoredThought, error)
 	RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error)
 }
 
@@ -35,19 +37,22 @@ type Handlers struct {
 }
 
 type pageData struct {
-	Title        string
-	Page         string
-	Path         string
-	Flash        string
-	CSRFToken    string
-	SearchQuery  string
-	SearchMode   string
-	Exposure     string
-	IngestStatus string
-	Tag          string
-	Thought      thoughts.Thought
-	Thoughts     []thoughts.Thought
-	Error        string
+	Title           string
+	Page            string
+	Path            string
+	Flash           string
+	CSRFToken       string
+	SearchQuery     string
+	SearchMode      string
+	Exposure        string
+	IngestStatus    string
+	Tag             string
+	Thought         thoughts.Thought
+	Thoughts        []thoughts.Thought
+	SearchResults   []thoughts.ScoredThought
+	RelatedThoughts []thoughts.ScoredThought
+	SemanticSearch  bool
+	Error           string
 }
 
 func NewHandlers(thoughtService ThoughtService, csrfKey string) *Handlers {
@@ -58,6 +63,9 @@ func NewHandlers(thoughtService ThoughtService, csrfKey string) *Handlers {
 				return ""
 			}
 			return value.Format(time.RFC3339)
+		},
+		"mul100": func(value float64) float64 {
+			return value * 100
 		},
 	}
 	return &Handlers{
@@ -137,20 +145,40 @@ func (h *Handlers) Thoughts(w http.ResponseWriter, r *http.Request) {
 		Page:         page,
 		PageSize:     pageSize,
 	}
-	list, err := h.thoughts.ListThoughts(r.Context(), params)
-	if err != nil {
-		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
-		return
+	data := pageData{
+		SearchQuery:    params.Q,
+		SearchMode:     string(params.SearchMode),
+		Exposure:       params.Exposure,
+		IngestStatus:   params.IngestStatus,
+		Tag:            params.Tag,
+		SemanticSearch: params.SearchMode == thoughts.SearchModeSemantic && strings.TrimSpace(params.Q) != "",
+	}
+	if data.SemanticSearch {
+		results, err := h.thoughts.SearchThoughts(r.Context(), thoughts.SearchThoughtsInput{
+			UserID:       user.ID,
+			Query:        params.Q,
+			SearchMode:   params.SearchMode,
+			Exposure:     params.Exposure,
+			IngestStatus: params.IngestStatus,
+			Tag:          params.Tag,
+			Page:         params.Page,
+			PageSize:     params.PageSize,
+		})
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		data.SearchResults = results
+	} else {
+		list, err := h.thoughts.ListThoughts(r.Context(), params)
+		if err != nil {
+			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			return
+		}
+		data.Thoughts = list
 	}
 
-	h.renderHTML(w, h.thoughtsTemplate, h.newPageData(r, "Thoughts", "thoughts", pageData{
-		Thoughts:     list,
-		SearchQuery:  params.Q,
-		SearchMode:   string(params.SearchMode),
-		Exposure:     params.Exposure,
-		IngestStatus: params.IngestStatus,
-		Tag:          params.Tag,
-	}))
+	h.renderHTML(w, h.thoughtsTemplate, h.newPageData(r, "Thoughts", "thoughts", data))
 }
 
 func (h *Handlers) ThoughtDetail(w http.ResponseWriter, r *http.Request) {
@@ -159,8 +187,26 @@ func (h *Handlers) ThoughtDetail(w http.ResponseWriter, r *http.Request) {
 		h.writeThoughtError(w, err)
 		return
 	}
+	data := pageData{Thought: thought}
+	if thought.IngestStatus == thoughts.IngestStatusReady {
+		user, ok := auth.UserFromContext(r.Context())
+		if !ok {
+			h.writeThoughtError(w, errors.New("missing user"))
+			return
+		}
+		related, err := h.thoughts.RelatedThoughts(r.Context(), thoughts.RelatedThoughtsInput{
+			UserID:    user.ID,
+			ThoughtID: thought.ID,
+			Limit:     5,
+		})
+		if err != nil {
+			h.writeThoughtError(w, err)
+			return
+		}
+		data.RelatedThoughts = related
+	}
 
-	h.renderHTML(w, h.thoughtTemplate, h.newPageData(r, "Edit thought", "thought", pageData{Thought: thought}))
+	h.renderHTML(w, h.thoughtTemplate, h.newPageData(r, "Edit thought", "thought", data))
 }
 
 func (h *Handlers) Update(w http.ResponseWriter, r *http.Request) {

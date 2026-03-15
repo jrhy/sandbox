@@ -25,6 +25,11 @@ type CreateThoughtInput struct {
 	UserTags      []string
 }
 
+type ScoredThought struct {
+	Thought    Thought
+	Similarity float64
+}
+
 type UpdateThoughtInput struct {
 	ThoughtID     uuid.UUID
 	UserID        uuid.UUID
@@ -69,10 +74,39 @@ type SearchKeywordParams struct {
 }
 
 type SearchSemanticParams struct {
-	UserID   uuid.UUID
-	Query    string
-	Page     int
-	PageSize int
+	UserID         uuid.UUID
+	QueryEmbedding []float32
+	Threshold      float64
+	Exposure       string
+	Tag            string
+	Page           int
+	PageSize       int
+}
+
+type SearchThoughtsInput struct {
+	UserID       uuid.UUID
+	Query        string
+	SearchMode   SearchMode
+	Threshold    float64
+	Exposure     string
+	IngestStatus string
+	Tag          string
+	Page         int
+	PageSize     int
+}
+
+type RelatedThoughtsInput struct {
+	UserID    uuid.UUID
+	ThoughtID uuid.UUID
+	Exposure  string
+	Limit     int
+}
+
+type RelatedThoughtsParams struct {
+	UserID    uuid.UUID
+	ThoughtID uuid.UUID
+	Exposure  string
+	Limit     int
 }
 
 type MarkReadyParams struct {
@@ -90,7 +124,8 @@ type Repository interface {
 	DeleteThought(ctx context.Context, userID, thoughtID uuid.UUID) error
 	ListThoughts(ctx context.Context, params ListThoughtsParams) ([]Thought, error)
 	SearchKeyword(ctx context.Context, params SearchKeywordParams) ([]Thought, error)
-	SearchSemantic(ctx context.Context, params SearchSemanticParams) ([]Thought, error)
+	SearchSemantic(ctx context.Context, params SearchSemanticParams) ([]ScoredThought, error)
+	RelatedThoughts(ctx context.Context, params RelatedThoughtsParams) ([]ScoredThought, error)
 	RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (Thought, error)
 	ClaimPending(ctx context.Context, limit int) ([]Thought, error)
 	MarkReady(ctx context.Context, params MarkReadyParams) error
