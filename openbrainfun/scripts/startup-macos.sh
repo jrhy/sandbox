@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+container_bin="${OPENBRAIN_CONTAINER_BIN:-/usr/local/bin/container}"
+postgres_container_name="${OPENBRAIN_POSTGRES_CONTAINER_NAME:-openbrain-postgres}"
+postgres_image="${OPENBRAIN_POSTGRES_IMAGE:-pgvector/pgvector:pg16}"
+postgres_host_port="${OPENBRAIN_POSTGRES_HOST_PORT:-5432}"
+postgres_db="${OPENBRAIN_POSTGRES_DB:-openbrain}"
+postgres_user="${OPENBRAIN_POSTGRES_USER:-openbrain}"
+postgres_password="${OPENBRAIN_POSTGRES_PASSWORD:-openbrain}"
+postgres_data_dir="${OPENBRAIN_POSTGRES_DATA_DIR:-$repo_root/var/postgres}"
+csrf_key_file="${OPENBRAIN_CSRF_KEY_FILE:-$repo_root/var/csrf.key}"
+
+export OPENBRAIN_WEB_ADDR="${OPENBRAIN_WEB_ADDR:-127.0.0.1:18080}"
+export OPENBRAIN_MCP_ADDR="${OPENBRAIN_MCP_ADDR:-127.0.0.1:18081}"
+export OPENBRAIN_DATABASE_URL="${OPENBRAIN_DATABASE_URL:-postgres://${postgres_user}:${postgres_password}@127.0.0.1:${postgres_host_port}/${postgres_db}?sslmode=disable}"
+export OPENBRAIN_OLLAMA_URL="${OPENBRAIN_OLLAMA_URL:-http://127.0.0.1:11434}"
+export OPENBRAIN_EMBED_MODEL="${OPENBRAIN_EMBED_MODEL:-all-minilm:22m}"
+export OPENBRAIN_METADATA_MODEL="${OPENBRAIN_METADATA_MODEL:-qwen3:0.6b}"
+export OPENBRAIN_SESSION_TTL="${OPENBRAIN_SESSION_TTL:-24h}"
+export OPENBRAIN_COOKIE_SECURE="${OPENBRAIN_COOKIE_SECURE:-false}"
+export OPENBRAIN_LOG_LEVEL="${OPENBRAIN_LOG_LEVEL:-info}"
+
+require_command() {
+  local name="$1"
+  if ! command -v "$name" >/dev/null 2>&1; then
+    printf 'required command not found in PATH: %s\n' "$name" >&2
+    exit 1
+  fi
+}
+
+ensure_csrf_key() {
+  if [[ -n "${OPENBRAIN_CSRF_KEY:-}" ]]; then
+    export OPENBRAIN_CSRF_KEY
+    return
+  fi
+
+  mkdir -p "$(dirname "$csrf_key_file")"
+  if [[ ! -s "$csrf_key_file" ]]; then
+    python3 - "$csrf_key_file" <<'PY'
+import secrets, sys
+path = sys.argv[1]
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(secrets.token_hex(32))
+PY
+  fi
+
+  OPENBRAIN_CSRF_KEY="$(tr -d '\r\n' < "$csrf_key_file")"
+  if [[ -z "$OPENBRAIN_CSRF_KEY" ]]; then
+    printf 'failed to load CSRF key from %s\n' "$csrf_key_file" >&2
+    exit 1
+  fi
+  export OPENBRAIN_CSRF_KEY
+}
+
+ensure_container_system() {
+  "$container_bin" system start >/dev/null
+}
+
+start_postgres_container() {
+  mkdir -p "$postgres_data_dir"
+
+  if "$container_bin" exec "$postgres_container_name" pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then
+    return
+  fi
+
+  if "$container_bin" start "$postgres_container_name" >/dev/null 2>&1; then
+    return
+  fi
+
+  "$container_bin" run \
+    --detach \
+    --name "$postgres_container_name" \
+    --env "POSTGRES_DB=$postgres_db" \
+    --env "POSTGRES_USER=$postgres_user" \
+    --env "POSTGRES_PASSWORD=$postgres_password" \
+    --publish "127.0.0.1:${postgres_host_port}:5432" \
+    --volume "${postgres_data_dir}:/var/lib/postgresql/data" \
+    "$postgres_image" >/dev/null
+}
+
+wait_for_postgres() {
+  until "$container_bin" exec "$postgres_container_name" pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; do
+    sleep 1
+  done
+}
+
+ensure_schema() {
+  local schema_exists
+  schema_exists="$("$container_bin" exec "$postgres_container_name" psql -tAc "select 1 from pg_tables where schemaname = 'public' and tablename = 'users'" -U "$postgres_user" -d "$postgres_db" | tr -d '[:space:]')"
+  if [[ "$schema_exists" == "1" ]]; then
+    return
+  fi
+
+  "$container_bin" exec --interactive "$postgres_container_name" psql -v ON_ERROR_STOP=1 -U "$postgres_user" -d "$postgres_db" < migrations/0001_initial.sql
+}
+
+ensure_ollama() {
+  if ! curl -fsS "${OPENBRAIN_OLLAMA_URL}/api/version" >/dev/null; then
+    printf 'ollama is not reachable at %s; start or port-forward it before running this script\n' "$OPENBRAIN_OLLAMA_URL" >&2
+    exit 1
+  fi
+}
+
+main() {
+  if [[ ! -x "$container_bin" ]]; then
+    printf 'required macOS container runtime not found or not executable: %s\n' "$container_bin" >&2
+    exit 1
+  fi
+
+  require_command curl
+  require_command python3
+  require_command openbrain
+
+  ensure_csrf_key
+  ensure_container_system
+  start_postgres_container
+  wait_for_postgres
+  ensure_schema
+  ensure_ollama
+
+  printf 'starting openbrain with postgres container %s and ollama at %s\n' "$postgres_container_name" "$OPENBRAIN_OLLAMA_URL"
+  exec openbrain start
+}
+
+main "$@"

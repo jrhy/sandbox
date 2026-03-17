@@ -71,8 +71,8 @@ func TestWalkthroughScriptUsesOpenbrainCLIForProvisioningAndStart(t *testing.T) 
 	if !strings.Contains(text, "go run ./cmd/openbrain user update") {
 		t.Fatalf("walkthrough should provision through openbrain user update:\n%s", text)
 	}
-	if !strings.Contains(text, "go run ./cmd/openbrain start") {
-		t.Fatalf("walkthrough should start the server through openbrain start:\n%s", text)
+	if !strings.Contains(text, "\"$app_bin\" start") {
+		t.Fatalf("walkthrough should start the server through the openbrain start subcommand:\n%s", text)
 	}
 }
 
