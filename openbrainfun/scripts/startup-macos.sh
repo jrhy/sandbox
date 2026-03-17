@@ -11,7 +11,10 @@ postgres_host_port="${OPENBRAIN_POSTGRES_HOST_PORT:-5432}"
 postgres_db="${OPENBRAIN_POSTGRES_DB:-openbrain}"
 postgres_user="${OPENBRAIN_POSTGRES_USER:-openbrain}"
 postgres_password="${OPENBRAIN_POSTGRES_PASSWORD:-openbrain}"
-postgres_data_dir="${OPENBRAIN_POSTGRES_DATA_DIR:-$repo_root/var/postgres}"
+postgres_data_dir="${OPENBRAIN_POSTGRES_DATA_DIR:-}"
+postgres_volume_name="${OPENBRAIN_POSTGRES_VOLUME_NAME:-openbrain-postgres-data}"
+postgres_pgdata="${OPENBRAIN_POSTGRES_PGDATA:-/var/lib/postgresql/data/pgdata}"
+postgres_ready_timeout_seconds="${OPENBRAIN_POSTGRES_READY_TIMEOUT_SECONDS:-30}"
 csrf_key_file="${OPENBRAIN_CSRF_KEY_FILE:-$repo_root/var/csrf.key}"
 
 export OPENBRAIN_WEB_ADDR="${OPENBRAIN_WEB_ADDR:-127.0.0.1:18080}"
@@ -60,14 +63,61 @@ ensure_container_system() {
   "$container_bin" system start >/dev/null
 }
 
-start_postgres_container() {
-  mkdir -p "$postgres_data_dir"
+postgres_mount_arg() {
+  if [[ -n "$postgres_data_dir" ]]; then
+    mkdir -p "$postgres_data_dir"
+    printf '%s:/var/lib/postgresql/data' "$postgres_data_dir"
+    return
+  fi
+  printf '%s:/var/lib/postgresql/data' "$postgres_volume_name"
+}
 
+postgres_inspect_json() {
+  "$container_bin" inspect "$postgres_container_name" 2>/dev/null || true
+}
+
+postgres_container_exists() {
+  postgres_inspect_json \
+    | python3 -c 'import json,sys
+try:
+    payload=json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+sys.exit(0 if isinstance(payload, list) and len(payload) > 0 else 1)
+'
+}
+
+postgres_container_status() {
+  if ! postgres_container_exists; then
+    return 1
+  fi
+
+  postgres_inspect_json \
+    | python3 -c 'import json,sys; payload=json.load(sys.stdin); print((payload[0] or {}).get("status",""))'
+}
+
+print_postgres_logs() {
+  local logs
+  if ! logs="$("$container_bin" logs "$postgres_container_name" 2>&1)"; then
+    printf 'postgres container %s logs unavailable:\n%s\n' "$postgres_container_name" "$logs" >&2
+    return
+  fi
+  if [[ -n "$logs" ]]; then
+    printf 'postgres container %s logs:\n%s\n' "$postgres_container_name" "$logs" >&2
+  fi
+}
+
+start_postgres_container() {
   if "$container_bin" exec "$postgres_container_name" pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; then
     return
   fi
 
-  if "$container_bin" start "$postgres_container_name" >/dev/null 2>&1; then
+  if postgres_container_exists; then
+    if ! "$container_bin" start "$postgres_container_name" >/dev/null 2>&1; then
+      printf 'failed to start existing postgres container %s\n' "$postgres_container_name" >&2
+      print_postgres_logs
+      exit 1
+    fi
     return
   fi
 
@@ -77,14 +127,31 @@ start_postgres_container() {
     --env "POSTGRES_DB=$postgres_db" \
     --env "POSTGRES_USER=$postgres_user" \
     --env "POSTGRES_PASSWORD=$postgres_password" \
+    --env "PGDATA=$postgres_pgdata" \
     --publish "127.0.0.1:${postgres_host_port}:5432" \
-    --volume "${postgres_data_dir}:/var/lib/postgresql/data" \
+    --volume "$(postgres_mount_arg)" \
     "$postgres_image" >/dev/null
 }
 
 wait_for_postgres() {
+  local elapsed_seconds=0
+  local container_status=""
+
   until "$container_bin" exec "$postgres_container_name" pg_isready -U "$postgres_user" -d "$postgres_db" >/dev/null 2>&1; do
+    container_status="$(postgres_container_status 2>/dev/null || true)"
+    if [[ "$container_status" == "stopped" || "$container_status" == "exited" || "$container_status" == "dead" ]]; then
+      printf 'postgres container %s entered terminal state: %s\n' "$postgres_container_name" "$container_status" >&2
+      print_postgres_logs
+      printf 'if this container was created with an incompatible bind mount, remove it with:\n  %s rm %s\nthen rerun this script so it can recreate the container.\n' "$container_bin" "$postgres_container_name" >&2
+      exit 1
+    fi
+    if (( elapsed_seconds >= postgres_ready_timeout_seconds )); then
+      printf 'timed out waiting %ss for postgres container %s to become ready\n' "$postgres_ready_timeout_seconds" "$postgres_container_name" >&2
+      print_postgres_logs
+      exit 1
+    fi
     sleep 1
+    ((elapsed_seconds += 1))
   done
 }
 
@@ -122,7 +189,11 @@ main() {
   ensure_schema
   ensure_ollama
 
-  printf 'starting openbrain with postgres container %s and ollama at %s\n' "$postgres_container_name" "$OPENBRAIN_OLLAMA_URL"
+  if [[ -n "$postgres_data_dir" ]]; then
+    printf 'starting openbrain with postgres container %s using bind mount %s and ollama at %s\n' "$postgres_container_name" "$postgres_data_dir" "$OPENBRAIN_OLLAMA_URL"
+  else
+    printf 'starting openbrain with postgres container %s using volume %s and ollama at %s\n' "$postgres_container_name" "$postgres_volume_name" "$OPENBRAIN_OLLAMA_URL"
+  fi
   exec openbrain start
 }
 

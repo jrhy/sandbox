@@ -8,19 +8,8 @@ import (
 	"testing"
 )
 
-func TestStartupMacOSScriptStartsPostgresAndExecsOpenbrain(t *testing.T) {
-	repo := repoRoot(t)
-	tempDir := t.TempDir()
-	binDir := filepath.Join(tempDir, "bin")
-	if err := os.MkdirAll(binDir, 0o755); err != nil {
-		t.Fatalf("mkdir bin: %v", err)
-	}
-
-	logPath := filepath.Join(tempDir, "startup.log")
-	stateDir := filepath.Join(tempDir, "state")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatalf("mkdir state: %v", err)
-	}
+func writeStartupMacOSFakes(t *testing.T, binDir, logPath, stateDir string) {
+	t.Helper()
 
 	containerScript := `#!/usr/bin/env bash
 set -euo pipefail
@@ -38,13 +27,47 @@ case "$cmd" in
     ;;
   start)
     if [[ -f "$state_dir/postgres-exists" ]]; then
+      if [[ -f "$state_dir/fail-start" ]]; then
+        exit 1
+      fi
+      if [[ -f "$state_dir/stays-stopped" ]]; then
+        touch "$state_dir/postgres-stopped"
+        rm -f "$state_dir/postgres-running"
+        exit 0
+      fi
       touch "$state_dir/postgres-running"
+      rm -f "$state_dir/postgres-stopped"
       exit 0
     fi
     exit 1
     ;;
   run)
-    touch "$state_dir/postgres-exists" "$state_dir/postgres-running"
+    touch "$state_dir/postgres-exists"
+    if [[ -f "$state_dir/stays-stopped" ]]; then
+      touch "$state_dir/postgres-stopped"
+      rm -f "$state_dir/postgres-running"
+      exit 0
+    fi
+    touch "$state_dir/postgres-running"
+    rm -f "$state_dir/postgres-stopped"
+    exit 0
+    ;;
+  inspect)
+    if [[ ! -f "$state_dir/postgres-exists" ]]; then
+      printf '[]\n'
+      exit 0
+    fi
+    status="running"
+    if [[ -f "$state_dir/postgres-stopped" || ! -f "$state_dir/postgres-running" ]]; then
+      status="stopped"
+    fi
+    printf '[{"status":"%s"}]\n' "$status"
+    exit 0
+    ;;
+  logs)
+    if [[ -f "$state_dir/logs.txt" ]]; then
+      cat "$state_dir/logs.txt"
+    fi
     exit 0
     ;;
   exec)
@@ -53,7 +76,6 @@ case "$cmd" in
       args=("${args[@]:1}")
     fi
     name="${args[0]:-}"
-    shift_count=1
     if [[ "$name" == "" ]]; then
       exit 1
     fi
@@ -109,6 +131,25 @@ exit 1
 `
 	writeExecutable(t, filepath.Join(binDir, "curl"), curlScript)
 
+	_ = logPath
+}
+
+func TestStartupMacOSScriptStartsPostgresAndExecsOpenbrain(t *testing.T) {
+	repo := repoRoot(t)
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	logPath := filepath.Join(tempDir, "startup.log")
+	stateDir := filepath.Join(tempDir, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	writeStartupMacOSFakes(t, binDir, logPath, stateDir)
+
 	cmd := exec.Command("bash", "scripts/startup-macos.sh")
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(),
@@ -131,7 +172,9 @@ exit 1
 	for _, want := range []string{
 		"container system start",
 		"container run --detach --name openbrain-postgres",
+		"container run --detach --name openbrain-postgres --env POSTGRES_DB=openbrain --env POSTGRES_USER=openbrain --env POSTGRES_PASSWORD=openbrain --env PGDATA=/var/lib/postgresql/data/pgdata --publish 127.0.0.1:5432:5432 --volume openbrain-postgres-data:/var/lib/postgresql/data pgvector/pgvector:pg16",
 		"container exec openbrain-postgres pg_isready -U openbrain -d openbrain",
+		"container inspect openbrain-postgres",
 		"container exec --interactive openbrain-postgres psql -v ON_ERROR_STOP=1 -U openbrain -d openbrain",
 		"curl -fsS http://127.0.0.1:11434/api/version",
 		"openbrain args=start",
@@ -144,6 +187,67 @@ exit 1
 	}
 	if strings.Contains(logText, "user update") {
 		t.Fatalf("startup log should not include provisioning steps:\n%s", logText)
+	}
+}
+
+func TestStartupMacOSScriptFailsFastForStoppedExistingContainer(t *testing.T) {
+	repo := repoRoot(t)
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	logPath := filepath.Join(tempDir, "startup.log")
+	stateDir := filepath.Join(tempDir, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "postgres-exists"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("seed postgres exists: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "stays-stopped"), []byte("1"), 0o644); err != nil {
+		t.Fatalf("seed stopped state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stateDir, "logs.txt"), []byte("chmod: changing permissions of '/var/lib/postgresql/data': Operation not permitted\nchown: changing ownership of '/var/lib/postgresql/data': Operation not permitted\n"), 0o644); err != nil {
+		t.Fatalf("seed logs: %v", err)
+	}
+
+	writeStartupMacOSFakes(t, binDir, logPath, stateDir)
+
+	cmd := exec.Command("bash", "scripts/startup-macos.sh")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),
+		"OPENBRAIN_CSRF_KEY_FILE="+filepath.Join(tempDir, "csrf.key"),
+		"STARTUP_LOG="+logPath,
+		"STARTUP_STATE_DIR="+stateDir,
+		"OPENBRAIN_POSTGRES_READY_TIMEOUT_SECONDS=2",
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("startup-macos.sh unexpectedly succeeded:\n%s", output)
+	}
+
+	text := string(output)
+	for _, want := range []string{
+		"entered terminal state: stopped",
+		"chmod: changing permissions of '/var/lib/postgresql/data': Operation not permitted",
+		"container rm openbrain-postgres",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("startup failure output missing %q:\n%s", want, text)
+		}
+	}
+
+	rawLog, readErr := os.ReadFile(logPath)
+	if readErr != nil {
+		t.Fatalf("read log: %v", readErr)
+	}
+	logText := string(rawLog)
+	if strings.Contains(logText, "container run --detach --name openbrain-postgres") {
+		t.Fatalf("startup should not try to recreate an existing container before reporting failure:\n%s", logText)
 	}
 }
 
@@ -162,6 +266,7 @@ func TestStartupMacOSScriptDoesNotUseWalkthroughProvisioning(t *testing.T) {
 		"podman-compose",
 		"docker compose",
 		"go run ./cmd/openbrain",
+		"set -x",
 	} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("startup-macos.sh should not contain %q:\n%s", forbidden, text)
