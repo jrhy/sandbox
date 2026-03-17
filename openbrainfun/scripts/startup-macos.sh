@@ -4,6 +4,18 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+env_file="${OPENBRAIN_ENV_FILE:-$repo_root/.env}"
+load_env_file() {
+  if [[ -f "$env_file" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
+  fi
+}
+
+load_env_file
+
 container_bin="${OPENBRAIN_CONTAINER_BIN:-/usr/local/bin/container}"
 postgres_container_name="${OPENBRAIN_POSTGRES_CONTAINER_NAME:-openbrain-postgres}"
 postgres_image="${OPENBRAIN_POSTGRES_IMAGE:-pgvector/pgvector:pg16}"

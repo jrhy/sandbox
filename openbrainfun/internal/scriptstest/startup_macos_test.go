@@ -251,6 +251,72 @@ func TestStartupMacOSScriptFailsFastForStoppedExistingContainer(t *testing.T) {
 	}
 }
 
+func TestStartupMacOSScriptLoadsEnvFile(t *testing.T) {
+	repo := repoRoot(t)
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	logPath := filepath.Join(tempDir, "startup.log")
+	stateDir := filepath.Join(tempDir, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	envFile := filepath.Join(tempDir, ".env")
+	envText := strings.Join([]string{
+		"OPENBRAIN_POSTGRES_CONTAINER_NAME=env-postgres",
+		"OPENBRAIN_POSTGRES_VOLUME_NAME=env-volume",
+		"OPENBRAIN_POSTGRES_DB=envdb",
+		"OPENBRAIN_POSTGRES_USER=envuser",
+		"OPENBRAIN_POSTGRES_PASSWORD=envpass",
+		"OPENBRAIN_POSTGRES_HOST_PORT=55432",
+		"OPENBRAIN_OLLAMA_URL=http://127.0.0.1:21434",
+		"OPENBRAIN_CSRF_KEY=env-csrf-key",
+	}, "\n") + "\n"
+	if err := os.WriteFile(envFile, []byte(envText), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+
+	writeStartupMacOSFakes(t, binDir, logPath, stateDir)
+
+	cmd := exec.Command("bash", "scripts/startup-macos.sh")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"OPENBRAIN_ENV_FILE="+envFile,
+		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),
+		"STARTUP_LOG="+logPath,
+		"STARTUP_STATE_DIR="+stateDir,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("startup-macos.sh failed: %v\n%s", err, output)
+	}
+
+	rawLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	logText := string(rawLog)
+	for _, want := range []string{
+		"container run --detach --name env-postgres",
+		"--publish 127.0.0.1:55432:5432",
+		"--volume env-volume:/var/lib/postgresql/data",
+		"container exec env-postgres pg_isready -U envuser -d envdb",
+		"OPENBRAIN_DATABASE_URL=postgres://envuser:envpass@127.0.0.1:55432/envdb?sslmode=disable",
+		"OPENBRAIN_OLLAMA_URL=http://127.0.0.1:21434",
+		"OPENBRAIN_CSRF_KEY=env-csrf-key",
+		"curl -fsS http://127.0.0.1:21434/api/version",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("startup log missing %q:\n%s", want, logText)
+		}
+	}
+}
+
 func TestStartupMacOSScriptDoesNotUseWalkthroughProvisioning(t *testing.T) {
 	repo := repoRoot(t)
 	script, err := os.ReadFile(filepath.Join(repo, "scripts", "startup-macos.sh"))
