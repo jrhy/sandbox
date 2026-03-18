@@ -154,8 +154,9 @@ func TestStartupMacOSScriptStartsPostgresAndExecsOpenbrain(t *testing.T) {
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(),
 		"PATH="+binDir+":/usr/bin:/bin",
+		"OPENBRAIN_ENV_FILE="+filepath.Join(tempDir, "missing.env"),
 		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),
-		"OPENBRAIN_CSRF_KEY_FILE="+filepath.Join(tempDir, "csrf.key"),
+		"OPENBRAIN_CSRF_KEY=test-csrf-key",
 		"STARTUP_LOG="+logPath,
 		"STARTUP_STATE_DIR="+stateDir,
 	)
@@ -219,8 +220,9 @@ func TestStartupMacOSScriptFailsFastForStoppedExistingContainer(t *testing.T) {
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(),
 		"PATH="+binDir+":/usr/bin:/bin",
+		"OPENBRAIN_ENV_FILE="+filepath.Join(tempDir, "missing.env"),
 		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),
-		"OPENBRAIN_CSRF_KEY_FILE="+filepath.Join(tempDir, "csrf.key"),
+		"OPENBRAIN_CSRF_KEY=test-csrf-key",
 		"STARTUP_LOG="+logPath,
 		"STARTUP_STATE_DIR="+stateDir,
 		"OPENBRAIN_POSTGRES_READY_TIMEOUT_SECONDS=2",
@@ -248,6 +250,56 @@ func TestStartupMacOSScriptFailsFastForStoppedExistingContainer(t *testing.T) {
 	logText := string(rawLog)
 	if strings.Contains(logText, "container run --detach --name openbrain-postgres") {
 		t.Fatalf("startup should not try to recreate an existing container before reporting failure:\n%s", logText)
+	}
+}
+
+func TestStartupMacOSScriptRequiresCSRFFromEnvOrDotEnv(t *testing.T) {
+	repo := repoRoot(t)
+	tempDir := t.TempDir()
+	binDir := filepath.Join(tempDir, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	logPath := filepath.Join(tempDir, "startup.log")
+	stateDir := filepath.Join(tempDir, "state")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		t.Fatalf("mkdir state: %v", err)
+	}
+
+	writeStartupMacOSFakes(t, binDir, logPath, stateDir)
+
+	cmd := exec.Command("bash", "scripts/startup-macos.sh")
+	cmd.Dir = repo
+	cmd.Env = append(os.Environ(),
+		"PATH="+binDir+":/usr/bin:/bin",
+		"OPENBRAIN_ENV_FILE="+filepath.Join(tempDir, "missing.env"),
+		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),
+		"STARTUP_LOG="+logPath,
+		"STARTUP_STATE_DIR="+stateDir,
+	)
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("startup-macos.sh unexpectedly succeeded without OPENBRAIN_CSRF_KEY:\n%s", output)
+	}
+
+	text := string(output)
+	for _, want := range []string{
+		"OPENBRAIN_CSRF_KEY is required",
+		"scripts/init-env.sh",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("startup failure output missing %q:\n%s", want, text)
+		}
+	}
+
+	rawLog, readErr := os.ReadFile(logPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read log: %v", readErr)
+	}
+	logText := string(rawLog)
+	if strings.Contains(logText, "container system start") {
+		t.Fatalf("startup should fail before touching the container runtime when csrf is missing:\n%s", logText)
 	}
 }
 

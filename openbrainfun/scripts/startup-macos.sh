@@ -27,7 +27,6 @@ postgres_data_dir="${OPENBRAIN_POSTGRES_DATA_DIR:-}"
 postgres_volume_name="${OPENBRAIN_POSTGRES_VOLUME_NAME:-openbrain-postgres-data}"
 postgres_pgdata="${OPENBRAIN_POSTGRES_PGDATA:-/var/lib/postgresql/data/pgdata}"
 postgres_ready_timeout_seconds="${OPENBRAIN_POSTGRES_READY_TIMEOUT_SECONDS:-30}"
-csrf_key_file="${OPENBRAIN_CSRF_KEY_FILE:-$repo_root/var/csrf.key}"
 
 export OPENBRAIN_WEB_ADDR="${OPENBRAIN_WEB_ADDR:-127.0.0.1:18080}"
 export OPENBRAIN_MCP_ADDR="${OPENBRAIN_MCP_ADDR:-127.0.0.1:18081}"
@@ -48,24 +47,9 @@ require_command() {
 }
 
 ensure_csrf_key() {
-  if [[ -n "${OPENBRAIN_CSRF_KEY:-}" ]]; then
-    export OPENBRAIN_CSRF_KEY
-    return
-  fi
-
-  mkdir -p "$(dirname "$csrf_key_file")"
-  if [[ ! -s "$csrf_key_file" ]]; then
-    python3 - "$csrf_key_file" <<'PY'
-import secrets, sys
-path = sys.argv[1]
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(secrets.token_hex(32))
-PY
-  fi
-
-  OPENBRAIN_CSRF_KEY="$(tr -d '\r\n' < "$csrf_key_file")"
-  if [[ -z "$OPENBRAIN_CSRF_KEY" ]]; then
-    printf 'failed to load CSRF key from %s\n' "$csrf_key_file" >&2
+  if [[ -z "${OPENBRAIN_CSRF_KEY:-}" ]]; then
+    printf 'OPENBRAIN_CSRF_KEY is required; set it in %s or export it before running this script\n' "$env_file" >&2
+    printf 'hint: scripts/init-env.sh creates a .env with a generated CSRF key\n' >&2
     exit 1
   fi
   export OPENBRAIN_CSRF_KEY
