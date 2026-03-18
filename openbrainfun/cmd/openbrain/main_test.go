@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/jrhy/sandbox/openbrainfun/internal/config"
 )
 
 func TestStartBackgroundWorkerRunsLoopInBackground(t *testing.T) {
@@ -50,6 +52,16 @@ func TestListenAndServeAllReturnsRealServerError(t *testing.T) {
 	err := listenAndServeAll(web, mcp)
 	if !errors.Is(err, want) {
 		t.Fatalf("error = %v, want %v", err, want)
+	}
+}
+
+func TestStartupServicesMessage(t *testing.T) {
+	cfg := config.Config{WebAddr: "127.0.0.1:18080", MCPAddr: "127.0.0.1:18081"}
+
+	got := startupServicesMessage(cfg)
+	want := "starting services: web UI + JSON API on http://127.0.0.1:18080, MCP on http://127.0.0.1:18081/mcp"
+	if got != want {
+		t.Fatalf("startupServicesMessage() = %q, want %q", got, want)
 	}
 }
 

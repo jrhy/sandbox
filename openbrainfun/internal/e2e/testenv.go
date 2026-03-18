@@ -78,6 +78,15 @@ type ThoughtResponse struct {
 
 func NewTestEnv(t *testing.T) *TestEnv {
 	t.Helper()
+	return newTestEnvWithConfig(t, config.Config{
+		CookieSecure: false,
+		CSRFKey:      "test-csrf-key",
+		SessionTTL:   defaultSessionTTL,
+	})
+}
+
+func newTestEnvWithConfig(t *testing.T, cfg config.Config) *TestEnv {
+	t.Helper()
 
 	passwordHash, err := auth.HashPassword(defaultDemoPassword)
 	if err != nil {
@@ -93,10 +102,11 @@ func NewTestEnv(t *testing.T) *TestEnv {
 	authRepo := newMemoryAuthRepo(demoUser, otherUser, defaultDemoToken, defaultOtherToken)
 	thoughtRepo := newMemoryThoughtRepo()
 	embedder, extractor := buildProviders(t)
-	cfg := config.Config{
-		CookieSecure: false,
-		CSRFKey:      "test-csrf-key",
-		SessionTTL:   defaultSessionTTL,
+	if cfg.CSRFKey == "" {
+		cfg.CSRFKey = "test-csrf-key"
+	}
+	if cfg.SessionTTL == 0 {
+		cfg.SessionTTL = defaultSessionTTL
 	}
 
 	runtime := app.Build(cfg, authRepo, thoughtRepo, embedder, extractor)

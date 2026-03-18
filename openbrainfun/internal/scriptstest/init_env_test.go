@@ -33,7 +33,7 @@ func TestInitEnvWritesGeneratedSecretsAndSecurePermissions(t *testing.T) {
 		"OPENBRAIN_POSTGRES_CONTAINER_NAME=openbrain-postgres",
 		"OPENBRAIN_POSTGRES_VOLUME_NAME=openbrain-postgres-data",
 		"OPENBRAIN_OLLAMA_URL=http://127.0.0.1:11434",
-		"OPENBRAIN_COOKIE_SECURE=true",
+		"OPENBRAIN_COOKIE_SECURE=false",
 	} {
 		if !strings.Contains(envText, want) {
 			t.Fatalf(".env missing %q:\n%s", want, envText)
@@ -46,6 +46,17 @@ func TestInitEnvWritesGeneratedSecretsAndSecurePermissions(t *testing.T) {
 	postgresPassword := envValue(t, envText, "OPENBRAIN_POSTGRES_PASSWORD")
 	if len(postgresPassword) < 24 {
 		t.Fatalf("generated postgres password too short: %q", postgresPassword)
+	}
+	databaseURL := envValue(t, envText, "OPENBRAIN_DATABASE_URL")
+	wantDatabaseURLPrefix := "postgres://openbrain:"
+	if !strings.HasPrefix(databaseURL, wantDatabaseURLPrefix) {
+		t.Fatalf("database url = %q, want prefix %q", databaseURL, wantDatabaseURLPrefix)
+	}
+	if !strings.Contains(databaseURL, "@127.0.0.1:5432/openbrain?sslmode=disable") {
+		t.Fatalf("database url missing expected host/db details: %q", databaseURL)
+	}
+	if !strings.Contains(databaseURL, postgresPassword) {
+		t.Fatalf("database url should contain generated password %q, got %q", postgresPassword, databaseURL)
 	}
 
 	csrfKey := envValue(t, envText, "OPENBRAIN_CSRF_KEY")

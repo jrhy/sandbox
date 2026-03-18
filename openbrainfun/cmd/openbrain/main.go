@@ -51,6 +51,8 @@ func startCommand(ctx context.Context) error {
 		log.Printf("background worker error: %v", err)
 	})
 
+	log.Printf("%s", startupServicesMessage(cfg))
+
 	srv := server.NewWithHandlers(cfg, runtime.WebHandler, runtime.MCPHandler)
 	return listenAndServeAll(srv.Web, srv.MCP)
 }
@@ -92,4 +94,8 @@ func normalizeServeError(err error) error {
 		return nil
 	}
 	return err
+}
+
+func startupServicesMessage(cfg config.Config) string {
+	return fmt.Sprintf("starting services: web UI + JSON API on http://%s, MCP on http://%s/mcp", cfg.WebAddr, cfg.MCPAddr)
 }

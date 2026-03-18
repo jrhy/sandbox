@@ -1,8 +1,15 @@
 package e2e
 
 import (
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/jrhy/sandbox/openbrainfun/internal/config"
 )
 
 func TestEndToEndCRUDAndMCPIsolation(t *testing.T) {
@@ -92,4 +99,71 @@ func TestSemanticSearchAndRelatedThoughts(t *testing.T) {
 	}
 
 	env.AssertMCPRelatedThoughts(t, env.DemoToken(), middle.ID, "Open WebUI local sessions")
+}
+
+func TestBrowserLoginNeedsInsecureCookieForDirectHTTP(t *testing.T) {
+	t.Run("cookie secure disabled", func(t *testing.T) {
+		env := newTestEnvWithConfig(t, config.Config{
+			CookieSecure: false,
+			CSRFKey:      "test-csrf-key",
+			SessionTTL:   defaultSessionTTL,
+		})
+
+		resp := browserLogin(t, env, "demo", defaultDemoPassword)
+		if got := resp.Request.URL.Path; got != "/" {
+			t.Fatalf("final path = %q, want %q", got, "/")
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read response body: %v", err)
+		}
+		if !strings.Contains(string(body), "Save thought") {
+			t.Fatalf("expected home page after login, got body:\n%s", body)
+		}
+	})
+
+	t.Run("cookie secure enabled", func(t *testing.T) {
+		env := newTestEnvWithConfig(t, config.Config{
+			CookieSecure: true,
+			CSRFKey:      "test-csrf-key",
+			SessionTTL:   defaultSessionTTL,
+		})
+
+		resp := browserLogin(t, env, "demo", defaultDemoPassword)
+		if got := resp.Request.URL.Path; got != "/login" {
+			t.Fatalf("final path = %q, want %q when secure cookie is served over plain HTTP", got, "/login")
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("read response body: %v", err)
+		}
+		if !strings.Contains(string(body), "<h1>Log in</h1>") {
+			t.Fatalf("expected login page after secure-cookie redirect loop, got body:\n%s", body)
+		}
+	})
+}
+
+func browserLogin(t *testing.T, env *TestEnv, username, password string) *http.Response {
+	t.Helper()
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookiejar.New() error = %v", err)
+	}
+	client := &http.Client{
+		Jar:       jar,
+		Transport: handlerRoundTripper{handler: env.runtime.WebHandler},
+	}
+	form := url.Values{
+		"username": {username},
+		"password": {password},
+	}
+	resp, err := client.PostForm(env.webBaseURL+"/login", form)
+	if err != nil {
+		t.Fatalf("POST /login error = %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	return resp
 }

@@ -168,6 +168,12 @@ ensure_ollama() {
   fi
 }
 
+warn_if_cookie_secure_requires_https() {
+  if [[ "${OPENBRAIN_COOKIE_SECURE}" == "true" ]]; then
+    printf 'warning: OPENBRAIN_COOKIE_SECURE=true means browser login cookies are only sent over HTTPS; direct HTTP access to %s will bounce back to /login unless you put OpenBrainFun behind an HTTPS reverse proxy.\n' "$OPENBRAIN_WEB_ADDR" >&2
+  fi
+}
+
 main() {
   if [[ ! -x "$container_bin" ]]; then
     printf 'required macOS container runtime not found or not executable: %s\n' "$container_bin" >&2
@@ -184,6 +190,7 @@ main() {
   wait_for_postgres
   ensure_schema
   ensure_ollama
+  warn_if_cookie_secure_requires_https
 
   if [[ -n "$postgres_data_dir" ]]; then
     printf 'starting openbrain with postgres container %s using bind mount %s and ollama at %s\n' "$postgres_container_name" "$postgres_data_dir" "$OPENBRAIN_OLLAMA_URL"

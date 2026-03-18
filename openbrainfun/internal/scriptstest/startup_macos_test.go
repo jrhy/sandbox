@@ -326,6 +326,7 @@ func TestStartupMacOSScriptLoadsEnvFile(t *testing.T) {
 		"OPENBRAIN_POSTGRES_PASSWORD=envpass",
 		"OPENBRAIN_POSTGRES_HOST_PORT=55432",
 		"OPENBRAIN_OLLAMA_URL=http://127.0.0.1:21434",
+		"OPENBRAIN_COOKIE_SECURE=true",
 		"OPENBRAIN_CSRF_KEY=env-csrf-key",
 	}, "\n") + "\n"
 	if err := os.WriteFile(envFile, []byte(envText), 0o600); err != nil {
@@ -346,6 +347,9 @@ func TestStartupMacOSScriptLoadsEnvFile(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("startup-macos.sh failed: %v\n%s", err, output)
+	}
+	if !strings.Contains(string(output), "OPENBRAIN_COOKIE_SECURE=true means browser login cookies are only sent over HTTPS") {
+		t.Fatalf("startup output missing secure-cookie warning:\n%s", output)
 	}
 
 	rawLog, err := os.ReadFile(logPath)

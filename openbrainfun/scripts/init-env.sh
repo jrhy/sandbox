@@ -75,6 +75,8 @@ main() {
 import pathlib
 import sys
 
+import urllib.parse
+
 template_path = pathlib.Path(sys.argv[1])
 output_path = pathlib.Path(sys.argv[2])
 postgres_password = sys.argv[3]
@@ -83,6 +85,22 @@ csrf_key = sys.argv[4]
 text = template_path.read_text(encoding="utf-8")
 text = text.replace("__GENERATE_POSTGRES_PASSWORD__", postgres_password)
 text = text.replace("__GENERATE_CSRF_KEY__", csrf_key)
+
+values = {}
+for line in text.splitlines():
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in stripped:
+        continue
+    key, value = stripped.split("=", 1)
+    values[key] = value
+
+database_url = "postgres://{user}:{password}@127.0.0.1:{port}/{database}?sslmode=disable".format(
+    user=urllib.parse.quote(values["OPENBRAIN_POSTGRES_USER"], safe=""),
+    password=urllib.parse.quote(values["OPENBRAIN_POSTGRES_PASSWORD"], safe=""),
+    port=values["OPENBRAIN_POSTGRES_HOST_PORT"],
+    database=urllib.parse.quote(values["OPENBRAIN_POSTGRES_DB"], safe=""),
+)
+text = text.replace("__GENERATE_DATABASE_URL__", database_url)
 
 if "__GENERATE_" in text:
     raise SystemExit("template placeholders were not fully replaced")
