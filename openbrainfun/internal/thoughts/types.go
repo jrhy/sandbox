@@ -60,7 +60,7 @@ func NewThought(params NewThoughtParams) (Thought, error) {
 		return Thought{}, ErrInvalidExposure
 	}
 
-	tags := append([]string(nil), params.UserTags...)
+	tags := normalizeTags(params.UserTags)
 	now := time.Now().UTC()
 	return Thought{
 		ID:            uuid.New(),
@@ -73,6 +73,13 @@ func NewThought(params NewThoughtParams) (Thought, error) {
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}, nil
+}
+
+func normalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{}
+	}
+	return append([]string{}, tags...)
 }
 
 func (scope ExposureScope) Valid() bool {

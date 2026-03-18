@@ -41,6 +41,27 @@ func TestCreateThoughtStoresPendingRecord(t *testing.T) {
 	}
 }
 
+func TestCreateThoughtNormalizesNilTags(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := NewService(repo, embed.NewFake(nil))
+
+	_, err := svc.CreateThought(context.Background(), CreateThoughtInput{
+		UserID:        uuid.New(),
+		Content:       "remember the auth flow",
+		ExposureScope: ExposureScopeLocalOnly,
+		UserTags:      nil,
+	})
+	if err != nil {
+		t.Fatalf("CreateThought() error = %v", err)
+	}
+	if repo.created.UserTags == nil {
+		t.Fatal("created tags = nil, want empty slice")
+	}
+	if len(repo.created.UserTags) != 0 {
+		t.Fatalf("len(created tags) = %d, want 0", len(repo.created.UserTags))
+	}
+}
+
 func TestRetryThoughtResetsFailedIngest(t *testing.T) {
 	repo := &fakeRepo{thought: Thought{
 		ID:           uuid.New(),
@@ -123,9 +144,41 @@ func TestRelatedThoughtsReturnsEmptyForNonReadyAnchor(t *testing.T) {
 	}
 }
 
+func TestUpdateThoughtNormalizesNilTags(t *testing.T) {
+	userID := uuid.New()
+	thoughtID := uuid.New()
+	repo := &fakeRepo{thought: Thought{
+		ID:            thoughtID,
+		UserID:        userID,
+		Content:       "secret",
+		ExposureScope: ExposureScopeLocalOnly,
+		UserTags:      []string{"auth"},
+		IngestStatus:  IngestStatusReady,
+	}}
+	svc := NewService(repo, embed.NewFake(nil))
+
+	_, err := svc.UpdateThought(context.Background(), UpdateThoughtInput{
+		ThoughtID:     thoughtID,
+		UserID:        userID,
+		Content:       "secret",
+		ExposureScope: ExposureScopeLocalOnly,
+		UserTags:      nil,
+	})
+	if err != nil {
+		t.Fatalf("UpdateThought() error = %v", err)
+	}
+	if repo.updated.UserTags == nil {
+		t.Fatal("updated tags = nil, want empty slice")
+	}
+	if len(repo.updated.UserTags) != 0 {
+		t.Fatalf("len(updated tags) = %d, want 0", len(repo.updated.UserTags))
+	}
+}
+
 type fakeRepo struct {
 	thought         Thought
 	created         Thought
+	updated         UpdateThoughtParams
 	getErr          error
 	deleteErr       error
 	semanticResults []ScoredThought
@@ -155,6 +208,7 @@ func (f *fakeRepo) GetThought(ctx context.Context, userID, thoughtID uuid.UUID) 
 }
 
 func (f *fakeRepo) UpdateThought(ctx context.Context, params UpdateThoughtParams) (Thought, error) {
+	f.updated = params
 	return f.thought, nil
 }
 

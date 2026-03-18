@@ -45,7 +45,8 @@ func (s *Service) UpdateThought(ctx context.Context, input UpdateThoughtInput) (
 	}
 	status := current.IngestStatus
 	ingestError := current.IngestError
-	if current.Content != input.Content || current.ExposureScope != input.ExposureScope || !sameTags(current.UserTags, input.UserTags) {
+	normalizedTags := normalizeTags(input.UserTags)
+	if current.Content != input.Content || current.ExposureScope != input.ExposureScope || !sameTags(current.UserTags, normalizedTags) {
 		status = IngestStatusPending
 		ingestError = ""
 	}
@@ -54,7 +55,7 @@ func (s *Service) UpdateThought(ctx context.Context, input UpdateThoughtInput) (
 		UserID:        input.UserID,
 		Content:       input.Content,
 		ExposureScope: input.ExposureScope,
-		UserTags:      input.UserTags,
+		UserTags:      normalizedTags,
 		IngestStatus:  status,
 		IngestError:   ingestError,
 		UpdatedAt:     s.now(),

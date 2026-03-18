@@ -55,6 +55,59 @@ func TestThoughtStoreGetThoughtScopesByUserID(t *testing.T) {
 	}
 }
 
+func TestThoughtStoreCreateThoughtNormalizesNilTags(t *testing.T) {
+	thoughtID := uuid.New()
+	userID := uuid.New()
+	updatedAt := time.Unix(1700000000, 0).UTC()
+	db := &fakeThoughtDB{
+		queryRowFunc: func(ctx context.Context, query string, args ...any) pgx.Row {
+			if len(args) != 10 {
+				t.Fatalf("len(args) = %d, want 10", len(args))
+			}
+			tags, ok := args[4].([]string)
+			if !ok {
+				t.Fatalf("args[4] type = %T, want []string", args[4])
+			}
+			if tags == nil {
+				t.Fatal("args[4] = nil, want empty slice")
+			}
+			if len(tags) != 0 {
+				t.Fatalf("len(tags) = %d, want 0", len(tags))
+			}
+			return fakePGXRow{scanFunc: func(dest ...any) error {
+				*(dest[0].(*uuid.UUID)) = thoughtID
+				*(dest[1].(*uuid.UUID)) = userID
+				*(dest[2].(*string)) = "remember pgx"
+				*(dest[3].(*string)) = string(thoughts.ExposureScopeLocalOnly)
+				*(dest[4].(*[]string)) = []string{}
+				*(dest[5].(*[]byte)) = []byte(`{"summary":"remember pgx","topics":["pgx"],"entities":[]}`)
+				*(dest[6].(*string)) = string(thoughts.IngestStatusPending)
+				*(dest[7].(*string)) = ""
+				*(dest[8].(*string)) = ""
+				*(dest[9].(*time.Time)) = updatedAt
+				*(dest[10].(*time.Time)) = updatedAt
+				return nil
+			}}
+		},
+	}
+
+	store := NewThoughtStore(db)
+	_, err := store.CreateThought(context.Background(), thoughts.Thought{
+		ID:            thoughtID,
+		UserID:        userID,
+		Content:       "remember pgx",
+		ExposureScope: thoughts.ExposureScopeLocalOnly,
+		UserTags:      nil,
+		Metadata:      metadata.Normalize(nil),
+		IngestStatus:  thoughts.IngestStatusPending,
+		CreatedAt:     updatedAt,
+		UpdatedAt:     updatedAt,
+	})
+	if err != nil {
+		t.Fatalf("CreateThought() error = %v", err)
+	}
+}
+
 func TestThoughtStoreMarkReadyPersistsMetadataAndEmbeddingModel(t *testing.T) {
 	thoughtID := uuid.New()
 	processedAt := time.Unix(1700001111, 0).UTC()

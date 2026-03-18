@@ -44,13 +44,20 @@ returning id, user_id, content, exposure_scope, user_tags, coalesce(metadata, '{
 		thought.UserID,
 		thought.Content,
 		string(thought.ExposureScope),
-		thought.UserTags,
+		normalizeTextArray(thought.UserTags),
 		metadataJSON,
 		string(thought.IngestStatus),
 		thought.IngestError,
 		thought.CreatedAt,
 		thought.UpdatedAt,
 	))
+}
+
+func normalizeTextArray(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	return append([]string{}, values...)
 }
 
 func (s *ThoughtStore) GetThought(ctx context.Context, userID, thoughtID uuid.UUID) (thoughts.Thought, error) {
@@ -81,7 +88,7 @@ returning id, user_id, content, exposure_scope, user_tags, coalesce(metadata, '{
 		params.ThoughtID,
 		params.Content,
 		string(params.ExposureScope),
-		params.UserTags,
+		normalizeTextArray(params.UserTags),
 		string(params.IngestStatus),
 		params.IngestError,
 		params.UpdatedAt,

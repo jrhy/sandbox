@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -81,6 +82,9 @@ func (h *ThoughtHandlers) Create(w http.ResponseWriter, r *http.Request) {
 		UserTags:      req.UserTags,
 	})
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("api create thought failed: user_id=%s content_len=%d exposure_scope=%q tags=%q err=%v", user.ID, len(strings.TrimSpace(req.Content)), req.ExposureScope, strings.Join(req.UserTags, ","), err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -119,6 +123,7 @@ func (h *ThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
 			PageSize:     pageSize,
 		})
 		if err != nil {
+			log.Printf("api semantic search failed: user_id=%s query=%q exposure=%q ingest_status=%q tag=%q err=%v", user.ID, searchQuery, r.URL.Query().Get("exposure_scope"), r.URL.Query().Get("ingest_status"), r.URL.Query().Get("tag"), err)
 			writeJSONError(w, http.StatusInternalServerError, "search thoughts")
 			return
 		}
@@ -141,6 +146,7 @@ func (h *ThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
 		PageSize:     pageSize,
 	})
 	if err != nil {
+		log.Printf("api list thoughts failed: user_id=%s query=%q exposure=%q ingest_status=%q tag=%q err=%v", user.ID, searchQuery, r.URL.Query().Get("exposure_scope"), r.URL.Query().Get("ingest_status"), r.URL.Query().Get("tag"), err)
 		writeJSONError(w, http.StatusInternalServerError, "list thoughts")
 		return
 	}
@@ -160,6 +166,9 @@ func (h *ThoughtHandlers) Get(w http.ResponseWriter, r *http.Request) {
 
 	thought, err := h.service.GetThought(r.Context(), user.ID, thoughtID)
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("api get thought failed: user_id=%s thought_id=%s err=%v", user.ID, thoughtID, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -186,6 +195,9 @@ func (h *ThoughtHandlers) Update(w http.ResponseWriter, r *http.Request) {
 		UserTags:      req.UserTags,
 	})
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("api update thought failed: user_id=%s thought_id=%s content_len=%d exposure_scope=%q tags=%q err=%v", user.ID, thoughtID, len(strings.TrimSpace(req.Content)), req.ExposureScope, strings.Join(req.UserTags, ","), err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -199,6 +211,9 @@ func (h *ThoughtHandlers) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DeleteThought(r.Context(), user.ID, thoughtID); err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("api delete thought failed: user_id=%s thought_id=%s err=%v", user.ID, thoughtID, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -228,6 +243,9 @@ func (h *ThoughtHandlers) Related(w http.ResponseWriter, r *http.Request) {
 		Limit:     limit,
 	})
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("api related thoughts failed: user_id=%s thought_id=%s limit=%d err=%v", user.ID, thoughtID, limit, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -253,6 +271,9 @@ func (h *ThoughtHandlers) Retry(w http.ResponseWriter, r *http.Request) {
 
 	thought, err := h.service.RetryThought(r.Context(), user.ID, thoughtID)
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("api retry thought failed: user_id=%s thought_id=%s err=%v", user.ID, thoughtID, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -297,6 +318,17 @@ func toThoughtResponse(thought thoughts.Thought, similarity *float64) thoughtRes
 		IngestError:    thought.IngestError,
 		CreatedAt:      thought.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:      thought.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func shouldLogThoughtError(err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, thoughts.ErrThoughtNotFound), errors.Is(err, thoughts.ErrBlankContent), errors.Is(err, thoughts.ErrInvalidExposure):
+		return false
+	default:
+		return true
 	}
 }
 

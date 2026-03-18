@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"html/template"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -87,6 +88,7 @@ func (h *Handlers) Index(w http.ResponseWriter, r *http.Request) {
 
 	recent, err := h.thoughts.ListThoughts(r.Context(), thoughts.ListThoughtsParams{UserID: user.ID, Page: 1, PageSize: 10})
 	if err != nil {
+		log.Printf("web index list thoughts failed: user_id=%s err=%v", user.ID, err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 		return
 	}
@@ -112,6 +114,9 @@ func (h *Handlers) Create(w http.ResponseWriter, r *http.Request) {
 		UserTags:      splitTags(r.PostForm.Get("user_tags")),
 	})
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("web create thought failed: user_id=%s content_len=%d exposure_scope=%q tags=%q err=%v", user.ID, len(strings.TrimSpace(r.PostForm.Get("content"))), r.PostForm.Get("exposure_scope"), r.PostForm.Get("user_tags"), err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -165,6 +170,7 @@ func (h *Handlers) Thoughts(w http.ResponseWriter, r *http.Request) {
 			PageSize:     params.PageSize,
 		})
 		if err != nil {
+			log.Printf("web semantic search failed: user_id=%s query=%q exposure=%q ingest_status=%q tag=%q err=%v", user.ID, params.Q, params.Exposure, params.IngestStatus, params.Tag, err)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -172,6 +178,7 @@ func (h *Handlers) Thoughts(w http.ResponseWriter, r *http.Request) {
 	} else {
 		list, err := h.thoughts.ListThoughts(r.Context(), params)
 		if err != nil {
+			log.Printf("web thoughts list failed: user_id=%s query=%q exposure=%q ingest_status=%q tag=%q err=%v", user.ID, params.Q, params.Exposure, params.IngestStatus, params.Tag, err)
 			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 			return
 		}
@@ -184,6 +191,9 @@ func (h *Handlers) Thoughts(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ThoughtDetail(w http.ResponseWriter, r *http.Request) {
 	thought, err := h.loadThought(r)
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("web thought detail load failed: path=%q err=%v", r.URL.Path, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -200,6 +210,9 @@ func (h *Handlers) ThoughtDetail(w http.ResponseWriter, r *http.Request) {
 			Limit:     5,
 		})
 		if err != nil {
+			if shouldLogThoughtError(err) {
+				log.Printf("web related thoughts failed: user_id=%s thought_id=%s err=%v", user.ID, thought.ID, err)
+			}
 			h.writeThoughtError(w, err)
 			return
 		}
@@ -227,6 +240,9 @@ func (h *Handlers) Update(w http.ResponseWriter, r *http.Request) {
 		UserTags:      splitTags(r.PostForm.Get("user_tags")),
 	})
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("web update thought failed: user_id=%s thought_id=%s content_len=%d exposure_scope=%q tags=%q err=%v", user.ID, thoughtID, len(strings.TrimSpace(r.PostForm.Get("content"))), r.PostForm.Get("exposure_scope"), r.PostForm.Get("user_tags"), err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -236,6 +252,9 @@ func (h *Handlers) Update(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) DeleteConfirm(w http.ResponseWriter, r *http.Request) {
 	thought, err := h.loadThought(r)
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("web delete confirm load failed: path=%q err=%v", r.URL.Path, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -249,6 +268,9 @@ func (h *Handlers) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.thoughts.DeleteThought(r.Context(), user.ID, thoughtID); err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("web delete thought failed: user_id=%s thought_id=%s err=%v", user.ID, thoughtID, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -266,6 +288,9 @@ func (h *Handlers) Retry(w http.ResponseWriter, r *http.Request) {
 	}
 	_, err := h.thoughts.RetryThought(r.Context(), user.ID, thoughtID)
 	if err != nil {
+		if shouldLogThoughtError(err) {
+			log.Printf("web retry thought failed: user_id=%s thought_id=%s err=%v", user.ID, thoughtID, err)
+		}
 		h.writeThoughtError(w, err)
 		return
 	}
@@ -318,6 +343,7 @@ func (h *Handlers) writeThoughtError(w http.ResponseWriter, err error) {
 func (h *Handlers) renderHTML(w http.ResponseWriter, tmpl *template.Template, data pageData) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := tmpl.ExecuteTemplate(w, "layout", data); err != nil {
+		log.Printf("render html failed: title=%q page=%q path=%q err=%v", data.Title, data.Page, data.Path, err)
 		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
 	}
 }
@@ -342,6 +368,19 @@ func thoughtIDFromPath(path string) (uuid.UUID, error) {
 		return uuid.UUID{}, errors.New("invalid thought path")
 	}
 	return uuid.Parse(parts[1])
+}
+
+func shouldLogThoughtError(err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, thoughts.ErrThoughtNotFound), errors.Is(err, thoughts.ErrBlankContent), errors.Is(err, thoughts.ErrInvalidExposure):
+		return false
+	case err.Error() == "missing user":
+		return false
+	default:
+		return true
+	}
 }
 
 func splitTags(raw string) []string {

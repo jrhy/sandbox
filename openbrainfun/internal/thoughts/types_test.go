@@ -34,3 +34,21 @@ func TestNewThoughtInitializesMetadataDefaults(t *testing.T) {
 		t.Fatalf("Metadata = %+v, want initialized slices", thought.Metadata)
 	}
 }
+
+func TestNewThoughtNormalizesNilTagsToEmptySlice(t *testing.T) {
+	thought, err := NewThought(NewThoughtParams{
+		UserID:        uuid.New(),
+		Content:       "remember pgx",
+		ExposureScope: ExposureScopeLocalOnly,
+		UserTags:      nil,
+	})
+	if err != nil {
+		t.Fatalf("NewThought() error = %v", err)
+	}
+	if thought.UserTags == nil {
+		t.Fatalf("UserTags = nil, want empty slice")
+	}
+	if len(thought.UserTags) != 0 {
+		t.Fatalf("len(UserTags) = %d, want 0", len(thought.UserTags))
+	}
+}
