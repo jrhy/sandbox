@@ -1,13 +1,19 @@
 package metadata
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 type Extractor interface {
 	Extract(ctx context.Context, content string) (Metadata, error)
+	Model() string
+	Fingerprint() string
 }
 
 type FakeExtractor struct {
 	metadataByContent map[string]Metadata
+	fingerprint       string
 }
 
 func NewFake(metadataByContent map[string]Metadata) *FakeExtractor {
@@ -19,7 +25,7 @@ func NewFake(metadataByContent map[string]Metadata) *FakeExtractor {
 			"entities": append([]string(nil), value.Entities...),
 		})
 	}
-	return &FakeExtractor{metadataByContent: copied}
+	return &FakeExtractor{metadataByContent: copied, fingerprint: fmt.Sprintf("fake|metadata:v1|entries:%d", len(copied))}
 }
 
 func (f *FakeExtractor) Extract(ctx context.Context, content string) (Metadata, error) {
@@ -28,3 +34,7 @@ func (f *FakeExtractor) Extract(ctx context.Context, content string) (Metadata, 
 	}
 	return Normalize(nil), nil
 }
+
+func (f *FakeExtractor) Model() string { return "fake" }
+
+func (f *FakeExtractor) Fingerprint() string { return f.fingerprint }

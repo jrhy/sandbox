@@ -798,7 +798,7 @@ func (r *memoryThoughtRepo) ClaimPending(ctx context.Context, limit int) ([]thou
 	defer r.mu.Unlock()
 	items := make([]thoughts.Thought, 0)
 	for _, thought := range r.thoughts {
-		if thought.IngestStatus == thoughts.IngestStatusPending {
+		if thought.EmbeddingStatus == thoughts.IngestStatusPending || thought.MetadataStatus == thoughts.IngestStatusPending {
 			items = append(items, cloneThought(thought))
 		}
 	}
@@ -809,35 +809,75 @@ func (r *memoryThoughtRepo) ClaimPending(ctx context.Context, limit int) ([]thou
 	return items, nil
 }
 
-func (r *memoryThoughtRepo) MarkReady(ctx context.Context, params thoughts.MarkReadyParams) error {
+func (r *memoryThoughtRepo) MarkProcessed(ctx context.Context, params thoughts.MarkProcessedParams) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	current, ok := r.thoughts[params.ThoughtID]
 	if !ok {
 		return thoughts.ErrThoughtNotFound
 	}
-	current.Embedding = append([]float32(nil), params.Embedding...)
-	current.EmbeddingModel = params.EmbeddingModel
-	current.Metadata = params.Metadata
-	current.IngestStatus = thoughts.IngestStatusReady
-	current.IngestError = ""
+	if params.UpdateEmbedding {
+		current.Embedding = append([]float32(nil), params.Embedding...)
+		current.EmbeddingModel = params.EmbeddingModel
+		current.EmbeddingFingerprint = params.EmbeddingFingerprint
+		current.EmbeddingStatus = params.EmbeddingStatus
+		current.EmbeddingError = params.EmbeddingError
+	}
+	if params.UpdateMetadata {
+		current.Metadata = params.Metadata
+		current.MetadataModel = params.MetadataModel
+		current.MetadataFingerprint = params.MetadataFingerprint
+		current.MetadataStatus = params.MetadataStatus
+		current.MetadataError = params.MetadataError
+	}
+	current.IngestStatus = params.IngestStatus
+	current.IngestError = params.IngestError
 	current.UpdatedAt = params.ProcessedAt
 	r.thoughts[current.ID] = cloneThought(current)
 	return nil
 }
 
-func (r *memoryThoughtRepo) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error {
+func (r *memoryThoughtRepo) MarkEmbeddingFailed(ctx context.Context, params thoughts.MarkEmbeddingFailedParams) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, ok := r.thoughts[id]
+	current, ok := r.thoughts[params.ThoughtID]
 	if !ok {
 		return thoughts.ErrThoughtNotFound
 	}
+	current.EmbeddingStatus = thoughts.IngestStatusFailed
+	current.EmbeddingError = params.Reason
 	current.IngestStatus = thoughts.IngestStatusFailed
-	current.IngestError = reason
-	current.UpdatedAt = time.Now().UTC()
+	current.IngestError = params.Reason
+	current.UpdatedAt = params.FailedAt
 	r.thoughts[current.ID] = cloneThought(current)
 	return nil
+}
+
+func (r *memoryThoughtRepo) ReconcileModels(ctx context.Context, params thoughts.ReconcileModelsParams) (thoughts.ReconcileModelsResult, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result thoughts.ReconcileModelsResult
+	for id, thought := range r.thoughts {
+		if thought.EmbeddingModel != params.EmbeddingModel || thought.EmbeddingFingerprint != params.EmbeddingFingerprint {
+			thought.EmbeddingStatus = thoughts.IngestStatusPending
+			thought.EmbeddingError = ""
+			thought.IngestStatus = thoughts.IngestStatusPending
+			thought.IngestError = ""
+			result.EmbeddingMarked++
+		}
+		if thought.MetadataModel != params.MetadataModel || thought.MetadataFingerprint != params.MetadataFingerprint {
+			thought.MetadataStatus = thoughts.IngestStatusPending
+			thought.MetadataError = ""
+			if thought.IngestStatus != thoughts.IngestStatusFailed {
+				thought.IngestStatus = thoughts.IngestStatusPending
+				thought.IngestError = ""
+			}
+			result.MetadataMarked++
+		}
+		thought.UpdatedAt = params.ReconciledAt
+		r.thoughts[id] = cloneThought(thought)
+	}
+	return result, nil
 }
 
 func filterAndSortThoughts(items map[uuid.UUID]thoughts.Thought, params thoughts.ListThoughtsParams) []thoughts.Thought {

@@ -40,6 +40,10 @@ func (p *Provider) Model() string {
 	return p.model
 }
 
+func (p *Provider) Fingerprint() string {
+	return fmt.Sprintf("%s|embed:v1", p.model)
+}
+
 func (p *Provider) setDimensions(dimensions int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()

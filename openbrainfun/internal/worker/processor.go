@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jrhy/sandbox/openbrainfun/internal/embed"
 	"github.com/jrhy/sandbox/openbrainfun/internal/metadata"
 	"github.com/jrhy/sandbox/openbrainfun/internal/thoughts"
@@ -15,8 +14,8 @@ const defaultClaimLimit = 20
 
 type repository interface {
 	ClaimPending(ctx context.Context, limit int) ([]thoughts.Thought, error)
-	MarkReady(ctx context.Context, params thoughts.MarkReadyParams) error
-	MarkFailed(ctx context.Context, id uuid.UUID, reason string) error
+	MarkProcessed(ctx context.Context, params thoughts.MarkProcessedParams) error
+	MarkEmbeddingFailed(ctx context.Context, params thoughts.MarkEmbeddingFailedParams) error
 }
 
 type Processor struct {
@@ -52,33 +51,84 @@ func (p *Processor) RunOnce(ctx context.Context) error {
 }
 
 func (p *Processor) processThought(ctx context.Context, thought thoughts.Thought) error {
-	vectors, err := p.embedder.Embed(ctx, []string{thought.Content})
-	if err != nil {
-		if markErr := p.repo.MarkFailed(ctx, thought.ID, err.Error()); markErr != nil {
-			return fmt.Errorf("mark thought %s failed: %w", thought.ID, markErr)
-		}
-		return nil
-	}
-	if len(vectors) != 1 {
-		if markErr := p.repo.MarkFailed(ctx, thought.ID, "embedder returned unexpected vector count"); markErr != nil {
-			return fmt.Errorf("mark thought %s failed: %w", thought.ID, markErr)
-		}
-		return nil
+	processedAt := p.now()
+	params := thoughts.MarkProcessedParams{
+		ThoughtID:    thought.ID,
+		IngestStatus: thought.IngestStatus,
+		IngestError:  thought.IngestError,
 	}
 
-	extracted, err := p.extractor.Extract(ctx, thought.Content)
-	if err != nil {
-		extracted = metadata.Normalize(nil)
+	if thought.EmbeddingStatus == thoughts.IngestStatusPending {
+		vectors, err := p.embedder.Embed(ctx, []string{thought.Content})
+		if err != nil {
+			if markErr := p.repo.MarkEmbeddingFailed(ctx, thoughts.MarkEmbeddingFailedParams{ThoughtID: thought.ID, Reason: err.Error(), FailedAt: processedAt}); markErr != nil {
+				return fmt.Errorf("mark thought %s embedding failed: %w", thought.ID, markErr)
+			}
+			return nil
+		}
+		if len(vectors) != 1 {
+			if markErr := p.repo.MarkEmbeddingFailed(ctx, thoughts.MarkEmbeddingFailedParams{ThoughtID: thought.ID, Reason: "embedder returned unexpected vector count", FailedAt: processedAt}); markErr != nil {
+				return fmt.Errorf("mark thought %s embedding failed: %w", thought.ID, markErr)
+			}
+			return nil
+		}
+		params.UpdateEmbedding = true
+		params.Embedding = vectors[0]
+		params.EmbeddingModel = p.embedder.Model()
+		params.EmbeddingFingerprint = p.embedder.Fingerprint()
+		params.EmbeddingStatus = thoughts.IngestStatusReady
+		params.EmbeddingError = ""
 	}
 
-	if err := p.repo.MarkReady(ctx, thoughts.MarkReadyParams{
-		ThoughtID:      thought.ID,
-		Embedding:      vectors[0],
-		EmbeddingModel: p.embedder.Model(),
-		Metadata:       extracted,
-		ProcessedAt:    p.now(),
-	}); err != nil {
-		return fmt.Errorf("mark thought %s ready: %w", thought.ID, err)
+	if thought.MetadataStatus == thoughts.IngestStatusPending {
+		extracted, err := p.extractor.Extract(ctx, thought.Content)
+		metadataError := ""
+		if err != nil {
+			extracted = metadata.Normalize(nil)
+			metadataError = err.Error()
+		}
+		params.UpdateMetadata = true
+		params.Metadata = extracted
+		params.MetadataModel = p.extractor.Model()
+		params.MetadataFingerprint = p.extractor.Fingerprint()
+		params.MetadataStatus = thoughts.IngestStatusReady
+		params.MetadataError = metadataError
+	}
+
+	if !params.UpdateEmbedding && !params.UpdateMetadata {
+		return nil
+	}
+	if !params.UpdateEmbedding {
+		params.EmbeddingStatus = thought.EmbeddingStatus
+		params.EmbeddingError = thought.EmbeddingError
+	}
+	if !params.UpdateMetadata {
+		params.MetadataStatus = thought.MetadataStatus
+		params.MetadataError = thought.MetadataError
+	}
+	params.IngestStatus = overallStatus(params.EmbeddingStatus, params.MetadataStatus)
+	params.IngestError = overallError(params.EmbeddingStatus, params.EmbeddingError, params.MetadataError)
+	params.ProcessedAt = processedAt
+
+	if err := p.repo.MarkProcessed(ctx, params); err != nil {
+		return fmt.Errorf("mark thought %s processed: %w", thought.ID, err)
 	}
 	return nil
+}
+
+func overallStatus(embeddingStatus, metadataStatus thoughts.IngestStatus) thoughts.IngestStatus {
+	if embeddingStatus == thoughts.IngestStatusFailed {
+		return thoughts.IngestStatusFailed
+	}
+	if embeddingStatus == thoughts.IngestStatusReady && metadataStatus == thoughts.IngestStatusReady {
+		return thoughts.IngestStatusReady
+	}
+	return thoughts.IngestStatusPending
+}
+
+func overallError(embeddingStatus thoughts.IngestStatus, embeddingError, metadataError string) string {
+	if embeddingStatus == thoughts.IngestStatusFailed {
+		return embeddingError
+	}
+	return metadataError
 }

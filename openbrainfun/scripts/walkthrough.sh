@@ -29,7 +29,6 @@ app_log="$(mktemp)"
 transcript_json="$(mktemp)"
 render_tmp_dir="$(mktemp -d "$repo_root/.cache/walkthrough-render.XXXXXX")"
 render_go="$render_tmp_dir/main.go"
-app_bin="$render_tmp_dir/openbrain"
 cleanup() {
   rm -f "$cookie_jar" "$body_file" "$headers_file" "$transcript_json"
   rm -rf "$render_tmp_dir"
@@ -129,7 +128,6 @@ drop table if exists web_sessions cascade;
 drop table if exists users cascade;
 SQL
 
-container_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U openbrain -d openbrain < migrations/0001_initial.sql
 
 run_capture "Create or update the demo user" "go run ./cmd/openbrain user update '${OPENBRAIN_DEMO_USERNAME}' --password '${OPENBRAIN_DEMO_PASSWORD}' --token-label '${OPENBRAIN_DEMO_TOKEN_LABEL}'"
 
@@ -139,8 +137,7 @@ if [[ -z "$demo_mcp_token" ]]; then
   exit 1
 fi
 
-go build -o "$app_bin" ./cmd/openbrain
-"$app_bin" start >"$app_log" 2>&1 &
+go run ./cmd/openbrain start >"$app_log" 2>&1 &
 app_pid=$!
 export OPENBRAIN_WEB_HEALTH_URL="http://${OPENBRAIN_WEB_ADDR}/healthz"
 bash ./scripts/wait-for-stack.sh

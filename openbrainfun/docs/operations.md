@@ -30,6 +30,12 @@ MCP token plaintext is shown only when a token is created or rotated.
 
 ## Local backup and restore
 
+Always take a PostgreSQL backup before upgrading to a release that may change the
+schema or trigger large-scale reprocessing. Startup now performs schema
+migrations automatically before the app begins serving traffic, so a fresh dump
+is the recommended break-glass rollback point if an upgrade fails partway
+through.
+
 ### PostgreSQL backup
 
 ```bash
@@ -41,6 +47,13 @@ docker compose exec -T postgres pg_dump -U openbrain -d openbrain > /tmp/openbra
 ```bash
 cat /tmp/openbrainfun.sql | docker compose exec -T postgres psql -U openbrain -d openbrain
 ```
+
+### Break-glass restore flow
+
+1. stop the app
+2. restore the most recent PostgreSQL dump
+3. if you also need to roll back pulled Ollama models, restore `./var/ollama`
+4. restart the app on the known-good build
 
 ### Ollama cache backup
 
@@ -54,24 +67,18 @@ The application keeps embedding and metadata models configurable:
 - `OPENBRAIN_EMBED_MODEL` defaults to `all-minilm:22m`
 - `OPENBRAIN_METADATA_MODEL` defaults to `qwen3:0.6b`
 
-After changing `OPENBRAIN_EMBED_MODEL`, existing thoughts should be re-embedded
-so vector dimensions and search behavior stay consistent.
+After changing `OPENBRAIN_EMBED_MODEL`, `OPENBRAIN_METADATA_MODEL`, or the
+metadata extraction logic shipped by the app, startup reconciliation marks stale
+rows as pending and the worker refreshes only the parts that are out of date.
 
-Recommended local flow:
+Operational flow:
 
 1. stop the app
-2. update the model environment variable
-3. pull the new model with `ollama pull <model>`
-4. reset thought ingest state in Postgres so thoughts return to `pending`
-5. restart the app and let the worker reprocess thoughts
+2. take a PostgreSQL backup
+3. update the model environment variable and/or deploy the new build
+4. pull any newly required Ollama models with `ollama pull <model>`
+5. restart the app
+6. allow the worker to reprocess stale embeddings and metadata in the background
 
-Example reset:
-
-```sql
-update thoughts
-set ingest_status = 'pending',
-    ingest_error = '',
-    embedding = null,
-    embedding_model = null,
-    updated_at = now();
-```
+If a migration or startup reconciliation goes wrong, use the break-glass restore
+flow above to roll back to the backup you took before upgrade.

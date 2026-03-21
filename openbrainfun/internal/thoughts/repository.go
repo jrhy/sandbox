@@ -42,14 +42,18 @@ type UpdateThoughtInput struct {
 }
 
 type UpdateThoughtParams struct {
-	ThoughtID     uuid.UUID
-	UserID        uuid.UUID
-	Content       string
-	ExposureScope ExposureScope
-	UserTags      []string
-	IngestStatus  IngestStatus
-	IngestError   string
-	UpdatedAt     time.Time
+	ThoughtID       uuid.UUID
+	UserID          uuid.UUID
+	Content         string
+	ExposureScope   ExposureScope
+	UserTags        []string
+	EmbeddingStatus IngestStatus
+	EmbeddingError  string
+	MetadataStatus  IngestStatus
+	MetadataError   string
+	IngestStatus    IngestStatus
+	IngestError     string
+	UpdatedAt       time.Time
 }
 
 type ListThoughtsParams struct {
@@ -109,12 +113,42 @@ type RelatedThoughtsParams struct {
 	Limit     int
 }
 
-type MarkReadyParams struct {
-	ThoughtID      uuid.UUID
-	Embedding      []float32
-	EmbeddingModel string
-	Metadata       metadata.Metadata
-	ProcessedAt    time.Time
+type MarkProcessedParams struct {
+	ThoughtID            uuid.UUID
+	UpdateEmbedding      bool
+	Embedding            []float32
+	EmbeddingModel       string
+	EmbeddingFingerprint string
+	EmbeddingStatus      IngestStatus
+	EmbeddingError       string
+	UpdateMetadata       bool
+	Metadata             metadata.Metadata
+	MetadataModel        string
+	MetadataFingerprint  string
+	MetadataStatus       IngestStatus
+	MetadataError        string
+	IngestStatus         IngestStatus
+	IngestError          string
+	ProcessedAt          time.Time
+}
+
+type MarkEmbeddingFailedParams struct {
+	ThoughtID uuid.UUID
+	Reason    string
+	FailedAt  time.Time
+}
+
+type ReconcileModelsParams struct {
+	EmbeddingModel       string
+	EmbeddingFingerprint string
+	MetadataModel        string
+	MetadataFingerprint  string
+	ReconciledAt         time.Time
+}
+
+type ReconcileModelsResult struct {
+	EmbeddingMarked int64
+	MetadataMarked  int64
 }
 
 type Repository interface {
@@ -128,6 +162,7 @@ type Repository interface {
 	RelatedThoughts(ctx context.Context, params RelatedThoughtsParams) ([]ScoredThought, error)
 	RetryThought(ctx context.Context, userID, thoughtID uuid.UUID) (Thought, error)
 	ClaimPending(ctx context.Context, limit int) ([]Thought, error)
-	MarkReady(ctx context.Context, params MarkReadyParams) error
-	MarkFailed(ctx context.Context, id uuid.UUID, reason string) error
+	MarkProcessed(ctx context.Context, params MarkProcessedParams) error
+	MarkEmbeddingFailed(ctx context.Context, params MarkEmbeddingFailedParams) error
+	ReconcileModels(ctx context.Context, params ReconcileModelsParams) (ReconcileModelsResult, error)
 }
