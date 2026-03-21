@@ -45,3 +45,41 @@ jobs:
         run: ./scripts/walkthrough.sh
       - name: Verify walkthrough artifacts are checked in
         run: git diff --exit-code README.md docs/walkthrough.demo.md
+  podman-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install podman runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman podman-compose
+          podman --version
+          podman-compose --version
+      - name: Make scripts executable
+        run: chmod +x scripts/*.sh .github/scripts/*.sh
+      - name: Start compose stack via podman
+        run: |
+          . ./scripts/container-runtime.sh
+          container_compose up -d postgres ollama
+      - name: Run real embed tests through podman fallback
+        env:
+          OPENBRAIN_OLLAMA_URL: http://127.0.0.1:11434
+          OPENBRAIN_EMBED_MODEL: all-minilm:22m
+          OPENBRAIN_METADATA_MODEL: qwen3:0.6b
+        run: ./.github/scripts/run-real-embed-tests.sh
+      - name: Generate walkthrough artifacts through podman fallback
+        env:
+          OPENBRAIN_OLLAMA_URL: http://127.0.0.1:11434
+          OPENBRAIN_EMBED_MODEL: all-minilm:22m
+          OPENBRAIN_METADATA_MODEL: qwen3:0.6b
+        run: ./scripts/walkthrough.sh
+      - name: Verify walkthrough artifacts are checked in
+        run: git diff --exit-code README.md docs/walkthrough.demo.md
+      - name: Stop compose stack via podman
+        if: always()
+        run: |
+          . ./scripts/container-runtime.sh
+          container_compose down -v
