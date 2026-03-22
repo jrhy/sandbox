@@ -12,7 +12,7 @@ import (
 )
 
 func TestProcessorMarksThoughtReadyAfterEmbeddingAndMetadataExtraction(t *testing.T) {
-	repo := &fakeRepo{pending: []thoughts.Thought{{ID: uuid.New(), UserID: uuid.New(), Content: "remember mcp auth", IngestStatus: thoughts.IngestStatusPending}}}
+	repo := &fakeRepo{pending: []thoughts.Thought{{ID: uuid.New(), UserID: uuid.New(), Content: "remember mcp auth", EmbeddingStatus: thoughts.IngestStatusPending, MetadataStatus: thoughts.IngestStatusPending, IngestStatus: thoughts.IngestStatusPending}}}
 	processor := NewProcessor(
 		repo,
 		embed.NewFake(map[string][]float32{"remember mcp auth": {0.1, 0.2, 0.3}}),
@@ -24,16 +24,16 @@ func TestProcessorMarksThoughtReadyAfterEmbeddingAndMetadataExtraction(t *testin
 	if err := processor.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce() error = %v", err)
 	}
-	if len(repo.readyCalls) != 1 {
-		t.Fatalf("readyCalls = %d, want 1", len(repo.readyCalls))
+	if len(repo.processedCalls) != 1 {
+		t.Fatalf("processedCalls = %d, want 1", len(repo.processedCalls))
 	}
-	if len(repo.readyCalls[0].Metadata.Topics) == 0 {
+	if len(repo.processedCalls[0].Metadata.Topics) == 0 {
 		t.Fatalf("expected extracted metadata to be persisted")
 	}
 }
 
 func TestProcessorMarksThoughtReadyWithDefaultMetadataWhenExtractionFails(t *testing.T) {
-	repo := &fakeRepo{pending: []thoughts.Thought{{ID: uuid.New(), UserID: uuid.New(), Content: "remember mcp auth", IngestStatus: thoughts.IngestStatusPending}}}
+	repo := &fakeRepo{pending: []thoughts.Thought{{ID: uuid.New(), UserID: uuid.New(), Content: "remember mcp auth", EmbeddingStatus: thoughts.IngestStatusPending, MetadataStatus: thoughts.IngestStatusPending, IngestStatus: thoughts.IngestStatusPending}}}
 	processor := NewProcessor(
 		repo,
 		embed.NewFake(map[string][]float32{"remember mcp auth": {0.1, 0.2, 0.3}}),
@@ -43,16 +43,19 @@ func TestProcessorMarksThoughtReadyWithDefaultMetadataWhenExtractionFails(t *tes
 	if err := processor.RunOnce(context.Background()); err != nil {
 		t.Fatalf("RunOnce() error = %v", err)
 	}
-	if len(repo.readyCalls) != 1 {
-		t.Fatalf("readyCalls = %d, want 1", len(repo.readyCalls))
+	if len(repo.processedCalls) != 1 {
+		t.Fatalf("processedCalls = %d, want 1", len(repo.processedCalls))
 	}
-	if repo.readyCalls[0].Metadata.Summary != "No summary available." {
-		t.Fatalf("Summary = %q, want default summary", repo.readyCalls[0].Metadata.Summary)
+	if repo.processedCalls[0].Metadata.Summary != "No summary available." {
+		t.Fatalf("Summary = %q, want default summary", repo.processedCalls[0].Metadata.Summary)
+	}
+	if repo.processedCalls[0].MetadataError == "" {
+		t.Fatal("MetadataError = empty, want recorded extraction error")
 	}
 }
 
 func TestProcessorMarksThoughtFailedWhenEmbeddingFails(t *testing.T) {
-	repo := &fakeRepo{pending: []thoughts.Thought{{ID: uuid.New(), UserID: uuid.New(), Content: "remember mcp auth", IngestStatus: thoughts.IngestStatusPending}}}
+	repo := &fakeRepo{pending: []thoughts.Thought{{ID: uuid.New(), UserID: uuid.New(), Content: "remember mcp auth", EmbeddingStatus: thoughts.IngestStatusPending, MetadataStatus: thoughts.IngestStatusPending, IngestStatus: thoughts.IngestStatusPending}}}
 	processor := NewProcessor(
 		repo,
 		errorEmbedder{err: errors.New("ollama embed failed")},
@@ -65,20 +68,15 @@ func TestProcessorMarksThoughtFailedWhenEmbeddingFails(t *testing.T) {
 	if len(repo.failedCalls) != 1 {
 		t.Fatalf("failedCalls = %d, want 1", len(repo.failedCalls))
 	}
-	if repo.failedCalls[0].reason == "" {
+	if repo.failedCalls[0].Reason == "" {
 		t.Fatal("reason = empty, want embed error message")
 	}
 }
 
 type fakeRepo struct {
-	pending     []thoughts.Thought
-	readyCalls  []thoughts.MarkReadyParams
-	failedCalls []failedCall
-}
-
-type failedCall struct {
-	id     uuid.UUID
-	reason string
+	pending        []thoughts.Thought
+	processedCalls []thoughts.MarkProcessedParams
+	failedCalls    []thoughts.MarkEmbeddingFailedParams
 }
 
 func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]thoughts.Thought, error) {
@@ -89,13 +87,13 @@ func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]thoughts.Thou
 	return result, nil
 }
 
-func (f *fakeRepo) MarkReady(ctx context.Context, params thoughts.MarkReadyParams) error {
-	f.readyCalls = append(f.readyCalls, params)
+func (f *fakeRepo) MarkProcessed(ctx context.Context, params thoughts.MarkProcessedParams) error {
+	f.processedCalls = append(f.processedCalls, params)
 	return nil
 }
 
-func (f *fakeRepo) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error {
-	f.failedCalls = append(f.failedCalls, failedCall{id: id, reason: reason})
+func (f *fakeRepo) MarkEmbeddingFailed(ctx context.Context, params thoughts.MarkEmbeddingFailedParams) error {
+	f.failedCalls = append(f.failedCalls, params)
 	return nil
 }
 
@@ -106,6 +104,10 @@ type errorExtractor struct {
 func (e errorExtractor) Extract(ctx context.Context, content string) (metadata.Metadata, error) {
 	return metadata.Metadata{}, e.err
 }
+
+func (e errorExtractor) Model() string { return "error" }
+
+func (e errorExtractor) Fingerprint() string { return "error|metadata:v1" }
 
 type errorEmbedder struct {
 	err error
@@ -118,3 +120,5 @@ func (e errorEmbedder) Embed(ctx context.Context, inputs []string) ([][]float32,
 func (e errorEmbedder) Dimensions() int { return 3 }
 
 func (e errorEmbedder) Model() string { return "error" }
+
+func (e errorEmbedder) Fingerprint() string { return "error|embed:v1" }

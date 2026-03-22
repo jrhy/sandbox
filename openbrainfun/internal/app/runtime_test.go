@@ -181,9 +181,12 @@ func (f *fakeThoughtRepo) ClaimPending(ctx context.Context, limit int) ([]though
 	return nil, nil
 }
 
-func (f *fakeThoughtRepo) MarkReady(ctx context.Context, params thoughts.MarkReadyParams) error {
+func (f *fakeThoughtRepo) MarkProcessed(ctx context.Context, params thoughts.MarkProcessedParams) error {
 	return nil
 }
-func (f *fakeThoughtRepo) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error {
+func (f *fakeThoughtRepo) MarkEmbeddingFailed(ctx context.Context, params thoughts.MarkEmbeddingFailedParams) error {
 	return nil
+}
+func (f *fakeThoughtRepo) ReconcileModels(ctx context.Context, params thoughts.ReconcileModelsParams) (thoughts.ReconcileModelsResult, error) {
+	return thoughts.ReconcileModelsResult{}, nil
 }

@@ -8,6 +8,12 @@ import (
 	"github.com/jrhy/sandbox/openbrainfun/internal/metadata"
 )
 
+const (
+	metadataPromptVersion    = "prompt:v1"
+	metadataSchemaVersion    = "schema:v1"
+	metadataNormalizeVersion = "normalize:v1"
+)
+
 type MetadataProvider struct {
 	client *Client
 	model  string
@@ -32,6 +38,14 @@ func (p *MetadataProvider) Extract(ctx context.Context, content string) (metadat
 		return metadata.Metadata{}, fmt.Errorf("decode metadata JSON: %w", err)
 	}
 	return metadata.Normalize(raw), nil
+}
+
+func (p *MetadataProvider) Model() string {
+	return p.model
+}
+
+func (p *MetadataProvider) Fingerprint() string {
+	return fmt.Sprintf("%s|%s|%s|%s", p.model, metadataPromptVersion, metadataSchemaVersion, metadataNormalizeVersion)
 }
 
 func metadataSchema() map[string]any {

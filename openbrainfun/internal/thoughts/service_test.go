@@ -190,6 +190,11 @@ func (f *fakeRepo) RelatedThoughts(ctx context.Context, params RelatedThoughtsPa
 	return append([]ScoredThought(nil), f.relatedResults...), nil
 }
 
-func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]Thought, error)    { return nil, nil }
-func (f *fakeRepo) MarkReady(ctx context.Context, params MarkReadyParams) error       { return nil }
-func (f *fakeRepo) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error { return nil }
+func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]Thought, error)      { return nil, nil }
+func (f *fakeRepo) MarkProcessed(ctx context.Context, params MarkProcessedParams) error { return nil }
+func (f *fakeRepo) MarkEmbeddingFailed(ctx context.Context, params MarkEmbeddingFailedParams) error {
+	return nil
+}
+func (f *fakeRepo) ReconcileModels(ctx context.Context, params ReconcileModelsParams) (ReconcileModelsResult, error) {
+	return ReconcileModelsResult{}, nil
+}
