@@ -47,6 +47,10 @@ record_step() {
   step_responses+=("$3")
 }
 
+announce_phase() {
+  printf '\n==> %s\n' "$1"
+}
+
 parse_json_field_from_http_response() {
   local field="$1"
 
@@ -169,12 +173,15 @@ EOF
 
 check_for_conflicting_local_postgres_runtime
 
+announce_phase "Starting local stack"
 container_compose up -d postgres ollama
 bash ./scripts/wait-for-stack.sh
 
+announce_phase "Pulling Ollama models"
 container_compose exec -T ollama ollama pull "$OPENBRAIN_EMBED_MODEL"
 container_compose exec -T ollama ollama pull "$OPENBRAIN_METADATA_MODEL"
 
+announce_phase "Resetting demo schema"
 container_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U openbrain -d openbrain <<'SQL'
 drop table if exists thoughts cascade;
 drop table if exists mcp_tokens cascade;
@@ -183,7 +190,7 @@ drop table if exists users cascade;
 SQL
 container_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U openbrain -d openbrain < migrations/0001_initial.sql
 
-
+announce_phase "Provisioning demo user"
 run_capture "Create or update the demo user" "go run ./cmd/openbrain user update '${OPENBRAIN_DEMO_USERNAME}' --password '${OPENBRAIN_DEMO_PASSWORD}' --token-label '${OPENBRAIN_DEMO_TOKEN_LABEL}'"
 
 demo_mcp_token="$(printf '%s\n' "$last_capture_output" | awk -F= '/^token=/{print $2}')"
@@ -192,11 +199,13 @@ if [[ -z "$demo_mcp_token" ]]; then
   exit 1
 fi
 
+announce_phase "Starting OpenBrain server"
 go run ./cmd/openbrain start >"$app_log" 2>&1 &
 app_pid=$!
 export OPENBRAIN_WEB_HEALTH_URL="http://${OPENBRAIN_WEB_ADDR}/healthz"
 bash ./scripts/wait-for-stack.sh
 
+announce_phase "Logging in"
 run_capture "Log in and receive a CSRF token" "curl -sS -i -c '$cookie_jar' -H 'Content-Type: application/json' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/session' --data '{\"username\":\"${OPENBRAIN_DEMO_USERNAME}\",\"password\":\"${OPENBRAIN_DEMO_PASSWORD}\"}'"
 
 csrf_token="$(
@@ -205,6 +214,7 @@ csrf_token="$(
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["csrf_token"])'
 )"
 
+announce_phase "Creating demo thoughts"
 create_thought \
   "Create a baseline auth thought" \
   '{"content":"Remember MCP auth and local sessions for Open WebUI","exposure_scope":"remote_ok","user_tags":["mcp","sessions"]}' \
@@ -230,12 +240,14 @@ create_thought \
 thought_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
 
 thought_ready_timeout_seconds="${OPENBRAIN_WALKTHROUGH_READY_TIMEOUT_SECONDS:-60}"
+announce_phase "Waiting for background processing"
 wait_for_ready_response "$auth_baseline_id" "$thought_ready_timeout_seconds" >/dev/null
 wait_for_ready_response "$garden_id" "$thought_ready_timeout_seconds" >/dev/null
 wait_for_ready_response "$shopping_id" "$thought_ready_timeout_seconds" >/dev/null
 get_response="$(wait_for_ready_response "$thought_id" "$thought_ready_timeout_seconds")"
 record_step "Retrieve the anchor thought after background processing" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}'" "$get_response"
 
+announce_phase "Querying related thoughts"
 related_response="$(curl -sS -i -b "$cookie_jar" "http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}/related?limit=3")"
 record_step "Find related thoughts through the JSON API" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}/related?limit=3'" "$related_response"
 
@@ -258,6 +270,7 @@ export STEP_TITLES="$(IFS=$'\x1f'; printf '%s' "${step_titles[*]}")"
 export STEP_COMMANDS="$(IFS=$'\x1f'; printf '%s' "${step_commands[*]}")"
 export STEP_RESPONSES="$(IFS=$'\x1f'; printf '%s' "${step_responses[*]}")"
 
+announce_phase "Writing walkthrough doc"
 python3 - "$transcript_json" "$OPENBRAIN_EMBED_MODEL" "$OPENBRAIN_METADATA_MODEL" <<'PY'
 import json, sys, os
 path, embed_model, metadata_model = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -351,3 +364,4 @@ func main() {
 EOF
 
 go run "$render_go" "$transcript_json" README.md docs/walkthrough.demo.md
+printf 'Full transcript: docs/walkthrough.demo.md\n'
