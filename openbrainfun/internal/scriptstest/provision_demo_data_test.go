@@ -76,6 +76,37 @@ func TestWalkthroughScriptUsesOpenbrainCLIForProvisioningAndStart(t *testing.T) 
 	}
 }
 
+func TestWalkthroughScriptRecreatesSchemaAfterReset(t *testing.T) {
+	repo := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repo, "scripts", "walkthrough.sh"))
+	if err != nil {
+		t.Fatalf("read walkthrough.sh: %v", err)
+	}
+	text := string(script)
+	if !strings.Contains(text, "< migrations/0001_initial.sql") {
+		t.Fatalf("walkthrough should recreate the schema after dropping demo tables:\n%s", text)
+	}
+}
+
+func TestWalkthroughScriptDetectsConflictingMacOSContainerRuntime(t *testing.T) {
+	repo := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repo, "scripts", "walkthrough.sh"))
+	if err != nil {
+		t.Fatalf("read walkthrough.sh: %v", err)
+	}
+	text := string(script)
+	for _, want := range []string{
+		"lsof -nP -iTCP:",
+		"container-runtime-linux",
+		"container stop openbrain-postgres",
+		"container rm openbrain-postgres",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("walkthrough should detect conflicting local postgres listeners; missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func TestRunRealEmbedTestsFallsBackToContainerizedOllama(t *testing.T) {
 	repo := repoRoot(t)
 	tempDir := t.TempDir()

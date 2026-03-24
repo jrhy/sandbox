@@ -115,6 +115,60 @@ stop_app() {
   unset app_pid
 }
 
+database_host_port() {
+  python3 - <<'PY' "$OPENBRAIN_DATABASE_URL"
+import sys
+from urllib.parse import urlparse
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+port = parsed.port or 5432
+print(f"{host} {port}")
+PY
+}
+
+check_for_conflicting_local_postgres_runtime() {
+  local db_host db_port listeners pid cmdline
+  if ! command -v lsof >/dev/null 2>&1; then
+    return
+  fi
+
+  read -r db_host db_port <<<"$(database_host_port)"
+  if [[ "$db_host" != "127.0.0.1" && "$db_host" != "localhost" ]]; then
+    return
+  fi
+
+  listeners="$(lsof -nP -iTCP:"$db_port" -sTCP:LISTEN 2>/dev/null || true)"
+  pid="$(printf '%s\n' "$listeners" | awk -v port="$db_port" '$0 ~ ("127\\.0\\.0\\.1:" port " \\(LISTEN\\)") && $1 == "container" { print $2; exit }')"
+  if [[ -z "$pid" ]]; then
+    return
+  fi
+
+  cmdline="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  if [[ "$cmdline" != *"container-runtime-linux"* || "$cmdline" != *"openbrain-postgres"* ]]; then
+    return
+  fi
+
+  cat >&2 <<EOF
+conflicting local postgres runtime detected on 127.0.0.1:$db_port
+
+The walkthrough uses Podman compose, but port $db_port is already owned by the macOS container runtime container "openbrain-postgres":
+  $cmdline
+
+Stop/remove it first:
+  container stop openbrain-postgres
+  container rm openbrain-postgres
+
+Then recreate the Podman postgres data and rerun:
+  podman compose down
+  rm -rf var/postgres
+  ./scripts/walkthrough.sh
+EOF
+  exit 1
+}
+
+check_for_conflicting_local_postgres_runtime
+
 container_compose up -d postgres ollama
 bash ./scripts/wait-for-stack.sh
 
@@ -127,6 +181,7 @@ drop table if exists mcp_tokens cascade;
 drop table if exists web_sessions cascade;
 drop table if exists users cascade;
 SQL
+container_compose exec -T postgres psql -v ON_ERROR_STOP=1 -U openbrain -d openbrain < migrations/0001_initial.sql
 
 
 run_capture "Create or update the demo user" "go run ./cmd/openbrain user update '${OPENBRAIN_DEMO_USERNAME}' --password '${OPENBRAIN_DEMO_PASSWORD}' --token-label '${OPENBRAIN_DEMO_TOKEN_LABEL}'"
