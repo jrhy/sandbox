@@ -135,6 +135,25 @@ func TestWalkthroughScriptAnnouncesLivePhases(t *testing.T) {
 	}
 }
 
+func TestWalkthroughScriptAnnouncesCreationAndReadyProgress(t *testing.T) {
+	repo := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repo, "scripts", "walkthrough.sh"))
+	if err != nil {
+		t.Fatalf("read walkthrough.sh: %v", err)
+	}
+	text := string(script)
+	for _, want := range []string{
+		`announce_progress "Creating demo thoughts" 1 4`,
+		`announce_progress "Creating demo thoughts" 4 4`,
+		`announce_progress "Waiting for background processing" 1 4`,
+		`announce_progress "Waiting for background processing" 4 4`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in walkthrough script:\n%s", want, text)
+		}
+	}
+}
+
 func TestRunRealEmbedTestsFallsBackToContainerizedOllama(t *testing.T) {
 	repo := repoRoot(t)
 	tempDir := t.TempDir()

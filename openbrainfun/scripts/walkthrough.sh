@@ -51,6 +51,14 @@ announce_phase() {
   printf '\n==> %s\n' "$1"
 }
 
+announce_progress() {
+  local title="$1"
+  local current="$2"
+  local total="$3"
+
+  printf '  [%s/%s] %s\n' "$current" "$total" "$title"
+}
+
 parse_json_field_from_http_response() {
   local field="$1"
 
@@ -215,24 +223,28 @@ csrf_token="$(
 )"
 
 announce_phase "Creating demo thoughts"
+announce_progress "Creating demo thoughts" 1 4
 create_thought \
   "Create a baseline auth thought" \
   '{"content":"Remember MCP auth and local sessions for Open WebUI","exposure_scope":"remote_ok","user_tags":["mcp","sessions"]}' \
   "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Remember MCP auth and local sessions for Open WebUI\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"mcp\",\"sessions\"]}'"
 auth_baseline_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
 
+announce_progress "Creating demo thoughts" 2 4
 create_thought \
   "Create an unrelated gardening thought" \
   '{"content":"Prune the balcony tomato plants and water the seedlings on Tuesday","exposure_scope":"remote_ok","user_tags":["garden","plants"]}' \
   "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Prune the balcony tomato plants and water the seedlings on Tuesday\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"garden\",\"plants\"]}'"
 garden_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
 
+announce_progress "Creating demo thoughts" 3 4
 create_thought \
   "Create an unrelated shopping thought" \
   '{"content":"Buy coffee beans, oats, and oranges after work","exposure_scope":"remote_ok","user_tags":["shopping","groceries"]}' \
   "curl -sS -i -b '$cookie_jar' -H 'Content-Type: application/json' -H 'X-CSRF-Token: <csrf-token>' -X POST 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts' --data '{\"content\":\"Buy coffee beans, oats, and oranges after work\",\"exposure_scope\":\"remote_ok\",\"user_tags\":[\"shopping\",\"groceries\"]}'"
 shopping_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_response id)"
 
+announce_progress "Creating demo thoughts" 4 4
 create_thought \
   "Create the anchor thought for related-thought search" \
   '{"content":"Local MCP bearer tokens should stay tied to one user session","exposure_scope":"remote_ok","user_tags":["mcp","auth"]}' \
@@ -241,9 +253,13 @@ thought_id="$(printf '%s' "$last_capture_output" | parse_json_field_from_http_re
 
 thought_ready_timeout_seconds="${OPENBRAIN_WALKTHROUGH_READY_TIMEOUT_SECONDS:-60}"
 announce_phase "Waiting for background processing"
+announce_progress "Waiting for background processing" 1 4
 wait_for_ready_response "$auth_baseline_id" "$thought_ready_timeout_seconds" >/dev/null
+announce_progress "Waiting for background processing" 2 4
 wait_for_ready_response "$garden_id" "$thought_ready_timeout_seconds" >/dev/null
+announce_progress "Waiting for background processing" 3 4
 wait_for_ready_response "$shopping_id" "$thought_ready_timeout_seconds" >/dev/null
+announce_progress "Waiting for background processing" 4 4
 get_response="$(wait_for_ready_response "$thought_id" "$thought_ready_timeout_seconds")"
 record_step "Retrieve the anchor thought after background processing" "curl -sS -i -b '$cookie_jar' 'http://${OPENBRAIN_WEB_ADDR}/api/thoughts/${thought_id}'" "$get_response"
 
