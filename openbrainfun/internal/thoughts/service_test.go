@@ -121,10 +121,11 @@ func TestSearchThoughtsEmbedsQueryAndReturnsScoredMatches(t *testing.T) {
 
 func TestRelatedThoughtsReturnsEmptyForNonReadyAnchor(t *testing.T) {
 	repo := &fakeRepo{thought: Thought{
-		ID:           uuid.New(),
-		UserID:       uuid.New(),
-		Content:      "pending thought",
-		IngestStatus: IngestStatusPending,
+		ID:              uuid.New(),
+		UserID:          uuid.New(),
+		Content:         "pending thought",
+		EmbeddingStatus: IngestStatusPending,
+		IngestStatus:    IngestStatusPending,
 	}}
 	svc := NewService(repo, embed.NewFake(nil))
 
@@ -144,16 +145,59 @@ func TestRelatedThoughtsReturnsEmptyForNonReadyAnchor(t *testing.T) {
 	}
 }
 
+func TestRelatedThoughtsUsesReadyEmbeddingStatus(t *testing.T) {
+	userID := uuid.New()
+	thoughtID := uuid.New()
+	repo := &fakeRepo{
+		thought: Thought{
+			ID:              thoughtID,
+			UserID:          userID,
+			Content:         "ready embedding",
+			EmbeddingStatus: IngestStatusReady,
+			IngestStatus:    IngestStatusPending,
+		},
+		relatedResults: []ScoredThought{{
+			Thought:    Thought{ID: uuid.New(), UserID: userID, Content: "similar"},
+			Similarity: 0.91,
+		}},
+	}
+	svc := NewService(repo, embed.NewFake(nil))
+
+	got, err := svc.RelatedThoughts(context.Background(), RelatedThoughtsInput{
+		UserID:    userID,
+		ThoughtID: thoughtID,
+		Exposure:  string(ExposureScopeLocalOnly),
+		Limit:     3,
+	})
+	if err != nil {
+		t.Fatalf("RelatedThoughts() error = %v", err)
+	}
+	if !repo.relatedCalled {
+		t.Fatal("RelatedThoughts repository call did not happen for ready embedding")
+	}
+	if len(got) != 1 || got[0].Similarity != 0.91 {
+		t.Fatalf("got = %+v, want related results", got)
+	}
+	if repo.relatedParams.UserID != userID || repo.relatedParams.ThoughtID != thoughtID {
+		t.Fatalf("related params = %+v", repo.relatedParams)
+	}
+}
+
 func TestUpdateThoughtNormalizesNilTags(t *testing.T) {
 	userID := uuid.New()
 	thoughtID := uuid.New()
 	repo := &fakeRepo{thought: Thought{
-		ID:            thoughtID,
-		UserID:        userID,
-		Content:       "secret",
-		ExposureScope: ExposureScopeLocalOnly,
-		UserTags:      []string{"auth"},
-		IngestStatus:  IngestStatusReady,
+		ID:              thoughtID,
+		UserID:          userID,
+		Content:         "secret",
+		ExposureScope:   ExposureScopeLocalOnly,
+		UserTags:        []string{"auth"},
+		EmbeddingStatus: IngestStatusReady,
+		EmbeddingError:  "embed failed before",
+		MetadataStatus:  IngestStatusReady,
+		MetadataError:   "metadata failed before",
+		IngestStatus:    IngestStatusReady,
+		IngestError:     "ingest failed before",
 	}}
 	svc := NewService(repo, embed.NewFake(nil))
 
@@ -172,6 +216,24 @@ func TestUpdateThoughtNormalizesNilTags(t *testing.T) {
 	}
 	if len(repo.updated.UserTags) != 0 {
 		t.Fatalf("len(updated tags) = %d, want 0", len(repo.updated.UserTags))
+	}
+	if repo.updated.EmbeddingStatus != IngestStatusPending {
+		t.Fatalf("EmbeddingStatus = %q, want pending", repo.updated.EmbeddingStatus)
+	}
+	if repo.updated.EmbeddingError != "" {
+		t.Fatalf("EmbeddingError = %q, want empty", repo.updated.EmbeddingError)
+	}
+	if repo.updated.MetadataStatus != IngestStatusPending {
+		t.Fatalf("MetadataStatus = %q, want pending", repo.updated.MetadataStatus)
+	}
+	if repo.updated.MetadataError != "" {
+		t.Fatalf("MetadataError = %q, want empty", repo.updated.MetadataError)
+	}
+	if repo.updated.IngestStatus != IngestStatusPending {
+		t.Fatalf("IngestStatus = %q, want pending", repo.updated.IngestStatus)
+	}
+	if repo.updated.IngestError != "" {
+		t.Fatalf("IngestError = %q, want empty", repo.updated.IngestError)
 	}
 }
 
@@ -244,6 +306,11 @@ func (f *fakeRepo) RelatedThoughts(ctx context.Context, params RelatedThoughtsPa
 	return append([]ScoredThought(nil), f.relatedResults...), nil
 }
 
-func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]Thought, error)    { return nil, nil }
-func (f *fakeRepo) MarkReady(ctx context.Context, params MarkReadyParams) error       { return nil }
-func (f *fakeRepo) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error { return nil }
+func (f *fakeRepo) ClaimPending(ctx context.Context, limit int) ([]Thought, error)      { return nil, nil }
+func (f *fakeRepo) MarkProcessed(ctx context.Context, params MarkProcessedParams) error { return nil }
+func (f *fakeRepo) MarkEmbeddingFailed(ctx context.Context, params MarkEmbeddingFailedParams) error {
+	return nil
+}
+func (f *fakeRepo) ReconcileModels(ctx context.Context, params ReconcileModelsParams) (ReconcileModelsResult, error) {
+	return ReconcileModelsResult{}, nil
+}

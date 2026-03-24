@@ -161,11 +161,14 @@ func (f fakeQueryService) ClaimPending(ctx context.Context, limit int) ([]though
 	return nil, nil
 }
 
-func (f fakeQueryService) MarkReady(ctx context.Context, params thoughts.MarkReadyParams) error {
+func (f fakeQueryService) MarkProcessed(ctx context.Context, params thoughts.MarkProcessedParams) error {
 	return nil
 }
-func (f fakeQueryService) MarkFailed(ctx context.Context, id uuid.UUID, reason string) error {
+func (f fakeQueryService) MarkEmbeddingFailed(ctx context.Context, params thoughts.MarkEmbeddingFailedParams) error {
 	return nil
+}
+func (f fakeQueryService) ReconcileModels(ctx context.Context, params thoughts.ReconcileModelsParams) (thoughts.ReconcileModelsResult, error) {
+	return thoughts.ReconcileModelsResult{}, nil
 }
 
 var _ = time.Second

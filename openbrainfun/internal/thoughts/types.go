@@ -30,18 +30,25 @@ const (
 )
 
 type Thought struct {
-	ID             uuid.UUID
-	UserID         uuid.UUID
-	Content        string
-	ExposureScope  ExposureScope
-	UserTags       []string
-	Metadata       metadata.Metadata
-	Embedding      []float32
-	EmbeddingModel string
-	IngestStatus   IngestStatus
-	IngestError    string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID                   uuid.UUID
+	UserID               uuid.UUID
+	Content              string
+	ExposureScope        ExposureScope
+	UserTags             []string
+	Metadata             metadata.Metadata
+	Embedding            []float32
+	EmbeddingModel       string
+	EmbeddingFingerprint string
+	EmbeddingStatus      IngestStatus
+	EmbeddingError       string
+	MetadataModel        string
+	MetadataFingerprint  string
+	MetadataStatus       IngestStatus
+	MetadataError        string
+	IngestStatus         IngestStatus
+	IngestError          string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 type NewThoughtParams struct {
@@ -63,15 +70,17 @@ func NewThought(params NewThoughtParams) (Thought, error) {
 	tags := normalizeTags(params.UserTags)
 	now := time.Now().UTC()
 	return Thought{
-		ID:            uuid.New(),
-		UserID:        params.UserID,
-		Content:       trimmedContent,
-		ExposureScope: params.ExposureScope,
-		UserTags:      tags,
-		Metadata:      metadata.Normalize(nil),
-		IngestStatus:  IngestStatusPending,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		ID:              uuid.New(),
+		UserID:          params.UserID,
+		Content:         trimmedContent,
+		ExposureScope:   params.ExposureScope,
+		UserTags:        tags,
+		Metadata:        metadata.Normalize(nil),
+		EmbeddingStatus: IngestStatusPending,
+		MetadataStatus:  IngestStatusPending,
+		IngestStatus:    IngestStatusPending,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}, nil
 }
 

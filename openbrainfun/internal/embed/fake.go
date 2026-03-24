@@ -2,12 +2,14 @@ package embed
 
 import (
 	"context"
+	"fmt"
 	"hash/fnv"
 )
 
 type Fake struct {
-	vectors    map[string][]float32
-	dimensions int
+	vectors     map[string][]float32
+	dimensions  int
+	fingerprint string
 }
 
 func NewFake(vectors map[string][]float32) *Fake {
@@ -23,7 +25,7 @@ func NewFake(vectors map[string][]float32) *Fake {
 	if dimensions == 0 {
 		dimensions = 3
 	}
-	return &Fake{vectors: copied, dimensions: dimensions}
+	return &Fake{vectors: copied, dimensions: dimensions, fingerprint: fmt.Sprintf("fake|dim:%d|embed:v1", dimensions)}
 }
 
 func (f *Fake) Embed(ctx context.Context, inputs []string) ([][]float32, error) {
@@ -41,6 +43,8 @@ func (f *Fake) Embed(ctx context.Context, inputs []string) ([][]float32, error) 
 func (f *Fake) Dimensions() int { return f.dimensions }
 
 func (f *Fake) Model() string { return "fake" }
+
+func (f *Fake) Fingerprint() string { return f.fingerprint }
 
 func pad(values []float32, dimensions int) []float32 {
 	result := make([]float32, dimensions)

@@ -12,9 +12,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jrhy/sandbox/openbrainfun/internal/app"
 	"github.com/jrhy/sandbox/openbrainfun/internal/config"
+	"github.com/jrhy/sandbox/openbrainfun/internal/migrations"
 	"github.com/jrhy/sandbox/openbrainfun/internal/ollama"
 	"github.com/jrhy/sandbox/openbrainfun/internal/postgres"
 	"github.com/jrhy/sandbox/openbrainfun/internal/server"
+	"github.com/jrhy/sandbox/openbrainfun/internal/thoughts"
 	"github.com/jrhy/sandbox/openbrainfun/internal/worker"
 )
 
@@ -40,12 +42,33 @@ func startCommand(ctx context.Context) error {
 	defer pool.Close()
 
 	ollamaClient := ollama.NewClient(cfg.OllamaURL, nil)
+	embedDimensions, err := ollamaClient.ProbeDimensions(ctx, cfg.EmbedModel)
+	if err != nil {
+		return fmt.Errorf("probe embedding dimensions: %w", err)
+	}
+	if err := migrations.NewMigrator().Ensure(ctx, pool, embedDimensions); err != nil {
+		return err
+	}
+
+	thoughtRepo := postgres.NewThoughtStore(pool)
+	embedder := ollama.NewProvider(ollamaClient, cfg.EmbedModel)
+	extractor := ollama.NewMetadataProvider(ollamaClient, cfg.MetadataModel)
+	if _, err := thoughtRepo.ReconcileModels(ctx, thoughts.ReconcileModelsParams{
+		EmbeddingModel:       embedder.Model(),
+		EmbeddingFingerprint: embedder.Fingerprint(),
+		MetadataModel:        extractor.Model(),
+		MetadataFingerprint:  extractor.Fingerprint(),
+		ReconciledAt:         time.Now().UTC(),
+	}); err != nil {
+		return fmt.Errorf("reconcile stored model fingerprints: %w", err)
+	}
+
 	runtime := app.Build(
 		cfg,
 		postgres.NewAuthStoreFromPGX(pool),
-		postgres.NewThoughtStore(pool),
-		ollama.NewProvider(ollamaClient, cfg.EmbedModel),
-		ollama.NewMetadataProvider(ollamaClient, cfg.MetadataModel),
+		thoughtRepo,
+		embedder,
+		extractor,
 	)
 	startBackgroundWorker(ctx, runtime.Processor, defaultWorkerPollInterval, func(err error) {
 		log.Printf("background worker error: %v", err)

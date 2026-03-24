@@ -43,22 +43,34 @@ func (s *Service) UpdateThought(ctx context.Context, input UpdateThoughtInput) (
 	if err != nil {
 		return Thought{}, err
 	}
-	status := current.IngestStatus
+	embeddingStatus := current.EmbeddingStatus
+	embeddingError := current.EmbeddingError
+	metadataStatus := current.MetadataStatus
+	metadataError := current.MetadataError
+	ingestStatus := current.IngestStatus
 	ingestError := current.IngestError
 	normalizedTags := normalizeTags(input.UserTags)
 	if current.Content != input.Content || current.ExposureScope != input.ExposureScope || !sameTags(current.UserTags, normalizedTags) {
-		status = IngestStatusPending
+		embeddingStatus = IngestStatusPending
+		embeddingError = ""
+		metadataStatus = IngestStatusPending
+		metadataError = ""
+		ingestStatus = IngestStatusPending
 		ingestError = ""
 	}
 	return s.repo.UpdateThought(ctx, UpdateThoughtParams{
-		ThoughtID:     input.ThoughtID,
-		UserID:        input.UserID,
-		Content:       input.Content,
-		ExposureScope: input.ExposureScope,
-		UserTags:      normalizedTags,
-		IngestStatus:  status,
-		IngestError:   ingestError,
-		UpdatedAt:     s.now(),
+		ThoughtID:       input.ThoughtID,
+		UserID:          input.UserID,
+		Content:         input.Content,
+		ExposureScope:   input.ExposureScope,
+		UserTags:        normalizedTags,
+		EmbeddingStatus: embeddingStatus,
+		EmbeddingError:  embeddingError,
+		MetadataStatus:  metadataStatus,
+		MetadataError:   metadataError,
+		IngestStatus:    ingestStatus,
+		IngestError:     ingestError,
+		UpdatedAt:       s.now(),
 	})
 }
 
@@ -106,7 +118,7 @@ func (s *Service) RelatedThoughts(ctx context.Context, input RelatedThoughtsInpu
 	if err != nil {
 		return nil, err
 	}
-	if anchor.IngestStatus != IngestStatusReady {
+	if anchor.EmbeddingStatus != IngestStatusReady {
 		return []ScoredThought{}, nil
 	}
 	return s.repo.RelatedThoughts(ctx, RelatedThoughtsParams{

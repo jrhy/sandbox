@@ -23,17 +23,17 @@ func TestThoughtStoreGetThoughtScopesByUserID(t *testing.T) {
 				t.Fatalf("args = %#v, want userID and thoughtID", args)
 			}
 			return fakePGXRow{scanFunc: func(dest ...any) error {
-				*(dest[0].(*uuid.UUID)) = thoughtID
-				*(dest[1].(*uuid.UUID)) = userID
-				*(dest[2].(*string)) = "remember pgx"
-				*(dest[3].(*string)) = string(thoughts.ExposureScopeLocalOnly)
-				*(dest[4].(*[]string)) = []string{"pgx"}
-				*(dest[5].(*[]byte)) = []byte(`{"summary":"remember pgx","topics":["pgx"],"entities":[]}`)
-				*(dest[6].(*string)) = string(thoughts.IngestStatusPending)
-				*(dest[7].(*string)) = "all-minilm:22m"
-				*(dest[8].(*string)) = ""
-				*(dest[9].(*time.Time)) = updatedAt
-				*(dest[10].(*time.Time)) = updatedAt
+				fillThoughtScan(dest, thoughtID, userID, "remember pgx", thoughts.ExposureScopeLocalOnly, []string{"pgx"}, []byte(`{"summary":"remember pgx","topics":["pgx"],"entities":[]}`), updatedAt)
+				*(dest[6].(*string)) = "all-minilm:22m"
+				*(dest[7].(*string)) = "all-minilm:22m|embed:v1"
+				*(dest[8].(*string)) = string(thoughts.IngestStatusPending)
+				*(dest[9].(*string)) = ""
+				*(dest[10].(*string)) = "qwen3:0.6b"
+				*(dest[11].(*string)) = "qwen3:0.6b|metadata:v1"
+				*(dest[12].(*string)) = string(thoughts.IngestStatusReady)
+				*(dest[13].(*string)) = ""
+				*(dest[14].(*string)) = string(thoughts.IngestStatusPending)
+				*(dest[15].(*string)) = ""
 				return nil
 			}}
 		},
@@ -61,8 +61,8 @@ func TestThoughtStoreCreateThoughtNormalizesNilTags(t *testing.T) {
 	updatedAt := time.Unix(1700000000, 0).UTC()
 	db := &fakeThoughtDB{
 		queryRowFunc: func(ctx context.Context, query string, args ...any) pgx.Row {
-			if len(args) != 10 {
-				t.Fatalf("len(args) = %d, want 10", len(args))
+			if len(args) != 18 {
+				t.Fatalf("len(args) = %d, want 18", len(args))
 			}
 			tags, ok := args[4].([]string)
 			if !ok {
@@ -75,17 +75,17 @@ func TestThoughtStoreCreateThoughtNormalizesNilTags(t *testing.T) {
 				t.Fatalf("len(tags) = %d, want 0", len(tags))
 			}
 			return fakePGXRow{scanFunc: func(dest ...any) error {
-				*(dest[0].(*uuid.UUID)) = thoughtID
-				*(dest[1].(*uuid.UUID)) = userID
-				*(dest[2].(*string)) = "remember pgx"
-				*(dest[3].(*string)) = string(thoughts.ExposureScopeLocalOnly)
-				*(dest[4].(*[]string)) = []string{}
-				*(dest[5].(*[]byte)) = []byte(`{"summary":"remember pgx","topics":["pgx"],"entities":[]}`)
-				*(dest[6].(*string)) = string(thoughts.IngestStatusPending)
+				fillThoughtScan(dest, thoughtID, userID, "remember pgx", thoughts.ExposureScopeLocalOnly, []string{}, []byte(`{"summary":"remember pgx","topics":["pgx"],"entities":[]}`), updatedAt)
+				*(dest[6].(*string)) = ""
 				*(dest[7].(*string)) = ""
-				*(dest[8].(*string)) = ""
-				*(dest[9].(*time.Time)) = updatedAt
-				*(dest[10].(*time.Time)) = updatedAt
+				*(dest[8].(*string)) = string(thoughts.IngestStatusPending)
+				*(dest[9].(*string)) = ""
+				*(dest[10].(*string)) = ""
+				*(dest[11].(*string)) = ""
+				*(dest[12].(*string)) = string(thoughts.IngestStatusPending)
+				*(dest[13].(*string)) = ""
+				*(dest[14].(*string)) = string(thoughts.IngestStatusPending)
+				*(dest[15].(*string)) = ""
 				return nil
 			}}
 		},
@@ -93,36 +93,62 @@ func TestThoughtStoreCreateThoughtNormalizesNilTags(t *testing.T) {
 
 	store := NewThoughtStore(db)
 	_, err := store.CreateThought(context.Background(), thoughts.Thought{
-		ID:            thoughtID,
-		UserID:        userID,
-		Content:       "remember pgx",
-		ExposureScope: thoughts.ExposureScopeLocalOnly,
-		UserTags:      nil,
-		Metadata:      metadata.Normalize(nil),
-		IngestStatus:  thoughts.IngestStatusPending,
-		CreatedAt:     updatedAt,
-		UpdatedAt:     updatedAt,
+		ID:              thoughtID,
+		UserID:          userID,
+		Content:         "remember pgx",
+		ExposureScope:   thoughts.ExposureScopeLocalOnly,
+		UserTags:        nil,
+		Metadata:        metadata.Normalize(nil),
+		EmbeddingStatus: thoughts.IngestStatusPending,
+		MetadataStatus:  thoughts.IngestStatusPending,
+		IngestStatus:    thoughts.IngestStatusPending,
+		CreatedAt:       updatedAt,
+		UpdatedAt:       updatedAt,
 	})
 	if err != nil {
 		t.Fatalf("CreateThought() error = %v", err)
 	}
 }
 
-func TestThoughtStoreMarkReadyPersistsMetadataAndEmbeddingModel(t *testing.T) {
+func TestThoughtStoreMarkProcessedPersistsMetadataAndEmbeddingModel(t *testing.T) {
 	thoughtID := uuid.New()
 	processedAt := time.Unix(1700001111, 0).UTC()
 	db := &fakeThoughtDB{
 		execFunc: func(ctx context.Context, query string, args ...any) (pgconn.CommandTag, error) {
-			if len(args) != 6 {
-				t.Fatalf("len(args) = %d, want 6", len(args))
+			if len(args) != 16 {
+				t.Fatalf("len(args) = %d, want 16", len(args))
 			}
 			if args[0] != thoughtID {
 				t.Fatalf("args[0] = %v, want thoughtID", args[0])
 			}
-			if args[1] != string(thoughts.IngestStatusReady) {
-				t.Fatalf("args[1] = %v, want ready status", args[1])
+			if args[1] != processedAt {
+				t.Fatalf("args[1] = %v, want processedAt", args[1])
 			}
-			metadataJSON, ok := args[2].([]byte)
+			if args[2] != string(thoughts.IngestStatusReady) {
+				t.Fatalf("args[2] = %v, want ready status", args[2])
+			}
+			if args[3] != "" {
+				t.Fatalf("args[3] = %v, want empty ingest error", args[3])
+			}
+			if args[4] != "[0.1,0.2,0.3]" {
+				t.Fatalf("args[4] = %v, want vector literal", args[4])
+			}
+			if args[5] != "all-minilm:22m" {
+				t.Fatalf("args[5] = %v, want model", args[5])
+			}
+			if args[6] != "all-minilm:22m|embed:v1" {
+				t.Fatalf("args[6] = %v, want embedding fingerprint", args[6])
+			}
+			if args[7] != string(thoughts.IngestStatusReady) {
+				t.Fatalf("args[7] = %v, want embedding ready", args[7])
+			}
+			if args[8] != "" {
+				t.Fatalf("args[8] = %v, want empty embedding error", args[8])
+			}
+			if args[9] != processedAt {
+				t.Fatalf("args[9] = %v, want embedding updated at", args[9])
+			}
+			metadataJSON, ok := args[10].([]byte)
 			if !ok {
 				t.Fatalf("args[2] type = %T, want []byte", args[2])
 			}
@@ -130,29 +156,43 @@ func TestThoughtStoreMarkReadyPersistsMetadataAndEmbeddingModel(t *testing.T) {
 			if got.Summary != "remember pgx" || len(got.Topics) != 1 || got.Topics[0] != "pgx" {
 				t.Fatalf("decoded metadata = %+v, want normalized metadata", got)
 			}
-			if args[3] != "[0.1,0.2,0.3]" {
-				t.Fatalf("args[3] = %v, want vector literal", args[3])
+			if args[11] != "qwen3:0.6b" {
+				t.Fatalf("args[11] = %v, want metadata model", args[11])
 			}
-			if args[4] != "all-minilm:22m" {
-				t.Fatalf("args[4] = %v, want model", args[4])
+			if args[12] != "qwen3:0.6b|metadata:v1" {
+				t.Fatalf("args[12] = %v, want metadata fingerprint", args[12])
 			}
-			if args[5] != processedAt {
-				t.Fatalf("args[5] = %v, want processedAt", args[5])
+			if args[13] != string(thoughts.IngestStatusReady) {
+				t.Fatalf("args[13] = %v, want metadata ready", args[13])
+			}
+			if args[14] != "" {
+				t.Fatalf("args[14] = %v, want empty metadata error", args[14])
+			}
+			if args[15] != processedAt {
+				t.Fatalf("args[15] = %v, want metadata updated at", args[15])
 			}
 			return pgconn.NewCommandTag("UPDATE 1"), nil
 		},
 	}
 
 	store := NewThoughtStore(db)
-	err := store.MarkReady(context.Background(), thoughts.MarkReadyParams{
-		ThoughtID:      thoughtID,
-		Embedding:      []float32{0.1, 0.2, 0.3},
-		EmbeddingModel: "all-minilm:22m",
-		Metadata:       metadata.Normalize(map[string]any{"summary": "remember pgx", "topics": []string{"pgx"}}),
-		ProcessedAt:    processedAt,
+	err := store.MarkProcessed(context.Background(), thoughts.MarkProcessedParams{
+		ThoughtID:            thoughtID,
+		UpdateEmbedding:      true,
+		Embedding:            []float32{0.1, 0.2, 0.3},
+		EmbeddingModel:       "all-minilm:22m",
+		EmbeddingFingerprint: "all-minilm:22m|embed:v1",
+		EmbeddingStatus:      thoughts.IngestStatusReady,
+		UpdateMetadata:       true,
+		Metadata:             metadata.Normalize(map[string]any{"summary": "remember pgx", "topics": []string{"pgx"}}),
+		MetadataModel:        "qwen3:0.6b",
+		MetadataFingerprint:  "qwen3:0.6b|metadata:v1",
+		MetadataStatus:       thoughts.IngestStatusReady,
+		IngestStatus:         thoughts.IngestStatusReady,
+		ProcessedAt:          processedAt,
 	})
 	if err != nil {
-		t.Fatalf("MarkReady() error = %v", err)
+		t.Fatalf("MarkProcessed() error = %v", err)
 	}
 }
 
@@ -189,18 +229,18 @@ func TestThoughtStoreSearchSemanticUsesCosineSimilarityAndThreshold(t *testing.T
 			}
 			return &fakeRows{scanRows: []func(dest ...any) error{
 				func(dest ...any) error {
-					*(dest[0].(*uuid.UUID)) = uuid.New()
-					*(dest[1].(*uuid.UUID)) = userID
-					*(dest[2].(*string)) = "career change note"
-					*(dest[3].(*string)) = string(thoughts.ExposureScopeRemoteOK)
-					*(dest[4].(*[]string)) = []string{"career"}
-					*(dest[5].(*[]byte)) = []byte(`{"summary":"career","topics":["career"],"entities":[]}`)
-					*(dest[6].(*string)) = string(thoughts.IngestStatusReady)
-					*(dest[7].(*string)) = "all-minilm:22m"
-					*(dest[8].(*string)) = ""
-					*(dest[9].(*time.Time)) = updatedAt
-					*(dest[10].(*time.Time)) = updatedAt
-					*(dest[11].(*float64)) = 0.88
+					fillThoughtScan(dest, uuid.New(), userID, "career change note", thoughts.ExposureScopeRemoteOK, []string{"career"}, []byte(`{"summary":"career","topics":["career"],"entities":[]}`), updatedAt)
+					*(dest[6].(*string)) = "all-minilm:22m"
+					*(dest[7].(*string)) = "all-minilm:22m|embed:v1"
+					*(dest[8].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[9].(*string)) = ""
+					*(dest[10].(*string)) = "qwen3:0.6b"
+					*(dest[11].(*string)) = "qwen3:0.6b|metadata:v1"
+					*(dest[12].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[13].(*string)) = ""
+					*(dest[14].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[15].(*string)) = ""
+					*(dest[18].(*float64)) = 0.88
 					return nil
 				},
 			}}, nil
@@ -242,18 +282,18 @@ func TestThoughtStoreRelatedThoughtsUsesAnchorEmbedding(t *testing.T) {
 			}
 			return &fakeRows{scanRows: []func(dest ...any) error{
 				func(dest ...any) error {
-					*(dest[0].(*uuid.UUID)) = uuid.New()
-					*(dest[1].(*uuid.UUID)) = userID
-					*(dest[2].(*string)) = "similar thought"
-					*(dest[3].(*string)) = string(thoughts.ExposureScopeLocalOnly)
-					*(dest[4].(*[]string)) = []string{"career"}
-					*(dest[5].(*[]byte)) = []byte(`{"summary":"similar","topics":["career"],"entities":[]}`)
-					*(dest[6].(*string)) = string(thoughts.IngestStatusReady)
-					*(dest[7].(*string)) = "all-minilm:22m"
-					*(dest[8].(*string)) = ""
-					*(dest[9].(*time.Time)) = updatedAt
-					*(dest[10].(*time.Time)) = updatedAt
-					*(dest[11].(*float64)) = 0.91
+					fillThoughtScan(dest, uuid.New(), userID, "similar thought", thoughts.ExposureScopeLocalOnly, []string{"career"}, []byte(`{"summary":"similar","topics":["career"],"entities":[]}`), updatedAt)
+					*(dest[6].(*string)) = "all-minilm:22m"
+					*(dest[7].(*string)) = "all-minilm:22m|embed:v1"
+					*(dest[8].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[9].(*string)) = ""
+					*(dest[10].(*string)) = "qwen3:0.6b"
+					*(dest[11].(*string)) = "qwen3:0.6b|metadata:v1"
+					*(dest[12].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[13].(*string)) = ""
+					*(dest[14].(*string)) = string(thoughts.IngestStatusReady)
+					*(dest[15].(*string)) = ""
+					*(dest[18].(*float64)) = 0.91
 					return nil
 				},
 			}}, nil
@@ -272,6 +312,17 @@ func TestThoughtStoreRelatedThoughtsUsesAnchorEmbedding(t *testing.T) {
 	if len(got) != 1 || got[0].Similarity != 0.91 || got[0].Thought.Content != "similar thought" {
 		t.Fatalf("got = %+v, want scored related result", got)
 	}
+}
+
+func fillThoughtScan(dest []any, thoughtID, userID uuid.UUID, content string, exposure thoughts.ExposureScope, tags []string, metadataJSON []byte, updatedAt time.Time) {
+	*(dest[0].(*uuid.UUID)) = thoughtID
+	*(dest[1].(*uuid.UUID)) = userID
+	*(dest[2].(*string)) = content
+	*(dest[3].(*string)) = string(exposure)
+	*(dest[4].(*[]string)) = tags
+	*(dest[5].(*[]byte)) = metadataJSON
+	*(dest[16].(*time.Time)) = updatedAt
+	*(dest[17].(*time.Time)) = updatedAt
 }
 
 type fakeThoughtDB struct {
