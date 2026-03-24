@@ -107,6 +107,57 @@ func TestWalkthroughScriptDetectsConflictingMacOSContainerRuntime(t *testing.T) 
 	}
 }
 
+func TestWalkthroughScriptAnnouncesLivePhases(t *testing.T) {
+	repo := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repo, "scripts", "walkthrough.sh"))
+	if err != nil {
+		t.Fatalf("read walkthrough.sh: %v", err)
+	}
+	text := string(script)
+	for _, want := range []string{
+		"announce_phase",
+		"Starting local stack",
+		"Pulling Ollama models",
+		"Resetting demo schema",
+		"Provisioning demo user",
+		"Starting OpenBrain server",
+		"Logging in",
+		"Creating demo thoughts",
+		"Waiting for background processing",
+		"Querying related thoughts",
+		"Writing walkthrough doc",
+		"Full transcript:",
+		"docs/walkthrough.demo.md",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in walkthrough script:\n%s", want, text)
+		}
+	}
+}
+
+func TestWalkthroughScriptAnnouncesCreationAndReadyProgress(t *testing.T) {
+	repo := repoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repo, "scripts", "walkthrough.sh"))
+	if err != nil {
+		t.Fatalf("read walkthrough.sh: %v", err)
+	}
+	text := string(script)
+	for _, want := range []string{
+		`announce_progress "Creating demo thoughts" 1 4`,
+		`announce_progress "Creating demo thoughts" 2 4`,
+		`announce_progress "Creating demo thoughts" 3 4`,
+		`announce_progress "Creating demo thoughts" 4 4`,
+		`announce_progress "Waiting for background processing" 1 4`,
+		`announce_progress "Waiting for background processing" 2 4`,
+		`announce_progress "Waiting for background processing" 3 4`,
+		`announce_progress "Waiting for background processing" 4 4`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing %q in walkthrough script:\n%s", want, text)
+		}
+	}
+}
+
 func TestRunRealEmbedTestsFallsBackToContainerizedOllama(t *testing.T) {
 	repo := repoRoot(t)
 	tempDir := t.TempDir()
