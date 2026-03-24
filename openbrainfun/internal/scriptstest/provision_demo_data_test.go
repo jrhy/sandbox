@@ -144,8 +144,12 @@ func TestWalkthroughScriptAnnouncesCreationAndReadyProgress(t *testing.T) {
 	text := string(script)
 	for _, want := range []string{
 		`announce_progress "Creating demo thoughts" 1 4`,
+		`announce_progress "Creating demo thoughts" 2 4`,
+		`announce_progress "Creating demo thoughts" 3 4`,
 		`announce_progress "Creating demo thoughts" 4 4`,
 		`announce_progress "Waiting for background processing" 1 4`,
+		`announce_progress "Waiting for background processing" 2 4`,
+		`announce_progress "Waiting for background processing" 3 4`,
 		`announce_progress "Waiting for background processing" 4 4`,
 	} {
 		if !strings.Contains(text, want) {
