@@ -7,8 +7,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jrhy/sandbox/openbrainfun/internal/admin"
 	"github.com/jrhy/sandbox/openbrainfun/internal/auth"
+	"github.com/jrhy/sandbox/openbrainfun/internal/thoughts"
 )
 
 func TestExecuteWithoutArgsShowsUsage(t *testing.T) {
@@ -39,6 +41,70 @@ func TestExecuteStartInvokesServerCommand(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("expected start server to be invoked")
+	}
+}
+
+func TestExecuteThoughtAddCreatesThoughtWithOptions(t *testing.T) {
+	var stdout bytes.Buffer
+	userID := uuid.New()
+	runner := &fakeThoughtRunner{
+		user:    auth.User{ID: userID, Username: "jimbob"},
+		created: thoughts.Thought{ID: uuid.New(), UserID: userID, Content: "here is the thought", ExposureScope: thoughts.ExposureScopeRemoteOK, UserTags: []string{"alpha", "beta"}, IngestStatus: thoughts.IngestStatusPending},
+	}
+	deps := commandDependencies{
+		stdout:           &stdout,
+		stderr:           &bytes.Buffer{},
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, error) { return runner, nil },
+	}
+
+	err := execute(context.Background(), []string{"thought", "add", "jimbob", "here is the thought", "--exposure-scope", "remote_ok", "--tag", "alpha", "--tag", "beta"}, deps)
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if runner.foundUsername != "jimbob" {
+		t.Fatalf("found username = %q, want jimbob", runner.foundUsername)
+	}
+	if runner.createInput.UserID != userID || runner.createInput.Content != "here is the thought" {
+		t.Fatalf("create input = %+v", runner.createInput)
+	}
+	if runner.createInput.ExposureScope != thoughts.ExposureScopeRemoteOK {
+		t.Fatalf("exposure scope = %q, want %q", runner.createInput.ExposureScope, thoughts.ExposureScopeRemoteOK)
+	}
+	if len(runner.createInput.UserTags) != 2 || runner.createInput.UserTags[0] != "alpha" || runner.createInput.UserTags[1] != "beta" {
+		t.Fatalf("tags = %#v, want alpha/beta", runner.createInput.UserTags)
+	}
+	if got := stdout.String(); !strings.Contains(got, "created thought") || !strings.Contains(got, "username=jimbob") || !strings.Contains(got, "status=pending") {
+		t.Fatalf("stdout = %s, want thought creation details", got)
+	}
+}
+
+func TestExecuteThoughtAddRequiresContent(t *testing.T) {
+	deps := commandDependencies{stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}}
+
+	err := execute(context.Background(), []string{"thought", "add", "jimbob"}, deps)
+	if err == nil || !strings.Contains(err.Error(), "content is required") {
+		t.Fatalf("error = %v, want missing content", err)
+	}
+}
+
+func TestExecuteThoughtAddDefaultsExposureScope(t *testing.T) {
+	userID := uuid.New()
+	runner := &fakeThoughtRunner{
+		user:    auth.User{ID: userID, Username: "jimbob"},
+		created: thoughts.Thought{ID: uuid.New(), UserID: userID, Content: "here is the thought", ExposureScope: thoughts.ExposureScopeLocalOnly, IngestStatus: thoughts.IngestStatusPending},
+	}
+	deps := commandDependencies{
+		stdout:           &bytes.Buffer{},
+		stderr:           &bytes.Buffer{},
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, error) { return runner, nil },
+	}
+
+	err := execute(context.Background(), []string{"thought", "add", "jimbob", "here is the thought"}, deps)
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if runner.createInput.ExposureScope != thoughts.ExposureScopeLocalOnly {
+		t.Fatalf("exposure scope = %q, want %q", runner.createInput.ExposureScope, thoughts.ExposureScopeLocalOnly)
 	}
 }
 
@@ -160,4 +226,21 @@ func (f *fakeAdminRunner) DeleteToken(ctx context.Context, username, label strin
 	f.deletedUsername = username
 	f.deletedLabel = label
 	return 1, nil
+}
+
+type fakeThoughtRunner struct {
+	user          auth.User
+	created       thoughts.Thought
+	foundUsername string
+	createInput   thoughts.CreateThoughtInput
+}
+
+func (f *fakeThoughtRunner) FindUserByUsername(ctx context.Context, username string) (auth.User, error) {
+	f.foundUsername = username
+	return f.user, nil
+}
+
+func (f *fakeThoughtRunner) CreateThought(ctx context.Context, input thoughts.CreateThoughtInput) (thoughts.Thought, error) {
+	f.createInput = input
+	return f.created, nil
 }

@@ -12,7 +12,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jrhy/sandbox/openbrainfun/internal/admin"
 	"github.com/jrhy/sandbox/openbrainfun/internal/auth"
+	"github.com/jrhy/sandbox/openbrainfun/internal/embed"
 	"github.com/jrhy/sandbox/openbrainfun/internal/postgres"
+	"github.com/jrhy/sandbox/openbrainfun/internal/thoughts"
 )
 
 type adminRunner interface {
@@ -23,11 +25,17 @@ type adminRunner interface {
 	DeleteToken(ctx context.Context, username, label string) (int64, error)
 }
 
+type thoughtRunner interface {
+	FindUserByUsername(ctx context.Context, username string) (auth.User, error)
+	CreateThought(ctx context.Context, input thoughts.CreateThoughtInput) (thoughts.Thought, error)
+}
+
 type commandDependencies struct {
-	stdout         io.Writer
-	stderr         io.Writer
-	startServer    func(ctx context.Context) error
-	newAdminRunner func(ctx context.Context) (adminRunner, error)
+	stdout           io.Writer
+	stderr           io.Writer
+	startServer      func(ctx context.Context) error
+	newAdminRunner   func(ctx context.Context) (adminRunner, error)
+	newThoughtRunner func(ctx context.Context) (thoughtRunner, error)
 }
 
 func defaultCommandDependencies() commandDependencies {
@@ -36,16 +44,20 @@ func defaultCommandDependencies() commandDependencies {
 		stderr:      os.Stderr,
 		startServer: startCommand,
 		newAdminRunner: func(ctx context.Context) (adminRunner, error) {
-			databaseURL := strings.TrimSpace(os.Getenv("OPENBRAIN_DATABASE_URL"))
-			if databaseURL == "" {
-				return nil, fmt.Errorf("OPENBRAIN_DATABASE_URL is required")
-			}
-
-			pool, err := pgxpool.New(ctx, databaseURL)
+			pool, err := newCommandPool(ctx)
 			if err != nil {
-				return nil, fmt.Errorf("connect database: %w", err)
+				return nil, err
 			}
 			return admin.NewService(postgres.NewAuthStoreFromPGX(pool)), nil
+		},
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, error) {
+			pool, err := newCommandPool(ctx)
+			if err != nil {
+				return nil, err
+			}
+			authStore := postgres.NewAuthStoreFromPGX(pool)
+			thoughtService := thoughts.NewService(postgres.NewThoughtStore(pool), embed.NewFake(nil))
+			return &thoughtServiceRunner{authStore: authStore, thoughtService: thoughtService}, nil
 		},
 	}
 }
@@ -60,8 +72,12 @@ func execute(ctx context.Context, args []string, deps commandDependencies) error
 	if deps.startServer == nil {
 		deps.startServer = startCommand
 	}
+	defaults := defaultCommandDependencies()
 	if deps.newAdminRunner == nil {
-		deps.newAdminRunner = defaultCommandDependencies().newAdminRunner
+		deps.newAdminRunner = defaults.newAdminRunner
+	}
+	if deps.newThoughtRunner == nil {
+		deps.newThoughtRunner = defaults.newThoughtRunner
 	}
 
 	if len(args) == 0 {
@@ -79,6 +95,8 @@ func execute(ctx context.Context, args []string, deps commandDependencies) error
 		return executeUserCommand(ctx, args[1:], deps)
 	case "token":
 		return executeTokenCommand(ctx, args[1:], deps)
+	case "thought":
+		return executeThoughtCommand(ctx, args[1:], deps)
 	default:
 		printUsage(deps.stderr)
 		return fmt.Errorf("unknown subcommand %q", args[0])
@@ -129,6 +147,37 @@ func executeUserCommand(ctx context.Context, args []string, deps commandDependen
 		return nil
 	default:
 		return fmt.Errorf("unknown user subcommand %q", args[0])
+	}
+}
+
+func executeThoughtCommand(ctx context.Context, args []string, deps commandDependencies) error {
+	if len(args) == 0 {
+		return fmt.Errorf("thought subcommand is required")
+	}
+
+	switch args[0] {
+	case "add":
+		username, input, err := parseThoughtAddArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		runner, err := deps.newThoughtRunner(ctx)
+		if err != nil {
+			return err
+		}
+		user, err := runner.FindUserByUsername(ctx, username)
+		if err != nil {
+			return err
+		}
+		input.UserID = user.ID
+		created, err := runner.CreateThought(ctx, input)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(deps.stdout, "created thought id=%s username=%s status=%s exposure_scope=%s tags=%s\n", created.ID, user.Username, created.IngestStatus, created.ExposureScope, strings.Join(created.UserTags, ","))
+		return nil
+	default:
+		return fmt.Errorf("unknown thought subcommand %q", args[0])
 	}
 }
 
@@ -254,6 +303,60 @@ func parseUserUpdateArgs(args []string) (string, string, string, error) {
 	return strings.TrimSpace(username), password, strings.TrimSpace(tokenLabel), nil
 }
 
+func parseThoughtAddArgs(args []string) (string, thoughts.CreateThoughtInput, error) {
+	username := ""
+	content := ""
+	exposureScope := thoughts.ExposureScopeLocalOnly
+	tags := make([]string, 0)
+
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		switch arg {
+		case "--exposure-scope":
+			index++
+			if index >= len(args) {
+				return "", thoughts.CreateThoughtInput{}, fmt.Errorf("--exposure-scope requires a value")
+			}
+			exposureScope = thoughts.ExposureScope(strings.TrimSpace(args[index]))
+		case "--tag":
+			index++
+			if index >= len(args) {
+				return "", thoughts.CreateThoughtInput{}, fmt.Errorf("--tag requires a value")
+			}
+			tags = append(tags, strings.TrimSpace(args[index]))
+		default:
+			if strings.HasPrefix(arg, "--") {
+				return "", thoughts.CreateThoughtInput{}, fmt.Errorf("unknown flag %q", arg)
+			}
+			if username == "" {
+				username = arg
+				continue
+			}
+			if content == "" {
+				content = arg
+				continue
+			}
+			return "", thoughts.CreateThoughtInput{}, fmt.Errorf("expected exactly one username and one content argument")
+		}
+	}
+
+	if strings.TrimSpace(username) == "" {
+		return "", thoughts.CreateThoughtInput{}, fmt.Errorf("username is required")
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", thoughts.CreateThoughtInput{}, fmt.Errorf("content is required")
+	}
+	if !exposureScope.Valid() {
+		return "", thoughts.CreateThoughtInput{}, thoughts.ErrInvalidExposure
+	}
+
+	return strings.TrimSpace(username), thoughts.CreateThoughtInput{
+		Content:       content,
+		ExposureScope: exposureScope,
+		UserTags:      tags,
+	}, nil
+}
+
 func parseTokenCreateArgs(args []string) (string, string, error) {
 	username, label, err := parseTokenArgs(args, false)
 	if err != nil {
@@ -302,6 +405,32 @@ func parseTokenArgs(args []string, requireLabel bool) (string, string, error) {
 	return strings.TrimSpace(username), strings.TrimSpace(label), nil
 }
 
+func newCommandPool(ctx context.Context) (*pgxpool.Pool, error) {
+	databaseURL := strings.TrimSpace(os.Getenv("OPENBRAIN_DATABASE_URL"))
+	if databaseURL == "" {
+		return nil, fmt.Errorf("OPENBRAIN_DATABASE_URL is required")
+	}
+
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("connect database: %w", err)
+	}
+	return pool, nil
+}
+
+type thoughtServiceRunner struct {
+	authStore      *postgres.AuthStore
+	thoughtService *thoughts.Service
+}
+
+func (r *thoughtServiceRunner) FindUserByUsername(ctx context.Context, username string) (auth.User, error) {
+	return r.authStore.FindUserByUsername(ctx, username)
+}
+
+func (r *thoughtServiceRunner) CreateThought(ctx context.Context, input thoughts.CreateThoughtInput) (thoughts.Thought, error) {
+	return r.thoughtService.CreateThought(ctx, input)
+}
+
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, `Usage:
   openbrain start
@@ -310,10 +439,12 @@ func printUsage(w io.Writer) {
   openbrain token create <username> [--label <label>]
   openbrain token list <username>
   openbrain token delete <username> --label <label>
+  openbrain thought add <username> <content> [--exposure-scope <scope>] [--tag <tag> ...]
 
 Examples:
   go run ./cmd/openbrain start
   OPENBRAIN_DATABASE_URL=postgres://openbrain:openbrain@127.0.0.1:5432/openbrain?sslmode=disable go run ./cmd/openbrain user update demo --password demo-password
   OPENBRAIN_DATABASE_URL=postgres://openbrain:openbrain@127.0.0.1:5432/openbrain?sslmode=disable go run ./cmd/openbrain token create demo --label laptop
+  OPENBRAIN_DATABASE_URL=postgres://openbrain:openbrain@127.0.0.1:5432/openbrain?sslmode=disable go run ./cmd/openbrain thought add demo 'remember pgx vectors' --tag pgx --tag notes
 `)
 }
