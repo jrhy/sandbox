@@ -34,8 +34,8 @@ type commandDependencies struct {
 	stdout           io.Writer
 	stderr           io.Writer
 	startServer      func(ctx context.Context) error
-	newAdminRunner   func(ctx context.Context) (adminRunner, error)
-	newThoughtRunner func(ctx context.Context) (thoughtRunner, error)
+	newAdminRunner   func(ctx context.Context) (adminRunner, func(), error)
+	newThoughtRunner func(ctx context.Context) (thoughtRunner, func(), error)
 }
 
 func defaultCommandDependencies() commandDependencies {
@@ -43,21 +43,21 @@ func defaultCommandDependencies() commandDependencies {
 		stdout:      os.Stdout,
 		stderr:      os.Stderr,
 		startServer: startCommand,
-		newAdminRunner: func(ctx context.Context) (adminRunner, error) {
+		newAdminRunner: func(ctx context.Context) (adminRunner, func(), error) {
 			pool, err := newCommandPool(ctx)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
-			return admin.NewService(postgres.NewAuthStoreFromPGX(pool)), nil
+			return admin.NewService(postgres.NewAuthStoreFromPGX(pool)), pool.Close, nil
 		},
-		newThoughtRunner: func(ctx context.Context) (thoughtRunner, error) {
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, func(), error) {
 			pool, err := newCommandPool(ctx)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			authStore := postgres.NewAuthStoreFromPGX(pool)
 			thoughtService := thoughts.NewService(postgres.NewThoughtStore(pool), embed.NewFake(nil))
-			return &thoughtServiceRunner{authStore: authStore, thoughtService: thoughtService}, nil
+			return &thoughtServiceRunner{authStore: authStore, thoughtService: thoughtService}, pool.Close, nil
 		},
 	}
 }
@@ -114,10 +114,11 @@ func executeUserCommand(ctx context.Context, args []string, deps commandDependen
 		if err != nil {
 			return err
 		}
-		runner, err := deps.newAdminRunner(ctx)
+		runner, closeRunner, err := deps.newAdminRunner(ctx)
 		if err != nil {
 			return err
 		}
+		defer closeRunner()
 		result, err := runner.UpdateUser(ctx, username, password, tokenLabel)
 		if err != nil {
 			return err
@@ -136,10 +137,11 @@ func executeUserCommand(ctx context.Context, args []string, deps commandDependen
 		if err != nil {
 			return err
 		}
-		runner, err := deps.newAdminRunner(ctx)
+		runner, closeRunner, err := deps.newAdminRunner(ctx)
 		if err != nil {
 			return err
 		}
+		defer closeRunner()
 		if err := runner.DeleteUser(ctx, username); err != nil {
 			return err
 		}
@@ -161,10 +163,11 @@ func executeThoughtCommand(ctx context.Context, args []string, deps commandDepen
 		if err != nil {
 			return err
 		}
-		runner, err := deps.newThoughtRunner(ctx)
+		runner, closeRunner, err := deps.newThoughtRunner(ctx)
 		if err != nil {
 			return err
 		}
+		defer closeRunner()
 		user, err := runner.FindUserByUsername(ctx, username)
 		if err != nil {
 			return err
@@ -192,10 +195,11 @@ func executeTokenCommand(ctx context.Context, args []string, deps commandDepende
 		if err != nil {
 			return err
 		}
-		runner, err := deps.newAdminRunner(ctx)
+		runner, closeRunner, err := deps.newAdminRunner(ctx)
 		if err != nil {
 			return err
 		}
+		defer closeRunner()
 		created, err := runner.CreateToken(ctx, username, label)
 		if err != nil {
 			return err
@@ -209,10 +213,11 @@ func executeTokenCommand(ctx context.Context, args []string, deps commandDepende
 		if err != nil {
 			return err
 		}
-		runner, err := deps.newAdminRunner(ctx)
+		runner, closeRunner, err := deps.newAdminRunner(ctx)
 		if err != nil {
 			return err
 		}
+		defer closeRunner()
 		tokens, err := runner.ListTokens(ctx, username)
 		if err != nil {
 			return err
@@ -240,10 +245,11 @@ func executeTokenCommand(ctx context.Context, args []string, deps commandDepende
 		if err != nil {
 			return err
 		}
-		runner, err := deps.newAdminRunner(ctx)
+		runner, closeRunner, err := deps.newAdminRunner(ctx)
 		if err != nil {
 			return err
 		}
+		defer closeRunner()
 		deletedCount, err := runner.DeleteToken(ctx, username, label)
 		if err != nil {
 			return err

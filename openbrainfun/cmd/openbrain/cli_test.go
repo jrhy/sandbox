@@ -54,7 +54,7 @@ func TestExecuteThoughtAddCreatesThoughtWithOptions(t *testing.T) {
 	deps := commandDependencies{
 		stdout:           &stdout,
 		stderr:           &bytes.Buffer{},
-		newThoughtRunner: func(ctx context.Context) (thoughtRunner, error) { return runner, nil },
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, func(), error) { return runner, func() {}, nil },
 	}
 
 	err := execute(context.Background(), []string{"thought", "add", "jimbob", "here is the thought", "--exposure-scope", "remote_ok", "--tag", "alpha", "--tag", "beta"}, deps)
@@ -87,6 +87,30 @@ func TestExecuteThoughtAddRequiresContent(t *testing.T) {
 	}
 }
 
+func TestExecuteThoughtAddClosesResources(t *testing.T) {
+	userID := uuid.New()
+	runner := &fakeThoughtRunner{
+		user:    auth.User{ID: userID, Username: "jimbob"},
+		created: thoughts.Thought{ID: uuid.New(), UserID: userID, Content: "here is the thought", ExposureScope: thoughts.ExposureScopeLocalOnly, IngestStatus: thoughts.IngestStatusPending},
+	}
+	closed := false
+	deps := commandDependencies{
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, func(), error) {
+			return runner, func() { closed = true }, nil
+		},
+	}
+
+	err := execute(context.Background(), []string{"thought", "add", "jimbob", "here is the thought"}, deps)
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !closed {
+		t.Fatal("expected thought runner cleanup to run")
+	}
+}
+
 func TestExecuteThoughtAddDefaultsExposureScope(t *testing.T) {
 	userID := uuid.New()
 	runner := &fakeThoughtRunner{
@@ -96,7 +120,7 @@ func TestExecuteThoughtAddDefaultsExposureScope(t *testing.T) {
 	deps := commandDependencies{
 		stdout:           &bytes.Buffer{},
 		stderr:           &bytes.Buffer{},
-		newThoughtRunner: func(ctx context.Context) (thoughtRunner, error) { return runner, nil },
+		newThoughtRunner: func(ctx context.Context) (thoughtRunner, func(), error) { return runner, func() {}, nil },
 	}
 
 	err := execute(context.Background(), []string{"thought", "add", "jimbob", "here is the thought"}, deps)
@@ -125,7 +149,7 @@ func TestExecuteUserUpdatePrintsCreatedDefaultToken(t *testing.T) {
 	deps := commandDependencies{
 		stdout:         &stdout,
 		stderr:         &bytes.Buffer{},
-		newAdminRunner: func(ctx context.Context) (adminRunner, error) { return runner, nil },
+		newAdminRunner: func(ctx context.Context) (adminRunner, func(), error) { return runner, func() {}, nil },
 	}
 
 	if err := execute(context.Background(), []string{"user", "update", "demo", "--password", "secret"}, deps); err != nil {
@@ -146,7 +170,7 @@ func TestExecuteTokenCreatePrintsPlaintextToken(t *testing.T) {
 	deps := commandDependencies{
 		stdout:         &stdout,
 		stderr:         &bytes.Buffer{},
-		newAdminRunner: func(ctx context.Context) (adminRunner, error) { return runner, nil },
+		newAdminRunner: func(ctx context.Context) (adminRunner, func(), error) { return runner, func() {}, nil },
 	}
 
 	if err := execute(context.Background(), []string{"token", "create", "demo", "--label", "laptop"}, deps); err != nil {
@@ -167,7 +191,7 @@ func TestExecuteTokenListPrintsLabels(t *testing.T) {
 	deps := commandDependencies{
 		stdout:         &stdout,
 		stderr:         &bytes.Buffer{},
-		newAdminRunner: func(ctx context.Context) (adminRunner, error) { return runner, nil },
+		newAdminRunner: func(ctx context.Context) (adminRunner, func(), error) { return runner, func() {}, nil },
 	}
 
 	if err := execute(context.Background(), []string{"token", "list", "demo"}, deps); err != nil {
@@ -175,6 +199,26 @@ func TestExecuteTokenListPrintsLabels(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "default") || !strings.Contains(got, now.Format(time.RFC3339)) {
 		t.Fatalf("stdout = %s, want label and timestamp", got)
+	}
+}
+
+func TestExecuteTokenCreateClosesResources(t *testing.T) {
+	runner := &fakeAdminRunner{createdToken: admin.CreatedToken{Label: "laptop", Token: "plain-laptop-token"}}
+	closed := false
+	deps := commandDependencies{
+		stdout: &bytes.Buffer{},
+		stderr: &bytes.Buffer{},
+		newAdminRunner: func(ctx context.Context) (adminRunner, func(), error) {
+			return runner, func() { closed = true }, nil
+		},
+	}
+
+	err := execute(context.Background(), []string{"token", "create", "demo", "--label", "laptop"}, deps)
+	if err != nil {
+		t.Fatalf("execute() error = %v", err)
+	}
+	if !closed {
+		t.Fatal("expected admin runner cleanup to run")
 	}
 }
 
