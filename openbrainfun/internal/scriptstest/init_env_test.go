@@ -42,6 +42,9 @@ func TestInitEnvWritesGeneratedSecretsAndSecurePermissions(t *testing.T) {
 	if strings.Contains(envText, "__GENERATE_") || strings.Contains(envText, "CHANGE_ME") {
 		t.Fatalf(".env still contains template placeholders:\n%s", envText)
 	}
+	if strings.Contains(envText, "OPENBRAIN_POSTGRES_PGDATA=") {
+		t.Fatalf(".env should not expose internal postgres PGDATA path:\n%s", envText)
+	}
 
 	postgresPassword := envValue(t, envText, "OPENBRAIN_POSTGRES_PASSWORD")
 	if len(postgresPassword) < 24 {

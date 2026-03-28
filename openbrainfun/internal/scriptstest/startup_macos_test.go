@@ -8,6 +8,18 @@ import (
 	"testing"
 )
 
+func envWithoutOpenBrainDatabaseURL() []string {
+	env := os.Environ()
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "OPENBRAIN_DATABASE_URL=") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
+}
+
 func writeStartupMacOSFakes(t *testing.T, binDir, logPath, stateDir string) {
 	t.Helper()
 
@@ -157,6 +169,8 @@ func TestStartupMacOSScriptStartsPostgresAndExecsOpenbrain(t *testing.T) {
 		"OPENBRAIN_ENV_FILE="+filepath.Join(tempDir, "missing.env"),
 		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),
 		"OPENBRAIN_CSRF_KEY=test-csrf-key",
+		"OPENBRAIN_DATABASE_URL=postgres://openbrain:openbrain@127.0.0.1:5432/openbrain?sslmode=disable",
+		"OPENBRAIN_POSTGRES_PASSWORD=openbrain",
 		"STARTUP_LOG="+logPath,
 		"STARTUP_STATE_DIR="+stateDir,
 	)
@@ -337,7 +351,7 @@ func TestStartupMacOSScriptLoadsEnvFile(t *testing.T) {
 
 	cmd := exec.Command("bash", "scripts/startup-macos.sh")
 	cmd.Dir = repo
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(envWithoutOpenBrainDatabaseURL(),
 		"PATH="+binDir+":/usr/bin:/bin",
 		"OPENBRAIN_ENV_FILE="+envFile,
 		"OPENBRAIN_CONTAINER_BIN="+filepath.Join(binDir, "container"),

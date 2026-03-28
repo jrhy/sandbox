@@ -25,7 +25,6 @@ postgres_user="${OPENBRAIN_POSTGRES_USER:-openbrain}"
 postgres_password="${OPENBRAIN_POSTGRES_PASSWORD:-openbrain}"
 postgres_data_dir="${OPENBRAIN_POSTGRES_DATA_DIR:-}"
 postgres_volume_name="${OPENBRAIN_POSTGRES_VOLUME_NAME:-openbrain-postgres-data}"
-postgres_pgdata="${OPENBRAIN_POSTGRES_PGDATA:-/var/lib/postgresql/data/pgdata}"
 postgres_ready_timeout_seconds="${OPENBRAIN_POSTGRES_READY_TIMEOUT_SECONDS:-30}"
 
 export OPENBRAIN_WEB_ADDR="${OPENBRAIN_WEB_ADDR:-127.0.0.1:18080}"
@@ -123,7 +122,7 @@ start_postgres_container() {
     --env "POSTGRES_DB=$postgres_db" \
     --env "POSTGRES_USER=$postgres_user" \
     --env "POSTGRES_PASSWORD=$postgres_password" \
-    --env "PGDATA=$postgres_pgdata" \
+    --env "PGDATA=/var/lib/postgresql/data/pgdata" \
     --publish "127.0.0.1:${postgres_host_port}:5432" \
     --volume "$(postgres_mount_arg)" \
     "$postgres_image" >/dev/null
