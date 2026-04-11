@@ -5,11 +5,13 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -289,6 +291,178 @@ func TestExecLong_HTTPAllowSetsProxyEnv(t *testing.T) {
 		if env[key] != "" {
 			t.Fatalf("%s=%q want empty", key, env[key])
 		}
+	}
+}
+
+func TestExecLong_HTTPAllowWithLocalhostAllowSetsNoProxyEnv(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{"/usr/bin/env"},
+		nil,
+		sandboxProfileOptions{
+			HTTPAllowHosts:      []string{"allowed.test"},
+			LocalhostAllowPorts: []int{5432},
+		},
+		bytes.NewReader(nil),
+		&stdout, &stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil || code != 0 {
+		t.Fatalf("--http-allow + --localhost-allow env test failed: code=%d err=%v out=%s", code, err, out)
+	}
+	env := parseExecEnvOutput(out)
+	wantProxy := env["HTTP_PROXY"]
+	if wantProxy == "" || !strings.HasPrefix(wantProxy, "http://127.0.0.1:") {
+		t.Fatalf("unexpected HTTP_PROXY: %q", wantProxy)
+	}
+	wantNoProxy := "localhost,127.0.0.1,::1"
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if env[key] != wantNoProxy {
+			t.Fatalf("%s=%q want %q", key, env[key], wantNoProxy)
+		}
+	}
+}
+
+func TestExecLong_LocalhostAllowAllowsSelectedPortAndBlocksAnother(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+
+	allowedListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen allowed tcp4: %v", err)
+	}
+	defer allowedListener.Close()
+	allowedPort := allowedListener.Addr().(*net.TCPAddr).Port
+
+	blockedListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen blocked tcp4: %v", err)
+	}
+	defer blockedListener.Close()
+	blockedPort := blockedListener.Addr().(*net.TCPAddr).Port
+
+	opts := sandboxProfileOptions{LocalhostAllowPorts: []int{allowedPort}}
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		port int
+		want int
+	}{
+		{
+			name: "localhost ipv4 host allowed port",
+			args: []string{"/usr/bin/nc", "-4", "-G", "2", "-z", "localhost", fmt.Sprintf("%d", allowedPort)},
+			port: allowedPort,
+			want: 0,
+		},
+		{
+			name: "ipv4 literal allowed port",
+			args: []string{"/usr/bin/nc", "-G", "2", "-z", "127.0.0.1", fmt.Sprintf("%d", allowedPort)},
+			port: allowedPort,
+			want: 0,
+		},
+		{
+			name: "ipv4 literal blocked port",
+			args: []string{"/usr/bin/nc", "-G", "2", "-z", "127.0.0.1", fmt.Sprintf("%d", blockedPort)},
+			port: blockedPort,
+			want: 1,
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code, err := runSandboxExecWithOptions(
+				baseDir,
+				tc.args,
+				nil,
+				opts,
+				bytes.NewReader(nil),
+				&stdout,
+				&stderr,
+			)
+			out := stdout.String() + stderr.String()
+			if err != nil {
+				t.Fatalf("run failed: %v", err)
+			}
+			if code != tc.want {
+				t.Fatalf("port=%d code=%d want=%d out=%s", tc.port, code, tc.want, out)
+			}
+		})
+	}
+
+	ipv6Listener, err := net.Listen("tcp6", "[::1]:0")
+	if err == nil {
+		defer ipv6Listener.Close()
+		ipv6Port := ipv6Listener.Addr().(*net.TCPAddr).Port
+		var stdout, stderr bytes.Buffer
+		code, err := runSandboxExecWithOptions(
+			baseDir,
+			[]string{"/usr/bin/nc", "-6", "-G", "2", "-z", "::1", fmt.Sprintf("%d", ipv6Port)},
+			nil,
+			sandboxProfileOptions{LocalhostAllowPorts: []int{ipv6Port}},
+			bytes.NewReader(nil),
+			&stdout,
+			&stderr,
+		)
+		out := stdout.String() + stderr.String()
+		if err != nil {
+			t.Fatalf("ipv6 run failed: %v", err)
+		}
+		if code != 0 {
+			t.Fatalf("ipv6 localhost allow failed: code=%d out=%s", code, out)
+		}
+	}
+}
+
+func TestExecLong_HTTPAllowWithLocalhostAllowBypassesProxyForLocalhost(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	server := httptest.NewServer(httpTestHandler("allowed direct localhost"))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse server port: %v", err)
+	}
+
+	python := findPython(t)
+	var stdout, stderr bytes.Buffer
+	code, err := runSandboxExecWithOptions(
+		baseDir,
+		[]string{
+			python,
+			"-S",
+			"-c",
+			`import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=5) as resp:
+    sys.stdout.write(resp.read().decode())`,
+			server.URL,
+		},
+		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+		sandboxProfileOptions{
+			HTTPAllowHosts:      []string{"example.invalid"},
+			LocalhostAllowPorts: []int{port},
+		},
+		bytes.NewReader(nil),
+		&stdout,
+		&stderr,
+	)
+	out := stdout.String() + stderr.String()
+	if err != nil || code != 0 {
+		t.Fatalf("--http-allow + --localhost-allow localhost fetch failed: code=%d err=%v out=%s", code, err, out)
+	}
+	if !strings.Contains(stdout.String(), "allowed direct localhost") {
+		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }
 

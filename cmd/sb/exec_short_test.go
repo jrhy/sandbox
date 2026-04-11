@@ -41,6 +41,21 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 			wantCmd:  []string{"/bin/echo"},
 		},
 		{
+			name:     "localhost allow",
+			args:     []string{"--localhost-allow", "5432,6379", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{LocalhostAllowPorts: []int{5432, 6379}},
+			wantCmd:  []string{"/bin/echo"},
+		},
+		{
+			name: "localhost allow with http allow",
+			args: []string{"--http-allow", "*.example.com", "--localhost-allow", "5432", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{
+				HTTPAllowHosts:      []string{"*.example.com"},
+				LocalhostAllowPorts: []int{5432},
+			},
+			wantCmd: []string{"/bin/echo"},
+		},
+		{
 			name:    "help",
 			args:    []string{"-h"},
 			wantCmd: nil,
@@ -48,6 +63,11 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 		{
 			name:    "network and http allow conflict",
 			args:    []string{"--network", "--http-allow", "*.example.com", "/bin/echo"},
+			wantErr: "cannot be combined",
+		},
+		{
+			name:    "network and localhost allow conflict",
+			args:    []string{"--network", "--localhost-allow", "5432", "/bin/echo"},
 			wantErr: "cannot be combined",
 		},
 		{
@@ -145,6 +165,23 @@ func TestExecShort_BuildSandboxProfileWithOptions(t *testing.T) {
 			name: "http allow option restricts network to localhost proxy",
 			opts: sandboxProfileOptions{LocalhostProxyPort: 43123},
 			mustContain: []string{
+				"(allow network-outbound (remote tcp \"localhost:43123\"))",
+			},
+			mustNotContain: []string{"(allow network*)"},
+		},
+		{
+			name: "localhost allow option restricts network to selected loopback ports",
+			opts: sandboxProfileOptions{LocalhostAllowPorts: []int{43123}},
+			mustContain: []string{
+				"(allow network-outbound (remote tcp \"localhost:43123\"))",
+			},
+			mustNotContain: []string{"(allow network*)"},
+		},
+		{
+			name: "localhost allow composes with http allow proxy port",
+			opts: sandboxProfileOptions{LocalhostProxyPort: 49999, LocalhostAllowPorts: []int{43123}},
+			mustContain: []string{
+				"(allow network-outbound (remote tcp \"localhost:49999\"))",
 				"(allow network-outbound (remote tcp \"localhost:43123\"))",
 			},
 			mustNotContain: []string{"(allow network*)"},
@@ -270,10 +307,39 @@ func TestExecShort_ParseHTTPAllowPatternsRejectsEmpty(t *testing.T) {
 	}
 }
 
+func TestExecShort_ParseLocalhostAllowPorts(t *testing.T) {
+	t.Parallel()
+	got, err := parseLocalhostAllowPorts(" 5432, 6379,5432 ")
+	if err != nil {
+		t.Fatalf("parseLocalhostAllowPorts failed: %v", err)
+	}
+	want := []int{5432, 6379}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected ports: got=%v want=%v", got, want)
+	}
+}
+
+func TestExecShort_ParseLocalhostAllowPortsRejectsInvalid(t *testing.T) {
+	t.Parallel()
+	for _, raw := range []string{"", " , ", "abc", "0", "-1", "65536"} {
+		if _, err := parseLocalhostAllowPorts(raw); err == nil {
+			t.Fatalf("raw=%q: expected error", raw)
+		}
+	}
+}
+
 func TestExecShort_ParseSandboxExecArgsHTTPAllowMissingValue(t *testing.T) {
 	t.Parallel()
 	_, _, err := parseSandboxExecArgs([]string{"--http-allow"})
 	if err == nil || !strings.Contains(err.Error(), "missing value for --http-allow") {
+		t.Fatalf("expected missing value error, got %v", err)
+	}
+}
+
+func TestExecShort_ParseSandboxExecArgsLocalhostAllowMissingValue(t *testing.T) {
+	t.Parallel()
+	_, _, err := parseSandboxExecArgs([]string{"--localhost-allow"})
+	if err == nil || !strings.Contains(err.Error(), "missing value for --localhost-allow") {
 		t.Fatalf("expected missing value error, got %v", err)
 	}
 }
@@ -284,7 +350,7 @@ func TestExecShort_MergeProxyEnv(t *testing.T) {
 		"HTTP_PROXY": "http://old:1",
 		"NO_PROXY":   "localhost",
 		"CUSTOM":     "keep",
-	}, "http://127.0.0.1:43123")
+	}, "http://127.0.0.1:43123", "")
 	wantProxy := "http://127.0.0.1:43123"
 	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
 		if got[key] != wantProxy {
@@ -298,6 +364,17 @@ func TestExecShort_MergeProxyEnv(t *testing.T) {
 	}
 	if got["CUSTOM"] != "keep" {
 		t.Fatalf("CUSTOM=%q want keep", got["CUSTOM"])
+	}
+}
+
+func TestExecShort_MergeProxyEnvWithNoProxyBypass(t *testing.T) {
+	t.Parallel()
+	noProxy := "localhost,127.0.0.1,::1"
+	got := mergeProxyEnv(nil, "http://127.0.0.1:43123", noProxy)
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		if got[key] != noProxy {
+			t.Fatalf("%s=%q want %q", key, got[key], noProxy)
+		}
 	}
 }
 

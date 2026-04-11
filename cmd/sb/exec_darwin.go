@@ -21,20 +21,24 @@ import (
 )
 
 type sandboxProfileOptions struct {
-	AllowNetwork       bool
-	MinimalFS          bool
-	NoUser             bool
-	HTTPAllowHosts     []string
-	LocalhostProxyPort int
+	AllowNetwork        bool
+	MinimalFS           bool
+	NoUser              bool
+	HTTPAllowHosts      []string
+	LocalhostAllowPorts []int
+	LocalhostProxyPort  int
 }
+
+const localhostNoProxyValue = "localhost,127.0.0.1,::1"
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] <command> [args...]
-    --minimal-fs    restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
-    --network       allow network access
-    --http-allow    allow HTTP(S) only through a localhost proxy, filtered by hostname glob
-    --no-user       deny ALL access under /Users; no cwd access; PATH entries under /Users are removed`,
+		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] <command> [args...]
+    --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
+    --network          allow network access
+    --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob
+    --localhost-allow  allow direct TCP connections only to selected localhost ports
+    --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed`,
 		"Run a command under a macOS sandbox profile",
 		func(a []string) int {
 			opts, cmdArgs, err := parseSandboxExecArgs(a)
@@ -84,6 +88,15 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			remaining = remaining[1:]
 			continue
 		}
+		if strings.HasPrefix(a, "--localhost-allow=") {
+			ports, err := parseLocalhostAllowPorts(strings.TrimPrefix(a, "--localhost-allow="))
+			if err != nil {
+				return sandboxProfileOptions{}, nil, err
+			}
+			opts.LocalhostAllowPorts = append(opts.LocalhostAllowPorts, ports...)
+			remaining = remaining[1:]
+			continue
+		}
 		switch a {
 		case "--minimal-fs", "--runtime", "--allow-runtime":
 			opts.MinimalFS = true
@@ -101,13 +114,23 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			}
 			opts.HTTPAllowHosts = append(opts.HTTPAllowHosts, patterns...)
 			remaining = remaining[1:]
+		case "--localhost-allow":
+			if len(remaining) < 2 {
+				return sandboxProfileOptions{}, nil, errors.New("missing value for --localhost-allow")
+			}
+			ports, err := parseLocalhostAllowPorts(remaining[1])
+			if err != nil {
+				return sandboxProfileOptions{}, nil, err
+			}
+			opts.LocalhostAllowPorts = append(opts.LocalhostAllowPorts, ports...)
+			remaining = remaining[1:]
 		default:
 			return sandboxProfileOptions{}, nil, fmt.Errorf("unknown option %q", a)
 		}
 		remaining = remaining[1:]
 	}
-	if opts.AllowNetwork && len(opts.HTTPAllowHosts) > 0 {
-		return sandboxProfileOptions{}, nil, errors.New("--network cannot be combined with --http-allow")
+	if opts.AllowNetwork && (len(opts.HTTPAllowHosts) > 0 || len(opts.LocalhostAllowPorts) > 0) {
+		return sandboxProfileOptions{}, nil, errors.New("--network cannot be combined with --http-allow or --localhost-allow")
 	}
 	return opts, remaining, nil
 }
@@ -171,7 +194,11 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 		}
 		defer proxy.Close()
 		opts.LocalhostProxyPort = proxy.port
-		envOverride = mergeProxyEnv(envOverride, proxy.url)
+		noProxy := ""
+		if len(opts.LocalhostAllowPorts) > 0 {
+			noProxy = localhostNoProxyValue
+		}
+		envOverride = mergeProxyEnv(envOverride, proxy.url, noProxy)
 	}
 
 	profile, err := buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, pathEnv, opts)
@@ -221,11 +248,7 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	buf.WriteString("(allow sysctl-read)\n")
 	buf.WriteString("(allow mach-lookup)\n\n")
 
-	if opts.AllowNetwork {
-		buf.WriteString("(allow network*)\n")
-	} else if opts.LocalhostProxyPort > 0 {
-		buf.WriteString(fmt.Sprintf("(allow network-outbound (remote tcp %s))\n", quoteProfile("localhost:"+strconv.Itoa(opts.LocalhostProxyPort))))
-	}
+	buf.WriteString(buildNetworkRules(opts))
 	buf.WriteString("\n")
 
 	buf.WriteString("(allow file-read* (subpath \"/System\") (subpath \"/usr\") (subpath \"/Library\") (subpath \"/System/Volumes/Data/Library\") (subpath \"/private\") (subpath \"/etc\") (subpath \"/dev\") (subpath \"/bin\") (subpath \"/sbin\"))\n")
@@ -428,6 +451,25 @@ func quoteProfile(p string) string {
 	return "\"" + strings.ReplaceAll(p, "\"", "\\\"") + "\""
 }
 
+func buildNetworkRules(opts sandboxProfileOptions) string {
+	if opts.AllowNetwork {
+		return "(allow network*)\n"
+	}
+
+	var buf bytes.Buffer
+	if opts.LocalhostProxyPort > 0 {
+		buf.WriteString(localhostTCPAllowRule(opts.LocalhostProxyPort))
+	}
+	for _, port := range opts.LocalhostAllowPorts {
+		buf.WriteString(localhostTCPAllowRule(port))
+	}
+	return buf.String()
+}
+
+func localhostTCPAllowRule(port int) string {
+	return fmt.Sprintf("(allow network-outbound (remote tcp %s))\n", quoteProfile(net.JoinHostPort("localhost", strconv.Itoa(port))))
+}
+
 func mergeEnv(base []string, add ...map[string]string) []string {
 	out := map[string]string{}
 	for _, kv := range base {
@@ -483,6 +525,34 @@ func parseHTTPAllowPatterns(raw string) ([]string, error) {
 	return patterns, nil
 }
 
+func parseLocalhostAllowPorts(raw string) ([]int, error) {
+	parts := strings.Split(raw, ",")
+	ports := make([]int, 0, len(parts))
+	seen := map[int]bool{}
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		port, err := strconv.Atoi(part)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --localhost-allow port %q: %w", part, err)
+		}
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("invalid --localhost-allow port %q: must be between 1 and 65535", part)
+		}
+		if seen[port] {
+			continue
+		}
+		seen[port] = true
+		ports = append(ports, port)
+	}
+	if len(ports) == 0 {
+		return nil, errors.New("missing port for --localhost-allow")
+	}
+	return ports, nil
+}
+
 func startHTTPAllowlistProxy(patterns []string) (*sandboxHTTPProxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -523,7 +593,7 @@ func (p *sandboxHTTPProxy) Close() error {
 	return p.server.Close()
 }
 
-func mergeProxyEnv(base map[string]string, proxyURL string) map[string]string {
+func mergeProxyEnv(base map[string]string, proxyURL, noProxy string) map[string]string {
 	out := map[string]string{}
 	for k, v := range base {
 		out[k] = v
@@ -532,8 +602,8 @@ func mergeProxyEnv(base map[string]string, proxyURL string) map[string]string {
 	out["HTTPS_PROXY"] = proxyURL
 	out["http_proxy"] = proxyURL
 	out["https_proxy"] = proxyURL
-	out["NO_PROXY"] = ""
-	out["no_proxy"] = ""
+	out["NO_PROXY"] = noProxy
+	out["no_proxy"] = noProxy
 	return out
 }
 
