@@ -113,9 +113,8 @@ while IFS= read -r line; do
     status_icon="checkmark.circle.fill"
   fi
 
-  # Truncate title if too long
-  short_title="${title:0:50}"
-  [[ ${#title} -gt 50 ]] && short_title="${short_title}..."
+  # Truncate title (use python3 for UTF-8 safe truncation)
+  short_title=$(python3 -c "import sys; t=sys.argv[1]; print(t[:50]+'...' if len(t)>50 else t)" "$title")
 
   # Sanitize title: remove | to prevent SwiftBar parameter injection
   safe_title="${short_title//|/-}"
@@ -201,9 +200,8 @@ declare -a other_merged_lines=()
 while IFS=$'\t' read -r pr_number title html_url author; do
   [[ -z "$pr_number" ]] && continue
 
-  # Truncate and sanitize
-  short_title="${title:0:40}"
-  [[ ${#title} -gt 40 ]] && short_title="${short_title}..."
+  # Truncate (UTF-8 safe)
+  short_title=$(python3 -c "import sys; t=sys.argv[1]; print(t[:40]+'...' if len(t)>40 else t)" "$title")
   safe_title="${short_title//|/-}"
 
   if [[ "$author" == "$GITHUB_USERNAME" ]]; then
