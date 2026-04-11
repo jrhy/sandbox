@@ -1,4 +1,5 @@
 import unittest
+from itertools import islice
 from rc4 import RC4
 
 class TestVectors(unittest.TestCase):
@@ -26,6 +27,26 @@ class TestVectors(unittest.TestCase):
     r.swap(0,1)
     self.assertEqual(r.S[0], s1)
     self.assertEqual(r.S[1], s0)
+
+  def test_iterator(self):
+    """Test that RC4 implements the iterator protocol."""
+    r = RC4("\x01\x02\x03\x04\x05")
+    self.assertEqual(iter(r), r)  # __iter__ returns self
+    
+  def test_next(self):
+    """Test __next__ produces correct bytes."""
+    r = RC4("\x01\x02\x03\x04\x05")
+    expected = [0xb2, 0x39, 0x63, 0x05, 0xf0, 0x3d, 0xc0, 0x27, 0xcc, 0xc3]
+    for exp in expected:
+      self.assertEqual(next(r), exp)
+
+  def test_iterate(self):
+    """Test iterating over RC4 directly using islice."""
+    r = RC4("Key")
+    first_five = list(islice(r, 5))
+    expected = "eb 9f 77 81 b7"
+    got = " ".join([hex(byte)[2:].zfill(2) for byte in first_five])
+    self.assertEqual(expected, got)
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+"""RC4 stream cipher implementation."""
+
 class RC4:
   def __init__(self, key):
     self.S = list(range(256))
@@ -21,14 +23,17 @@ class RC4:
       j = (j + self.getS(i) + self.K[i % len(self.K)]) % 256
       self.swap(i, j)
 
+  def __iter__(self):
+    return self
+
+  def __next__(self):
+    self.i = (self.i + 1) % 256
+    self.j = (self.j + self.getS(self.i)) % 256
+    self.swap(self.i, self.j)
+    return self.getSP(self.getSP(self.i) + self.getSP(self.j))
+
   def generate(self, n):
-    res = []
-    for _ in range(n):
-      self.i = (self.i + 1) % 256
-      self.j = (self.j + self.getS(self.i)) % 256
-      self.swap(self.i, self.j)
-      res.append(self.getSP(self.getSP(self.i) + self.getSP(self.j)))
-    return res
+    return [next(self) for _ in range(n)]
 
   def __str__(self):
     res = "S: [" + (",".join(hex(num) for num in self.S)) + "]\n"
@@ -39,7 +44,7 @@ class RC4:
     if n < 256:
       return self.S[n] 
     else:
-      throw(ValueError(f"Index '{n}' too large")) 
+      raise ValueError(f"Index '{n}' too large") 
 
   def getSP(self, n):
     return self.S[n % 256] 
