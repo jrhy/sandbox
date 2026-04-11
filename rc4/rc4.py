@@ -7,7 +7,12 @@ class RC4:
     self.S = list(range(256))
     self.i = 0
     self.j = 0
-    self.K = [ord(char) if ord(char) <= 255 else (_ for _ in ()).throw(ValueError(f"Character '{char}' has an ASCII value greater than 255: {ord(char)}")) for char in key]
+    self.K = []
+    for char in key:
+      val = ord(char)
+      if val > 255:
+        raise ValueError(f"Character '{char}' has an ASCII value greater than 255: {val}")
+      self.K.append(val)
     self.ksa()
     self.i = 0
     self.j = 0
