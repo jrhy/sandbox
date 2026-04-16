@@ -145,9 +145,12 @@ class FakeAsyncClient:
     def __init__(self, *, room_send_error=None):
         self.access_token = None
         self.user = ""
+        self.user_id = ""
         self.callback_calls = []
         self.sync_forever_calls = []
         self.room_send_calls = []
+        self.room_typing_calls = []
+        self.room_read_markers_calls = []
         self.whoami_calls = 0
         self.room_send_error = room_send_error
 
@@ -187,6 +190,30 @@ class FakeAsyncClient:
         if self.room_send_error is not None:
             raise self.room_send_error
         return {"event_id": "$reply"}
+
+    async def room_typing(self, room_id, typing_state, timeout):
+        self.room_typing_calls.append(
+            {
+                "room_id": room_id,
+                "typing_state": typing_state,
+                "timeout": timeout,
+            }
+        )
+        return {"room_id": room_id, "typing_state": typing_state, "timeout": timeout}
+
+    async def room_read_markers(self, room_id, fully_read_event, read_event):
+        self.room_read_markers_calls.append(
+            {
+                "room_id": room_id,
+                "fully_read_event": fully_read_event,
+                "read_event": read_event,
+            }
+        )
+        return {
+            "room_id": room_id,
+            "fully_read_event": fully_read_event,
+            "read_event": read_event,
+        }
 
 
 class BotFlowTest(unittest.TestCase):
@@ -699,6 +726,62 @@ class MainFlowTest(unittest.TestCase):
             self.assertNotEqual(call_info["thread_id"], loop_thread_id)
 
         asyncio.run(exercise())
+
+    def test_gateway_shows_typing_and_marks_read_around_handler(self):
+        fake_client = FakeAsyncClient()
+        gateway = NioMatrixGateway(
+            homeserver_url="https://matrix.example",
+            access_token="secret-token",
+            client=fake_client,
+        )
+        call_order = []
+
+        def handler(event):
+            call_order.append(("handler", event["event_id"]))
+            return {"handling_mode": "ingest"}
+
+        gateway.subscribe_room("!room:example", handler)
+
+        class Room:
+            room_id = "!room:example"
+
+        class Event:
+            event_id = "$event-typing"
+            sender = "@alice:example"
+            server_timestamp = 12345
+            body = "Planning to watch a movie tonight"
+
+        async def exercise():
+            await gateway._on_room_message(Room(), Event())
+
+        asyncio.run(exercise())
+
+        self.assertEqual(
+            fake_client.room_typing_calls,
+            [
+                {
+                    "room_id": "!room:example",
+                    "typing_state": True,
+                    "timeout": 60_000,
+                },
+                {
+                    "room_id": "!room:example",
+                    "typing_state": False,
+                    "timeout": 60_000,
+                },
+            ],
+        )
+        self.assertEqual(
+            fake_client.room_read_markers_calls,
+            [
+                {
+                    "room_id": "!room:example",
+                    "fully_read_event": "$event-typing",
+                    "read_event": "$event-typing",
+                }
+            ],
+        )
+        self.assertEqual(call_order, [("handler", "$event-typing")])
 
 
 if __name__ == "__main__":

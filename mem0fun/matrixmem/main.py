@@ -101,6 +101,7 @@ class NioMatrixGateway:
             raise RuntimeError("Unable to resolve Matrix user id from access token")
 
         self._client.user = user_id
+        self._client.user_id = user_id
         if self._bot is not None:
             self._bot.bot_user_id = user_id
         logger.info("Authenticated Matrix user %s", user_id)
@@ -109,11 +110,14 @@ class NioMatrixGateway:
         if getattr(room, "room_id", "") != self._room_id or self._handler is None:
             return
 
+        event_id = getattr(event, "event_id", "")
+        room_id = getattr(room, "room_id", "")
+        await self._set_typing(room_id=room_id, typing_state=True)
         await asyncio.to_thread(
             self._handler,
             {
-                "room_id": getattr(room, "room_id", ""),
-                "event_id": getattr(event, "event_id", ""),
+                "room_id": room_id,
+                "event_id": event_id,
                 "sender_id": getattr(event, "sender", ""),
                 "timestamp": str(
                     getattr(
@@ -126,6 +130,8 @@ class NioMatrixGateway:
                 "message_type": "m.text",
             },
         )
+        await self._set_typing(room_id=room_id, typing_state=False)
+        await self._mark_read(room_id=room_id, event_id=event_id)
 
     async def _send_text(self, *, room_id: str, event_id: str, text: str) -> Any:
         return await self._client.room_send(
@@ -140,6 +146,21 @@ class NioMatrixGateway:
                     }
                 },
             },
+        )
+
+    async def _set_typing(self, *, room_id: str, typing_state: bool) -> Any:
+        timeout_ms = 60_000
+        return await self._client.room_typing(
+            room_id=room_id,
+            typing_state=typing_state,
+            timeout=timeout_ms,
+        )
+
+    async def _mark_read(self, *, room_id: str, event_id: str) -> Any:
+        return await self._client.room_read_markers(
+            room_id=room_id,
+            fully_read_event=event_id,
+            read_event=event_id,
         )
 
 
