@@ -140,10 +140,15 @@ func (h *Handlers) Thoughts(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
 		return
 	}
+	searchMode, ok := thoughts.ParseSearchMode(r.URL.Query().Get("search_mode"))
+	if !ok {
+		http.Error(w, http.StatusText(http.StatusBadRequest), http.StatusBadRequest)
+		return
+	}
 	params := thoughts.ListThoughtsParams{
 		UserID:       user.ID,
 		Q:            r.URL.Query().Get("q"),
-		SearchMode:   thoughts.SearchMode(r.URL.Query().Get("search_mode")),
+		SearchMode:   searchMode,
 		Exposure:     r.URL.Query().Get("exposure_scope"),
 		IngestStatus: r.URL.Query().Get("ingest_status"),
 		Tag:          r.URL.Query().Get("tag"),

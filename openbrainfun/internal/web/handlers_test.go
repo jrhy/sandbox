@@ -156,13 +156,13 @@ func TestThoughtsPageParsesSearchParamsAndShowsSearchControls(t *testing.T) {
 	}
 }
 
-func TestThoughtsPageShowsSemanticSimilarity(t *testing.T) {
+func TestThoughtsPageUsesSemanticSearchByDefault(t *testing.T) {
 	userID := uuid.New()
 	service := &fakeThoughtService{searchResults: []thoughts.ScoredThought{{
 		Thought:    thoughts.Thought{ID: uuid.New(), UserID: userID, Content: "career note", IngestStatus: thoughts.IngestStatusReady},
 		Similarity: 0.88,
 	}}}
-	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts?q=career&search_mode=semantic", nil), userID)
+	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts?q=career", nil), userID)
 	rr := httptest.NewRecorder()
 
 	NewHandlers(service, "test-csrf-key").Thoughts(rr, req)
@@ -175,6 +175,25 @@ func TestThoughtsPageShowsSemanticSimilarity(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), "Similarity: 88.0%") {
 		t.Fatalf("body missing semantic similarity: %s", rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `>Default<`) {
+		t.Fatalf("body still shows Default mode option: %s", rr.Body.String())
+	}
+}
+
+func TestThoughtsPageRejectsInvalidSearchMode(t *testing.T) {
+	userID := uuid.New()
+	service := &fakeThoughtService{}
+	req := withUser(httptest.NewRequest(http.MethodGet, "/thoughts?q=career&search_mode=banana", nil), userID)
+	rr := httptest.NewRecorder()
+
+	NewHandlers(service, "test-csrf-key").Thoughts(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+	if service.listParams.Q != "" || service.searchInput.Query != "" {
+		t.Fatalf("service should not have been called, got list=%+v search=%+v", service.listParams, service.searchInput)
 	}
 }
 

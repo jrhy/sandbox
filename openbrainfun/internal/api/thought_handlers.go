@@ -109,7 +109,11 @@ func (h *ThoughtHandlers) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	searchMode := thoughts.SearchMode(r.URL.Query().Get("search_mode"))
+	searchMode, ok := thoughts.ParseSearchMode(r.URL.Query().Get("search_mode"))
+	if !ok {
+		writeJSONError(w, http.StatusBadRequest, "invalid search_mode")
+		return
+	}
 	searchQuery := r.URL.Query().Get("q")
 	if searchMode == thoughts.SearchModeSemantic && strings.TrimSpace(searchQuery) != "" {
 		items, err := h.service.SearchThoughts(r.Context(), thoughts.SearchThoughtsInput{

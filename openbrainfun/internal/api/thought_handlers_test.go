@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,7 +91,7 @@ func TestListThoughtsSupportsSearchParams(t *testing.T) {
 	}
 }
 
-func TestListThoughtsSemanticIncludesSimilarity(t *testing.T) {
+func TestListThoughtsUsesSemanticSearchByDefault(t *testing.T) {
 	service := &fakeThoughtService{searchResults: []thoughts.ScoredThought{{
 		Thought:    thoughts.Thought{ID: uuid.New(), Content: "career change note", IngestStatus: thoughts.IngestStatusReady},
 		Similarity: 0.88,
@@ -98,7 +99,7 @@ func TestListThoughtsSemanticIncludesSimilarity(t *testing.T) {
 	handlers := NewThoughtHandlers(service)
 	user := auth.User{ID: uuid.New()}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/thoughts?q=career&search_mode=semantic", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/thoughts?q=career", nil)
 	req = req.WithContext(context.WithValue(req.Context(), auth.ContextUserKey{}, user))
 	rr := httptest.NewRecorder()
 
@@ -118,6 +119,28 @@ func TestListThoughtsSemanticIncludesSimilarity(t *testing.T) {
 	}
 	if len(got.Thoughts) != 1 || got.Thoughts[0]["similarity"] != 0.88 {
 		t.Fatalf("thoughts = %#v, want similarity in semantic results", got.Thoughts)
+	}
+}
+
+func TestListThoughtsRejectsInvalidSearchMode(t *testing.T) {
+	service := &fakeThoughtService{}
+	handlers := NewThoughtHandlers(service)
+	user := auth.User{ID: uuid.New()}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/thoughts?q=career&search_mode=banana", nil)
+	req = req.WithContext(context.WithValue(req.Context(), auth.ContextUserKey{}, user))
+	rr := httptest.NewRecorder()
+
+	handlers.List(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rr.Code)
+	}
+	if service.listParams.Q != "" || service.searchInput.Query != "" {
+		t.Fatalf("service should not have been called, got list=%+v search=%+v", service.listParams, service.searchInput)
+	}
+	if got := rr.Body.String(); !strings.Contains(got, "invalid search_mode") {
+		t.Fatalf("body = %q, want invalid search_mode error", got)
 	}
 }
 

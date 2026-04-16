@@ -12,9 +12,8 @@
     <div>
       <label for="search_mode">Mode</label>
       <select id="search_mode" name="search_mode">
-        <option value="">Default</option>
-        <option value="keyword" {{if eq .SearchMode "keyword"}}selected{{end}}>Keyword</option>
         <option value="semantic" {{if eq .SearchMode "semantic"}}selected{{end}}>Semantic</option>
+        <option value="keyword" {{if eq .SearchMode "keyword"}}selected{{end}}>Keyword</option>
       </select>
     </div>
     <div>

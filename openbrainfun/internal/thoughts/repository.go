@@ -18,6 +18,24 @@ const (
 	SearchModeSemantic SearchMode = "semantic"
 )
 
+func ParseSearchMode(raw string) (SearchMode, bool) {
+	switch mode := SearchMode(raw); mode {
+	case "":
+		return SearchModeSemantic, true
+	case SearchModeKeyword, SearchModeSemantic:
+		return mode, true
+	default:
+		return "", false
+	}
+}
+
+func NormalizeSearchMode(mode SearchMode) SearchMode {
+	if mode == "" {
+		return SearchModeSemantic
+	}
+	return mode
+}
+
 type CreateThoughtInput struct {
 	UserID        uuid.UUID
 	Content       string
