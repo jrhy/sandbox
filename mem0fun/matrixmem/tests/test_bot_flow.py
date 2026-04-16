@@ -783,6 +783,95 @@ class MainFlowTest(unittest.TestCase):
         )
         self.assertEqual(call_order, [("handler", "$event-typing")])
 
+    def test_gateway_skips_typing_for_replayed_event(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_path = Path(tmpdir) / "events.jsonl"
+            archive_path.write_text(
+                json.dumps(
+                    {
+                        "room_id": "!room:example",
+                        "event_id": "$event-replayed",
+                        "timestamp": "2026-04-11T23:07:32.874775+00:00",
+                        "text": "Need to buy solder wick",
+                        "sender_id": "@alice:example",
+                        "handling_mode": "ingest",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            memory_client = StatefulMemoryClient()
+            reply_sink = RecordingReplySink()
+            bot = MatrixMemoryBot(
+                room_id="!room:example",
+                bot_user_id="@bot:example",
+                archive_path=archive_path,
+                memory_client=memory_client,
+                reply_sink=reply_sink,
+            )
+            fake_client = FakeAsyncClient()
+            gateway = NioMatrixGateway(
+                homeserver_url="https://matrix.example",
+                access_token="secret-token",
+                client=fake_client,
+            )
+            bot.subscribe(gateway)
+
+            class Room:
+                room_id = "!room:example"
+
+            class Event:
+                event_id = "$event-replayed"
+                sender = "@alice:example"
+                server_timestamp = 12345
+                body = "Need to buy solder wick"
+
+            asyncio.run(gateway._on_room_message(Room(), Event()))
+
+            self.assertEqual(fake_client.room_typing_calls, [])
+            self.assertEqual(fake_client.room_read_markers_calls, [])
+            self.assertEqual(memory_client.add_calls, [])
+            self.assertEqual(memory_client.query_calls, [])
+            self.assertEqual(reply_sink.calls, [])
+
+    def test_gateway_skips_typing_for_bot_authored_message(self):
+        fake_client = FakeAsyncClient()
+        gateway = NioMatrixGateway(
+            homeserver_url="https://matrix.example",
+            access_token="secret-token",
+            client=fake_client,
+        )
+        memory_client = StatefulMemoryClient()
+        reply_sink = RecordingReplySink()
+        bot = MatrixMemoryBot(
+            room_id="!room:example",
+            bot_user_id="@bot:example",
+            archive_path=Path(tempfile.gettempdir()) / "matrixmem-bot-gateway-ignore.jsonl",
+            memory_client=memory_client,
+            reply_sink=reply_sink,
+        )
+        bot.subscribe(gateway)
+
+        class Room:
+            room_id = "!room:example"
+
+        class Event:
+            event_id = "$event-bot"
+            sender = "@bot:example"
+            server_timestamp = 12345
+            body = "I should not store my own replies"
+
+        asyncio.run(gateway._on_room_message(Room(), Event()))
+
+        self.assertEqual(fake_client.room_typing_calls, [])
+        self.assertEqual(fake_client.room_read_markers_calls, [])
+        self.assertEqual(memory_client.add_calls, [])
+        self.assertEqual(memory_client.query_calls, [])
+        self.assertEqual(reply_sink.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -47,21 +47,13 @@ class MatrixMemoryBot:
     def subscribe(self, gateway: Any) -> Any:
         return gateway.subscribe_room(self.room_id, self.handle_event)
 
-    def handle_event(self, event: Any) -> dict[str, Any]:
-        message = self._normalize_event(event)
-        if message.message_type != "m.text":
-            return {"handling_mode": "ignore"}
-        return self.handle_message(message)
+    def has_seen_event(self, event_id: str) -> bool:
+        return event_id in self._seen_event_ids
 
-    def handle_message(self, message: BotMessage) -> dict[str, Any]:
+    def preview_message(self, message: BotMessage) -> dict[str, str]:
         if message.room_id != self.room_id:
             return {"handling_mode": "ignore"}
         if message.event_id in self._seen_event_ids:
-            logger.info(
-                "Skipping duplicate event_id=%s room_id=%s",
-                message.event_id,
-                message.room_id,
-            )
             return {"handling_mode": "duplicate"}
 
         handling_mode = self.classifier(
@@ -69,8 +61,25 @@ class MatrixMemoryBot:
             sender_id=message.sender_id,
             bot_user_id=self.bot_user_id,
         )
-        if handling_mode == "ignore":
+        return {"handling_mode": handling_mode}
+
+    def handle_event(self, event: Any) -> dict[str, Any]:
+        message = self._normalize_event(event)
+        if message.message_type != "m.text":
             return {"handling_mode": "ignore"}
+        return self.handle_message(message)
+
+    def handle_message(self, message: BotMessage) -> dict[str, Any]:
+        preview = self.preview_message(message)
+        handling_mode = preview["handling_mode"]
+        if handling_mode in {"ignore", "duplicate"}:
+            if handling_mode == "duplicate":
+                logger.info(
+                    "Skipping duplicate event_id=%s room_id=%s",
+                    message.event_id,
+                    message.room_id,
+                )
+            return {"handling_mode": handling_mode}
 
         logger.info(
             "Handling %s event_id=%s room_id=%s",

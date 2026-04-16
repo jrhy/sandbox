@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
-from .bot import MatrixMemoryBot
+from .bot import BotMessage, MatrixMemoryBot
 from .config import Config, load_config
 from .memory import MemoryClient
 
@@ -112,22 +112,42 @@ class NioMatrixGateway:
 
         event_id = getattr(event, "event_id", "")
         room_id = getattr(room, "room_id", "")
+        message = BotMessage(
+            room_id=room_id,
+            event_id=event_id,
+            sender_id=getattr(event, "sender", ""),
+            timestamp=str(
+                getattr(
+                    event,
+                    "server_timestamp",
+                    getattr(event, "origin_server_ts", ""),
+                )
+            ),
+            text=getattr(event, "body", ""),
+            message_type="m.text",
+        )
+
+        if self._bot is not None and hasattr(self._bot, "preview_message"):
+            preview = self._bot.preview_message(message)
+            handling_mode = preview.get("handling_mode", "")
+            if handling_mode in {"ignore", "duplicate"}:
+                logger.info(
+                    "Skipping %s event_id=%s room_id=%s before typing",
+                    handling_mode,
+                    event_id,
+                    room_id,
+                )
+                return
         await self._set_typing(room_id=room_id, typing_state=True)
         await asyncio.to_thread(
             self._handler,
             {
-                "room_id": room_id,
-                "event_id": event_id,
-                "sender_id": getattr(event, "sender", ""),
-                "timestamp": str(
-                    getattr(
-                        event,
-                        "server_timestamp",
-                        getattr(event, "origin_server_ts", ""),
-                    )
-                ),
-                "text": getattr(event, "body", ""),
-                "message_type": "m.text",
+                "room_id": message.room_id,
+                "event_id": message.event_id,
+                "sender_id": message.sender_id,
+                "timestamp": message.timestamp,
+                "text": message.text,
+                "message_type": message.message_type,
             },
         )
         await self._set_typing(room_id=room_id, typing_state=False)
