@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,7 @@ class MatrixMemoryBot:
         self.reply_sink = reply_sink
         self.archive_writer = archive_writer
         self.classifier = classifier
+        self._seen_event_ids = self._load_seen_event_ids()
 
     def subscribe(self, gateway: Any) -> Any:
         return gateway.subscribe_room(self.room_id, self.handle_event)
@@ -54,6 +56,13 @@ class MatrixMemoryBot:
     def handle_message(self, message: BotMessage) -> dict[str, Any]:
         if message.room_id != self.room_id:
             return {"handling_mode": "ignore"}
+        if message.event_id in self._seen_event_ids:
+            logger.info(
+                "Skipping duplicate event_id=%s room_id=%s",
+                message.event_id,
+                message.room_id,
+            )
+            return {"handling_mode": "duplicate"}
 
         handling_mode = self.classifier(
             text=message.text,
@@ -79,6 +88,7 @@ class MatrixMemoryBot:
             sender_id=message.sender_id,
             handling_mode=handling_mode,
         )
+        self._seen_event_ids.add(message.event_id)
 
         if handling_mode == "ingest":
             memory_result = self.memory_client.add_message(
@@ -154,3 +164,26 @@ class MatrixMemoryBot:
             text=str(text),
             message_type=str(message_type),
         )
+
+    def _load_seen_event_ids(self) -> set[str]:
+        if not self.archive_path.exists():
+            return set()
+
+        seen: set[str] = set()
+        try:
+            lines = self.archive_path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            return seen
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                continue
+            event_id = record.get("event_id")
+            if event_id:
+                seen.add(str(event_id))
+        return seen

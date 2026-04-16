@@ -351,6 +351,98 @@ class BotFlowTest(unittest.TestCase):
                 ["ingest", "query"],
             )
 
+    def test_duplicate_event_is_ignored_after_first_processing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_path = Path(tmpdir) / "events.jsonl"
+            memory_client = StatefulMemoryClient()
+            reply_sink = RecordingReplySink()
+            bot = MatrixMemoryBot(
+                room_id="!room:example",
+                bot_user_id="@bot:example",
+                archive_path=archive_path,
+                memory_client=memory_client,
+                reply_sink=reply_sink,
+            )
+
+            message = BotMessage(
+                room_id="!room:example",
+                event_id="$event-dup",
+                sender_id="@alice:example",
+                timestamp="2026-04-11T23:07:32.874775+00:00",
+                text="Need to buy solder wick",
+            )
+
+            first = bot.handle_message(message)
+            second = bot.handle_message(message)
+
+            self.assertEqual(first["handling_mode"], "ingest")
+            self.assertEqual(second["handling_mode"], "duplicate")
+            self.assertEqual(len(memory_client.add_calls), 1)
+            self.assertEqual(len(memory_client.query_calls), 0)
+            self.assertEqual(len(reply_sink.calls), 0)
+            self.assertEqual(
+                archive_path.read_text(encoding="utf-8").splitlines(),
+                [
+                    json.dumps(
+                        {
+                            "event_id": "$event-dup",
+                            "handling_mode": "ingest",
+                            "room_id": "!room:example",
+                            "sender_id": "@alice:example",
+                            "text": "Need to buy solder wick",
+                            "timestamp": "2026-04-11T23:07:32.874775+00:00",
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                ],
+            )
+
+    def test_duplicate_event_is_ignored_after_restart(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_path = Path(tmpdir) / "events.jsonl"
+            archive_path.write_text(
+                json.dumps(
+                    {
+                        "room_id": "!room:example",
+                        "event_id": "$event-dup",
+                        "timestamp": "2026-04-11T23:07:32.874775+00:00",
+                        "text": "Need to buy solder wick",
+                        "sender_id": "@alice:example",
+                        "handling_mode": "ingest",
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            memory_client = StatefulMemoryClient()
+            reply_sink = RecordingReplySink()
+            bot = MatrixMemoryBot(
+                room_id="!room:example",
+                bot_user_id="@bot:example",
+                archive_path=archive_path,
+                memory_client=memory_client,
+                reply_sink=reply_sink,
+            )
+
+            result = bot.handle_message(
+                BotMessage(
+                    room_id="!room:example",
+                    event_id="$event-dup",
+                    sender_id="@alice:example",
+                    timestamp="2026-04-11T23:07:32.874775+00:00",
+                    text="Need to buy solder wick",
+                )
+            )
+
+            self.assertEqual(result["handling_mode"], "duplicate")
+            self.assertEqual(memory_client.add_calls, [])
+            self.assertEqual(memory_client.query_calls, [])
+            self.assertEqual(reply_sink.calls, [])
+
     def test_bot_message_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             archive_path = Path(tmpdir) / "events.jsonl"
