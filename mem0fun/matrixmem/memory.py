@@ -94,7 +94,11 @@ class MemoryClient:
             metadata=metadata,
         )
         messages = [{"role": "user", "content": text}]
-        return self.memory.add(messages, user_id=user_id, metadata=payload_metadata)
+        return self.memory.add(
+            messages,
+            user_id=user_id,
+            metadata=payload_metadata,
+        )
 
     def answer_query(
         self,

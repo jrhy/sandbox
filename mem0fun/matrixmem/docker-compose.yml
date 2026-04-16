@@ -26,6 +26,7 @@ services:
     volumes:
       - ./data/archive:/data/archive
       - ./data/kuzu:/data/kuzu
+      - ./data/nio:/data/nio
       - ./logs:/logs
       - ../:/workspace/mem0fun
     working_dir: /workspace/mem0fun/matrixmem

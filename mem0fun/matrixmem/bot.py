@@ -83,7 +83,7 @@ class MatrixMemoryBot:
         if handling_mode == "ingest":
             memory_result = self.memory_client.add_message(
                 text=message.text,
-                user_id=message.sender_id,
+                user_id=message.room_id,
                 room_id=message.room_id,
                 event_id=message.event_id,
                 sender_id=message.sender_id,
@@ -100,7 +100,7 @@ class MatrixMemoryBot:
         if handling_mode == "query":
             memory_result = self.memory_client.answer_query(
                 message.text,
-                user_id=message.sender_id,
+                user_id=message.room_id,
                 room_id=message.room_id,
             )
             self._reply(message.room_id, message.event_id, memory_result["answer"])

@@ -49,7 +49,7 @@ class HarnessTest(unittest.TestCase):
                 [
                     {
                         "text": "Need to buy solder wick",
-                        "user_id": "@alice:example",
+                        "user_id": "!room:example",
                         "room_id": "!room:example",
                         "event_id": "$statement",
                         "sender_id": "@alice:example",
@@ -63,7 +63,7 @@ class HarnessTest(unittest.TestCase):
                 [
                     {
                         "query": "What should I buy?",
-                        "user_id": "@alice:example",
+                        "user_id": "!room:example",
                         "room_id": "!room:example",
                     }
                 ],
@@ -73,7 +73,7 @@ class HarnessTest(unittest.TestCase):
                 [
                     {
                         "text": "Need to buy solder wick",
-                        "user_id": "@alice:example",
+                        "user_id": "!room:example",
                         "room_id": "!room:example",
                         "event_id": "$statement",
                         "sender_id": "@alice:example",

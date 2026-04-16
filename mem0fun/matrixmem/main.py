@@ -12,6 +12,7 @@ from .memory import MemoryClient
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_NIO_STORE_PATH = "/data/nio"
 
 
 class NioMatrixGateway:
@@ -21,12 +22,14 @@ class NioMatrixGateway:
         homeserver_url: str,
         access_token: str,
         sync_timeout_ms: int = 30_000,
+        store_path: str = DEFAULT_NIO_STORE_PATH,
         client: Any | None = None,
         room_message_text_type: Any | None = None,
     ) -> None:
         self.homeserver_url = homeserver_url
         self.access_token = access_token
         self.sync_timeout_ms = sync_timeout_ms
+        self.store_path = store_path
         self._room_id = ""
         self._handler: Callable[[Any], Any] | None = None
         self._bot: Any = None
@@ -34,9 +37,13 @@ class NioMatrixGateway:
         self._room_message_text_type = room_message_text_type
 
         if client is None:
-            from nio import AsyncClient
+            from nio import AsyncClient, ClientConfig
 
-            client = AsyncClient(homeserver_url)
+            client = AsyncClient(
+                homeserver_url,
+                store_path=store_path,
+                config=ClientConfig(store_sync_tokens=True),
+            )
 
         self._client = client
         self._client.access_token = access_token
@@ -76,6 +83,7 @@ class NioMatrixGateway:
         self._client.add_event_callback(self._on_room_message, room_message_text_type)
         await self._client.sync_forever(
             timeout=self.sync_timeout_ms,
+            full_state=True,
             sync_filter={
                 "room": {
                     "rooms": [self._room_id],
@@ -192,6 +200,7 @@ def main() -> int:
     gateway = NioMatrixGateway(
         homeserver_url=config.matrix_homeserver_url,
         access_token=config.matrix_access_token,
+        store_path=DEFAULT_NIO_STORE_PATH,
     )
     run_bot(config=config, gateway=gateway)
     return 0

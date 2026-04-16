@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import types
 from pathlib import Path
 import json
 import tempfile
 import threading
 import unittest
+from unittest.mock import patch
 
 from mem0fun.matrixmem.bot import BotMessage, MatrixMemoryBot
 from mem0fun.matrixmem.config import Config
@@ -156,10 +158,11 @@ class FakeAsyncClient:
         self.whoami_calls += 1
         return type("WhoamiResponse", (), {"user_id": "@bot:example"})()
 
-    async def sync_forever(self, timeout=None, sync_filter=None):
+    async def sync_forever(self, timeout=None, full_state=None, sync_filter=None):
         self.sync_forever_calls.append(
             {
                 "timeout": timeout,
+                "full_state": full_state,
                 "sync_filter": sync_filter,
             }
         )
@@ -233,7 +236,7 @@ class BotFlowTest(unittest.TestCase):
                 memory_client.add_calls[0],
                 {
                     "text": "Planning to watch a movie tonight",
-                    "user_id": "@alice:example",
+                    "user_id": "!room:example",
                     "room_id": "!room:example",
                     "event_id": "$event-1",
                     "sender_id": "@alice:example",
@@ -288,7 +291,7 @@ class BotFlowTest(unittest.TestCase):
                 memory_client.query_calls[0],
                 {
                     "query": "What should I do next?",
-                    "user_id": "@alice:example",
+                    "user_id": "!room:example",
                     "room_id": "!room:example",
                     "metadata": None,
                 },
@@ -498,6 +501,7 @@ class MainFlowTest(unittest.TestCase):
             [
                 {
                     "timeout": 30_000,
+                    "full_state": True,
                     "sync_filter": {
                         "room": {
                             "rooms": ["!room:example"],
@@ -509,6 +513,37 @@ class MainFlowTest(unittest.TestCase):
                 }
             ],
         )
+
+    def test_gateway_constructs_nio_client_with_persistent_sync_tokens(self):
+        captured = {}
+
+        class FakeClientConfig:
+            def __init__(self, *, store_sync_tokens=False):
+                captured["store_sync_tokens"] = store_sync_tokens
+
+        class FakeNioClient:
+            def __init__(self, homeserver_url, *, store_path=None, config=None):
+                captured["homeserver_url"] = homeserver_url
+                captured["store_path"] = store_path
+                captured["config"] = config
+                self.access_token = None
+
+        fake_nio = types.SimpleNamespace(
+            AsyncClient=FakeNioClient,
+            ClientConfig=FakeClientConfig,
+            RoomMessageText=object,
+        )
+
+        with patch.dict("sys.modules", {"nio": fake_nio}):
+            gateway = NioMatrixGateway(
+                homeserver_url="https://matrix.example",
+                access_token="secret-token",
+            )
+
+        self.assertEqual(captured["homeserver_url"], "https://matrix.example")
+        self.assertEqual(captured["store_path"], "/data/nio")
+        self.assertTrue(captured["store_sync_tokens"])
+        self.assertEqual(gateway._client.access_token, "secret-token")
 
     def test_gateway_reply_surfaces_send_failures(self):
         fake_client = FakeAsyncClient(room_send_error=RuntimeError("send failed"))

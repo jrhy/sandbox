@@ -7,6 +7,7 @@ This directory runs the single-user Matrix bot that stores raw events locally, w
 - `data/archive` for raw Matrix event history
 - `data/qdrant` for Qdrant vector data
 - `data/kuzu` for the local Kuzu database files
+- `data/nio` for matrix-nio sync tokens and client state
 - `logs` for application logs
 
 ## Layout
