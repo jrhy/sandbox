@@ -93,6 +93,7 @@ while IFS= read -r line; do
 
   # Get the PR details to find the head SHA
   pr_detail=$(run_cmd gh api "repos/${repo_path}/pulls/${pr_number}")
+  is_draft=$(echo "$pr_detail" | jq -r '.draft')
   head_sha=$(echo "$pr_detail" | jq -r '.head.sha')
 
   # Get check runs for this commit (per_page=100 to avoid missing checks beyond default 30)
@@ -118,6 +119,11 @@ while IFS= read -r line; do
 
   # Sanitize title: remove | to prevent SwiftBar parameter injection
   safe_title="${short_title//|/-}"
+
+  # Prepend DRAFT label for draft PRs
+  if [[ "$is_draft" == "true" ]]; then
+    safe_title="DRAFT $safe_title"
+  fi
 
   pr_line="$pr_status"$'\t'"$status_icon"$'\t'"$safe_title"$'\t'"$html_url"$'\t'"$repo_path"$'\t'"$pr_number"
 
