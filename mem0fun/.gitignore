@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+logs/
+
+matrixmem/.env
+matrixmem/data/
+matrixmem/logs/
+matrixmem/.pytest_cache/
+matrixmem/__pycache__/
+matrixmem/tests/__pycache__/

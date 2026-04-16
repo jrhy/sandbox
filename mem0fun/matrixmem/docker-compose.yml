@@ -1,0 +1,33 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.17.1
+    restart: unless-stopped
+    volumes:
+      - ./data/qdrant:/qdrant/storage
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - qdrant
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      KUZU_PATH: /data/kuzu/matrixmem.kuzu
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      PYTHONPATH: /workspace
+      QDRANT_URL: http://qdrant:6333
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./data/archive:/data/archive
+      - ./data/kuzu:/data/kuzu
+      - ./logs:/logs
+      - ../:/workspace/mem0fun
+    working_dir: /workspace/mem0fun/matrixmem
+    command: ["python3", "-m", "mem0fun.matrixmem.main"]
+    restart: unless-stopped
