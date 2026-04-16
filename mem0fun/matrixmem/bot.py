@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from .archive import append_event
 from .classify import classify_message
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +63,13 @@ class MatrixMemoryBot:
         if handling_mode == "ignore":
             return {"handling_mode": "ignore"}
 
+        logger.info(
+            "Handling %s event_id=%s room_id=%s",
+            handling_mode,
+            message.event_id,
+            message.room_id,
+        )
+
         archive_record = self.archive_writer(
             self.archive_path,
             room_id=message.room_id,
@@ -79,6 +90,7 @@ class MatrixMemoryBot:
                 timestamp=message.timestamp,
                 handling_mode=handling_mode,
             )
+            logger.info("Ingested event_id=%s into memory store", message.event_id)
             return {
                 "handling_mode": handling_mode,
                 "archive_record": archive_record,
@@ -92,6 +104,7 @@ class MatrixMemoryBot:
                 room_id=message.room_id,
             )
             self._reply(message.room_id, message.event_id, memory_result["answer"])
+            logger.info("Answered query event_id=%s", message.event_id)
             return {
                 "handling_mode": handling_mode,
                 "archive_record": archive_record,

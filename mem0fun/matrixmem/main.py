@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 from pathlib import Path
 from typing import Any, Callable
 
 from .bot import MatrixMemoryBot
 from .config import Config, load_config
 from .memory import MemoryClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class NioMatrixGateway:
@@ -65,7 +70,9 @@ class NioMatrixGateway:
             room_message_text_type = RoomMessageText
 
         self._loop = asyncio.get_running_loop()
+        logger.info("Connecting to Matrix homeserver %s", self.homeserver_url)
         await self._bind_bot_identity()
+        logger.info("Subscribed to room %s; entering sync loop", self._room_id)
         self._client.add_event_callback(self._on_room_message, room_message_text_type)
         await self._client.sync_forever(
             timeout=self.sync_timeout_ms,
@@ -88,6 +95,7 @@ class NioMatrixGateway:
         self._client.user = user_id
         if self._bot is not None:
             self._bot.bot_user_id = user_id
+        logger.info("Authenticated Matrix user %s", user_id)
 
     async def _on_room_message(self, room: Any, event: Any) -> None:
         if getattr(room, "room_id", "") != self._room_id or self._handler is None:
@@ -170,7 +178,17 @@ def run_bot(
 
 
 def main() -> int:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO").upper(),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
     config = load_config()
+    logger.info(
+        "Starting matrixmem bot for room %s using archive path %s",
+        config.matrix_room_id,
+        "/data/archive/events.jsonl",
+    )
     gateway = NioMatrixGateway(
         homeserver_url=config.matrix_homeserver_url,
         access_token=config.matrix_access_token,
