@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
+import logging
 from typing import Any, Mapping
 
 from .config import (
@@ -13,6 +14,9 @@ from .config import (
     DEFAULT_OLLAMA_EMBED_MODEL,
 )
 from . import prompting
+
+
+logger = logging.getLogger(__name__)
 
 try:
     from mem0 import Memory
@@ -102,9 +106,24 @@ class MemoryClient:
     ) -> Any:
         search_metadata = self._normalize_metadata(metadata)
         search_metadata["source_room_id"] = room_id
-        search_result = self.memory.search(query, user_id=user_id, filters=search_metadata)
+        logger.info(
+            "Searching memory for user_id=%s room_id=%s metadata_keys=%s",
+            user_id,
+            room_id,
+            sorted(search_metadata.keys()),
+        )
+        search_result = self.memory.search(
+            query,
+            user_id=user_id,
+            filters=search_metadata,
+        )
         results = self._normalize_search_results(search_result.get("results"))
         relations = self._normalize_search_results(search_result.get("relations"))
+        logger.info(
+            "Memory search returned %d memories and %d relations",
+            len(results),
+            len(relations),
+        )
         prompt = prompting.build_query_prompt(
             query,
             memories=results,
@@ -114,6 +133,7 @@ class MemoryClient:
         try:
             answer = prompting.synthesize_query_answer(prompt)
         except prompting.NoUsableContextError:
+            logger.info("No usable context returned from memory search; using fallback answer")
             answer = prompting.FALLBACK_QUERY_ANSWER
 
         return {

@@ -18,13 +18,14 @@ class RecordingMemory:
 
     def search(self, query, user_id=None, filters=None, limit=100, threshold=None, rerank=True):
         del limit, threshold, rerank
-        self.search_calls.append(
-            {
-                "query": query,
-                "user_id": user_id,
-                "filters": filters,
-            }
-        )
+        if user_id is None:
+            raise AssertionError("search requires user_id")
+        call = {
+            "query": query,
+            "user_id": user_id,
+            "filters": filters,
+        }
+        self.search_calls.append(call)
         return {
             "results": [
                 {

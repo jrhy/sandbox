@@ -57,6 +57,61 @@ class RecordingMemoryClient:
         }
 
 
+class StatefulMemoryClient:
+    def __init__(self):
+        self.add_calls = []
+        self.query_calls = []
+        self.stored_memories = []
+
+    def add_message(
+        self,
+        *,
+        text,
+        user_id,
+        room_id,
+        event_id,
+        sender_id,
+        timestamp,
+        handling_mode,
+        metadata=None,
+    ):
+        del metadata
+        call = {
+            "text": text,
+            "user_id": user_id,
+            "room_id": room_id,
+            "event_id": event_id,
+            "sender_id": sender_id,
+            "timestamp": timestamp,
+            "handling_mode": handling_mode,
+        }
+        self.add_calls.append(call)
+        self.stored_memories.append(call)
+        return call
+
+    def answer_query(self, query, *, user_id, room_id, metadata=None):
+        del metadata
+        call = {
+            "query": query,
+            "user_id": user_id,
+            "room_id": room_id,
+        }
+        self.query_calls.append(call)
+        matches = [
+            item["text"]
+            for item in self.stored_memories
+            if item["room_id"] == room_id and item["user_id"] == user_id
+        ]
+        answer = "I couldn't find anything relevant yet."
+        if matches:
+            answer = f"You said to buy: {matches[0]}."
+        return {
+            "answer": answer,
+            "results": [{"memory": text} for text in matches],
+            "relations": [],
+        }
+
+
 class RecordingReplySink:
     def __init__(self):
         self.calls = []
@@ -237,6 +292,60 @@ class BotFlowTest(unittest.TestCase):
                     "room_id": "!room:example",
                     "metadata": None,
                 },
+            )
+
+    def test_statement_then_question_uses_stored_memory(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            archive_path = Path(tmpdir) / "events.jsonl"
+            memory_client = StatefulMemoryClient()
+            reply_sink = RecordingReplySink()
+            bot = MatrixMemoryBot(
+                room_id="!room:example",
+                bot_user_id="@bot:example",
+                archive_path=archive_path,
+                memory_client=memory_client,
+                reply_sink=reply_sink,
+            )
+
+            ingest_result = bot.handle_message(
+                BotMessage(
+                    room_id="!room:example",
+                    event_id="$event-10",
+                    sender_id="@alice:example",
+                    timestamp="2026-04-11T23:07:32.874775+00:00",
+                    text="Need to buy solder wick",
+                )
+            )
+            query_result = bot.handle_message(
+                BotMessage(
+                    room_id="!room:example",
+                    event_id="$event-11",
+                    sender_id="@alice:example",
+                    timestamp="2026-04-11T23:07:33.000000+00:00",
+                    text="What should I buy?",
+                )
+            )
+
+            self.assertEqual(ingest_result["handling_mode"], "ingest")
+            self.assertEqual(query_result["handling_mode"], "query")
+            self.assertEqual(memory_client.add_calls[0]["text"], "Need to buy solder wick")
+            self.assertEqual(memory_client.query_calls[0]["query"], "What should I buy?")
+            self.assertEqual(
+                reply_sink.calls,
+                [
+                    {
+                        "room_id": "!room:example",
+                        "event_id": "$event-11",
+                        "text": "You said to buy: Need to buy solder wick.",
+                    }
+                ],
+            )
+
+            archive_lines = archive_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(archive_lines), 2)
+            self.assertEqual(
+                [json.loads(line)["handling_mode"] for line in archive_lines],
+                ["ingest", "query"],
             )
 
     def test_bot_message_is_ignored(self):
