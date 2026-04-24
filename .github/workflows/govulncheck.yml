@@ -33,7 +33,7 @@ jobs:
         with:
           # Keep the scanner on a patched Go 1.26 toolchain so stdlib
           # advisories do not fail the job for already-fixed code paths.
-          go-version: "1.26.1"
+          go-version: "1.26.2"
       - name: Run govulncheck
         working-directory: ${{ matrix.module }}
         run: |
