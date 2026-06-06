@@ -1,0 +1,98 @@
+name: Go upgrades
+
+on:
+  schedule: # monthly on the first day at 12:36 UTC
+    - cron: "36 12 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    env:
+      BRANCH_NAME: jeffr.maintenance-sandbox-go-upgrades
+      GH_TOKEN: ${{ github.token }}
+      MODULES: >-
+        .
+        atmotube
+        matrixfun/bot
+        passkeys-webauthn-demo
+        rc4/rc44csp
+        s3db-rs
+        scala-go-scala
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: true
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+      - name: Upgrade Go modules
+        run: |
+          set -euo pipefail
+
+          go_version="$(go env GOVERSION)"
+          go_version="${go_version#go}"
+
+          git fetch origin "$BRANCH_NAME:refs/remotes/origin/$BRANCH_NAME" || true
+          git checkout -B "$BRANCH_NAME"
+
+          for module in $MODULES; do
+            echo "==> upgrading ${module}"
+            pushd "$module"
+            go get "go@${go_version}"
+            go get -u -t ./...
+            go mod tidy
+            popd
+          done
+      - name: Test upgraded modules
+        run: |
+          set -euo pipefail
+
+          for module in $MODULES; do
+            echo "==> testing ${module}"
+            pushd "$module"
+            go test ./...
+            go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+            popd
+          done
+      - name: Open upgrade pull request
+        run: |
+          set -euo pipefail
+
+          if git diff --quiet; then
+            echo "No Go module upgrades available."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git ls-files -z -- '*go.mod' '*go.sum' | xargs -0 git add --
+          git commit -m "sandbox: monthly Go dependency upgrades"
+          git push --force-with-lease origin "$BRANCH_NAME"
+
+          cat > /tmp/go-upgrades-pr-body.md <<'EOF'
+          ## Summary
+          - updates Go module toolchain directives to the latest stable Go version
+          - runs `go get -u -t ./...` and `go mod tidy` across the maintained Go example modules
+
+          ## Testing
+          - `go test ./...` for each maintained Go module
+          - `govulncheck ./...` for each maintained Go module
+          EOF
+
+          pr_number="$(gh pr list --head "$BRANCH_NAME" --json number --jq '.[0].number')"
+          if [ -n "$pr_number" ]; then
+            gh pr edit "$pr_number" --title "sandbox: monthly Go dependency upgrades" --body-file /tmp/go-upgrades-pr-body.md
+          else
+            gh pr create \
+              --draft \
+              --base main \
+              --head "$BRANCH_NAME" \
+              --title "sandbox: monthly Go dependency upgrades" \
+              --body-file /tmp/go-upgrades-pr-body.md
+          fi

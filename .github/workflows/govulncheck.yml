@@ -3,8 +3,6 @@ name: govulncheck
 on:
   push:
   pull_request:
-  schedule: # daily at 12:36 UTC
-    - cron: "36 12 * * *"
   workflow_dispatch:
 
 permissions:
@@ -31,9 +29,9 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@v6
         with:
-          # Keep the scanner on a patched Go 1.26 toolchain so stdlib
+          # Keep the scanner on the latest stable Go toolchain so stdlib
           # advisories do not fail the job for already-fixed code paths.
-          go-version: "1.26.2"
+          go-version: stable
       - name: Run govulncheck
         working-directory: ${{ matrix.module }}
         run: |
