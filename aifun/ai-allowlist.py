@@ -24,12 +24,14 @@ def load_allowlist():
     Returns dict: command_pattern -> {"subs": None | set, "env": None | set}.
     - subs=None means any subcommand; subs=set means only those prefixes.
     - env=None means no env constraint; env=set means at least one VAR=val must match.
+    - passthrough=True means strip this command and check remaining args recursively.
 
     Config syntax:
       command                        # any usage, no constraints
       command: sub1, sub2            # only these subcommands
       command {VAR=val, VAR2=val2}   # any usage, but require env var
       command: sub1, sub2 {VAR=val}  # subcommands + env constraint
+      command: @passthrough          # transparent wrapper — check remaining args
     """
     rules = {}
     if not os.path.exists(ALLOWLIST_PATH):
@@ -58,10 +60,16 @@ def load_allowlist():
                 }
                 line = line[: brace_match.start()].strip()
 
+            passthrough = False
             if ":" in line:
                 cmd, subs_str = line.split(":", 1)
                 cmd = cmd.strip()
                 subs = {s.strip() for s in subs_str.split(",") if s.strip()}
+                if "@passthrough" in subs:
+                    passthrough = True
+                    subs.discard("@passthrough")
+                    if not subs:
+                        subs = None
             else:
                 cmd = line.strip()
                 subs = None
@@ -72,6 +80,8 @@ def load_allowlist():
                     existing["subs"].update(subs)
                 elif subs is None:
                     existing["subs"] = None
+                if passthrough:
+                    existing["passthrough"] = True
                 # Merge env constraints (union)
                 if env_constraints is not None:
                     if existing["env"] is not None:
@@ -83,7 +93,7 @@ def load_allowlist():
                         existing["hosts"].update(host_constraints)
                     # If existing has no constraint, keep it unconstrained
             else:
-                rules[cmd] = {"subs": subs, "env": env_constraints, "hosts": host_constraints}
+                rules[cmd] = {"subs": subs, "env": env_constraints, "hosts": host_constraints, "passthrough": passthrough}
     return rules
 
 
@@ -577,6 +587,12 @@ def check_command_allowed(simple_cmd, rules, parent_env=None):
         if not _check_env_constraints(merged_env, env_constraints):
             return False  # command matched but env constraint failed
 
+        # Transparent wrapper — strip this command and check remaining args
+        if rule.get("passthrough"):
+            if not args:
+                return True
+            return check_command_allowed(shlex.join(args), rules, parent_env=merged_env)
+
         if allowed_subs is None:
             return _check_hosts(rule, cmd_path, args)
 
@@ -719,6 +735,7 @@ def run_self_tests():
         "aws": {"subs": None, "env": {"AWS_PROFILE=dev/dev-account", "AWS_PROFILE=prod/prod-account"}},
         "curl": {"subs": None, "env": None, "hosts": {"*.example.com", "*.internal.dev"}},
         "cloudflared": {"subs": {"access curl"}, "env": None, "hosts": {"*.example.com", "*.internal.dev"}},
+        "rtk": {"subs": None, "env": None, "hosts": None, "passthrough": True},
     }
 
     tests = [
@@ -831,6 +848,14 @@ def run_self_tests():
         ("echo $(rm -rf /)", False),
         ("echo $(echo $(rm -rf /))", False),  # nested $() — inner denied
         ('echo "$(echo hello)"', True),  # $() inside double quotes still expands
+        # Passthrough wrappers — rtk strips itself and checks the real command
+        ("rtk git status", True),
+        ("rtk gh pr checks 94030", True),
+        ("rtk gh pr view 94030", True),
+        ("rtk rm -rf /", False),           # underlying command denied
+        ("rtk kubectl delete pod foo", False),  # kubectl subcommand not allowed
+        ("rtk", True),                     # bare passthrough with no args
+        ("rtk git status && rtk gh pr view 1", True),  # compound passthrough
     ]
 
     passed = 0
