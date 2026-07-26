@@ -42,7 +42,8 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 	if Verbose {
 		fmt.Printf("\nCandidates:\n")
 	}
-	candidates, mustContain := findCandidates(guesses, ColourizeGuesses(guesses))
+	colours := ColourizeGuesses(guesses)
+	candidates, mustContain := findCandidates(guesses, colours)
 	for i := range candidates {
 		if Verbose {
 			fmt.Printf("letter %d: ", i+1)
@@ -83,6 +84,13 @@ func GetCandidates(guesses []Guess) ([]Candidate, error) {
 	regex = ""
 	for _, match := range corncobMatches {
 		if missingRequired(match, mustContain) {
+			continue
+		}
+		// Positional filtering over-approximates repeated-letter clues.
+		if !matchesGuesses(match, guesses, colours) {
+			if Verbose {
+				fmt.Printf("kicking out %s due to duplicate-letter constraints\n", match)
+			}
 			continue
 		} else if Verbose {
 			fmt.Printf("corncob %s\n", match)
@@ -194,6 +202,51 @@ func ColourizeGuesses(guesses []Guess) [][]int {
 		applyColours(c, g.Word, g.Yellow, YELLOW)
 		applyColours(c, g.Word, g.Green, GREEN)
 		colours[i] = c
+	}
+	return colours
+}
+
+func matchesGuesses(candidate string, guesses []Guess, colours [][]int) bool {
+	for i, guess := range guesses {
+		if !sameColours(scoreGuess(strings.ToUpper(candidate), guess.Word), colours[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameColours(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// scoreGuess applies greens before yellows, so repeated letters consume only
+// the number of unmatched copies available in the target.
+func scoreGuess(target, guess string) []int {
+	colours := make([]int, len(guess))
+	remaining := make(map[byte]int)
+	for i := range guess {
+		if guess[i] == target[i] {
+			colours[i] = GREEN
+			continue
+		}
+		remaining[target[i]]++
+	}
+	for i := range guess {
+		if colours[i] == GREEN {
+			continue
+		}
+		if remaining[guess[i]] > 0 {
+			colours[i] = YELLOW
+			remaining[guess[i]]--
+		}
 	}
 	return colours
 }
@@ -329,26 +382,17 @@ func GuessesForTarget(word string, guesses []string) ([]Guess, error) {
 	res := make([]Guess, len(guesses))
 	word = strings.ToUpper(word)
 	for i, g := range guesses {
-guess := NewGuess(strings.ToUpper(g))
-		couldBeYellow := make(map[byte]int)
-		for j := range g {
-			if guess.Word[j] == word[j] {
+		guess := NewGuess(strings.ToUpper(g))
+		colours := scoreGuess(word, guess.Word)
+		for j, colour := range colours {
+			if colour == GREEN {
 				b := []byte(guess.Green)
 				b[j] = guess.Word[j]
 				guess.Green = string(b)
-			} else {
-				couldBeYellow[word[j]]++
-			}
-		}
-		for j := range g {
-			if guess.Word[j] == word[j] {
-				continue
-			}
-			if couldBeYellow[guess.Word[j]] > 0 {
+			} else if colour == YELLOW {
 				b := []byte(guess.Yellow)
 				b[j] = guess.Word[j]
 				guess.Yellow = string(b)
-				couldBeYellow[guess.Word[j]]--
 			}
 		}
 		res[i] = guess

@@ -36,6 +36,23 @@ func TestSamples(t *testing.T) {
 	}
 }
 
+func TestGetCandidatesHonoursRepeatedLetterCounts(t *testing.T) {
+	guesses, err := GuessesForTarget("pasts", []string{"sells"})
+	require.NoError(t, err)
+
+	candidates, err := GetCandidates(guesses)
+	require.NoError(t, err)
+
+	got := words(candidates)
+	require.Contains(t, got, "pasts")
+	require.NotContains(t, got, "tombs")
+}
+
+func TestScoreGuessRepeatedLetters(t *testing.T) {
+	got := scoreGuess("PASTS", "SELLS")
+	require.Equal(t, []int{YELLOW, 0, 0, 0, GREEN}, got)
+}
+
 func words(c []Candidate) []string {
 	res := make([]string, len(c))
 	for i := range c {
