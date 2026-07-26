@@ -34,6 +34,10 @@ type Guess struct {
 	Green  string
 }
 
+func NewGuess(word string) Guess {
+	return Guess{Word: word, Yellow: ".....", Green: "....."}
+}
+
 func GetCandidates(guesses []Guess) ([]Candidate, error) {
 	if Verbose {
 		fmt.Printf("\nCandidates:\n")
@@ -325,11 +329,7 @@ func GuessesForTarget(word string, guesses []string) ([]Guess, error) {
 	res := make([]Guess, len(guesses))
 	word = strings.ToUpper(word)
 	for i, g := range guesses {
-		guess := Guess{
-			Word:   strings.ToUpper(g),
-			Green:  ".....",
-			Yellow: ".....",
-		}
+guess := NewGuess(strings.ToUpper(g))
 		couldBeYellow := make(map[byte]int)
 		for j := range g {
 			if guess.Word[j] == word[j] {
