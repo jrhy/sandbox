@@ -1,0 +1,5 @@
+:root { font-family: system-ui, sans-serif; color: #222; background: #f7f7f5; }
+body { max-width: 42rem; margin: 0 auto; padding: 2rem 1rem; }
+.guess { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: .5rem; margin: .5rem 0; }
+input { box-sizing: border-box; width: 100%; padding: .65rem; font: inherit; text-transform: uppercase; }
+button { margin: 1rem 0; padding: .7rem 1rem; font: inherit; cursor: pointer; }

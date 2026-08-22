@@ -1,4 +1,4 @@
-package wordle
+package core
 
 import (
 	"testing"
@@ -13,21 +13,21 @@ func TestSamples(t *testing.T) {
 		word string
 	}
 	cases := []testCase{
-		{"guesses/orig1.txt", "retro"},
-		{"guesses/orig2.txt", "sissy"},
-		//{"guesses/375.txt", "gawky"},
-		{"guesses/beady.txt", "beady"},
-		{"guesses/epoxy.txt", "epoxy"},
-		{"guesses/nymph.txt", "nymph"},
-		{"guesses/stove.txt", "stove"},
-		{"guesses/tacit.txt", "tacit"},
-		{"guesses/watch.txt", "watch"},
+		{"../guesses/orig1.txt", "retro"},
+		{"../guesses/orig2.txt", "sissy"},
+		//{"../guesses/375.txt", "gawky"},
+		{"../guesses/beady.txt", "beady"},
+		{"../guesses/epoxy.txt", "epoxy"},
+		{"../guesses/nymph.txt", "nymph"},
+		{"../guesses/stove.txt", "stove"},
+		{"../guesses/tacit.txt", "tacit"},
+		{"../guesses/watch.txt", "watch"},
 	}
 	for _, c := range cases {
 		c := c
 		t.Run(c.path, func(t *testing.T) {
 			t.Parallel()
-			guesses, err := LoadGuesses(c.path)
+			guesses, err := loadGuesses(c.path)
 			require.NoError(t, err)
 			candidates, err := GetCandidates(guesses)
 			require.NoError(t, err)

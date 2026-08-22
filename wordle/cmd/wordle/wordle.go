@@ -2,11 +2,12 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"os"
 
 	flags "github.com/jessevdk/go-flags"
 
-	"github.com/jrhy/sandbox/wordle"
+	wordle "github.com/jrhy/sandbox/wordle/core"
 )
 
 type Flags struct {
@@ -35,7 +36,7 @@ func main() {
 	}
 	var guesses []wordle.Guess
 	if f.GuessFile != "" {
-		guesses, err = wordle.LoadGuesses(f.GuessFile)
+		guesses, err = loadGuesses(f.GuessFile)
 	} else if f.TargetWord != "" {
 		guesses, err = wordle.GuessesForTarget(f.TargetWord, f.Guesses)
 	}
@@ -53,4 +54,16 @@ func main() {
 	for _, c := range candidates {
 		fmt.Printf("%v\n", c)
 	}
+}
+
+func loadGuesses(path string) ([]wordle.Guess, error) {
+	b, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	guesses, err := wordle.ParseGuesses(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return guesses, wordle.NormalizeGuesses(guesses)
 }

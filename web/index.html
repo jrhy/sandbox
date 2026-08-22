@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wordle Solver</title>
+  </head>
+  <body>
+    <main>
+      <h1>Wordle Solver</h1>
+      <p>Enter each guess and mark its green and yellow letters.</p>
+      <section id="board" aria-label="Guesses"></section>
+      <button id="solve" type="button" disabled>Find candidates</button>
+      <p id="status" role="status">Loading solver…</p>
+      <ol id="results"></ol>
+    </main>
+    <script src="/wasm_exec.js"></script>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,4 +1,4 @@
-package wordle
+package core
 
 import (
 	"bufio"
@@ -6,7 +6,6 @@ import (
 	"embed"
 	"errors"
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -158,6 +157,9 @@ func ParseGuesses(b []byte) ([]Guess, error) {
 func NormalizeGuesses(guesses []Guess) error {
 	for i := range guesses {
 		g := &guesses[i]
+		if len(g.Word) != 5 {
+			return fmt.Errorf("guess %d: word must be exactly five letters", i+1)
+		}
 		g.Word = strings.ToUpper(g.Word)
 		g.Yellow = strings.ToUpper(g.Yellow)
 		if err := checkTemplate(g.Word, g.Yellow); err != nil {
@@ -303,22 +305,6 @@ func mustGrep(exp *regexp.Regexp, path string) []string {
 		}
 	}
 	return res
-}
-
-func LoadGuesses(guessFile string) ([]Guess, error) {
-	bytes, err := os.ReadFile(guessFile)
-	if err != nil {
-		return nil, err
-	}
-	guesses, err := ParseGuesses(bytes)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", guessFile, err)
-	}
-	err = NormalizeGuesses(guesses)
-	if err != nil {
-		return nil, err
-	}
-	return guesses, nil
 }
 
 func GuessesForTarget(word string, guesses []string) ([]Guess, error) {

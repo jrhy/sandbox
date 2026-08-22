@@ -1,11 +1,18 @@
 .DELETE_ON_ERROR:
 .ONESHELL:
 SHELL := /bin/bash
+GO ?= go
 
 WORDFREQ_URL = https://raw.githubusercontent.com/aparrish/wordfreq-en-25000/master/wordfreq-en-25000-log.json
 CORNC0B_URL = https://www.cs.bilkent.edu.tr/~arpa/corncob_lowercase.txt
 
 all: wordfreq-en-25000-log.json corncob_lowercase.txt 5letter_freq.txt
+
+wasm:
+	GOOS=js GOARCH=wasm $(GO) build -o ../web/public/wordle.wasm ./cmd/wordle-wasm
+
+web: wasm
+	cd ../web && npm install && npm run build
 
 wordfreq-en-25000-log.json:
 	curl -L -o $@ $(WORDFREQ_URL)
