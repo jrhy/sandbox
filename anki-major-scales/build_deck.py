@@ -34,8 +34,9 @@ CARD_TEMPLATES = [
     {
         "name": "Added accidental",
         "qfmt": (
-            "Moving from {{PreviousKey}} major to {{Key}} major in the "
-            "circle-of-fifths sequence,<br>what accidental is added?"
+            "{{#PreviousKey}}Moving from {{PreviousKey}} major to {{Key}} major "
+            "in the circle-of-fifths sequence,<br>what accidental is added?"
+            "{{/PreviousKey}}"
         ),
         "afmt": "{{FrontSide}}<hr id=answer>{{AddedAccidental}}",
     },

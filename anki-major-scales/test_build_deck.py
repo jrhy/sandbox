@@ -15,6 +15,22 @@ COMMITTED_PACKAGE = PROJECT_DIR / "anki-major-scales.apkg"
 MODEL_ID = "1616089094"
 DECK_ID = "1877552195"
 
+EXPECTED_NOTES = [
+    ("IQR5>Y_{V&", ["major-C", "C", "", "G", "sharps or flats", "0", "", "No sharps or flats"]),
+    ("npg;8f/RV0", ["major-G", "G", "C", "D", "sharp", "1", "F♯", "F♯"]),
+    ("Q*+WPc1<9p", ["major-D", "D", "G", "A", "sharps", "2", "C♯", "F♯ C♯"]),
+    ("NV.4JBo[N+", ["major-A", "A", "D", "E", "sharps", "3", "G♯", "F♯ C♯ G♯"]),
+    ("cF`)>s*bvK", ["major-E", "E", "A", "B", "sharps", "4", "D♯", "F♯ C♯ G♯ D♯"]),
+    ("Ky9gUu)osc", ["major-B", "B", "E", "F♯", "sharps", "5", "A♯", "F♯ C♯ G♯ D♯ A♯"]),
+    ("jq-t>e:.U3", ["major-F-sharp", "F♯", "B", "C♯", "sharps", "6", "E♯", "F♯ C♯ G♯ D♯ A♯ E♯"]),
+    ("Eo`L#V;zG5", ["major-F", "F", "C", "B♭", "flat", "1", "B♭", "B♭"]),
+    ("NbfCrX/gh:", ["major-B-flat", "B♭", "F", "E♭", "flats", "2", "E♭", "B♭ E♭"]),
+    ("xtFD`#FvGs", ["major-E-flat", "E♭", "B♭", "A♭", "flats", "3", "A♭", "B♭ E♭ A♭"]),
+    ("hV5(vJqu1[", ["major-A-flat", "A♭", "E♭", "D♭", "flats", "4", "D♭", "B♭ E♭ A♭ D♭"]),
+    ("tt?T)lJzpl", ["major-D-flat", "D♭", "A♭", "G♭", "flats", "5", "G♭", "B♭ E♭ A♭ D♭ G♭"]),
+    ("AL^[C>.5H^", ["major-G-flat", "G♭", "D♭", "C♭", "flats", "6", "C♭", "B♭ E♭ A♭ D♭ G♭ C♭"]),
+]
+
 
 def package_contract(package_path):
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -56,7 +72,7 @@ def package_contract(package_path):
 
 
 class BuildDeckTest(unittest.TestCase):
-    def test_builds_one_note_with_four_cards(self):
+    def test_builds_major_scale_notes_and_cards(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "anki-major-scales.apkg"
             result = subprocess.run(
@@ -85,26 +101,37 @@ class BuildDeckTest(unittest.TestCase):
                     collection.execute("PRAGMA integrity_check").fetchone()[0],
                     "ok",
                 )
-                guid, fields = collection.execute(
-                    "SELECT guid, flds FROM notes"
-                ).fetchone()
-                self.assertEqual(guid, "Q*+WPc1<9p")
+                actual_notes = {
+                    fields.split("\x1f")[0]: (guid, fields.split("\x1f"))
+                    for guid, fields in collection.execute(
+                        "SELECT guid, flds FROM notes"
+                    )
+                }
                 self.assertEqual(
-                    fields.split("\x1f"),
-                    ["major-D", "D", "G", "A", "sharps", "2", "C♯", "F♯ C♯"],
+                    actual_notes,
+                    {fields[0]: (guid, fields) for guid, fields in EXPECTED_NOTES},
                 )
                 self.assertEqual(
                     collection.execute("SELECT COUNT(*) FROM notes").fetchone()[0],
-                    1,
+                    13,
                 )
                 self.assertEqual(
                     collection.execute("SELECT COUNT(*) FROM cards").fetchone()[0],
-                    4,
+                    51,
                 )
+                card_ordinals_by_id = {}
+                for fields, ordinal in collection.execute(
+                    "SELECT n.flds, c.ord FROM notes n "
+                    "JOIN cards c ON c.nid = n.id ORDER BY n.id, c.ord"
+                ):
+                    note_id = fields.split("\x1f")[0]
+                    card_ordinals_by_id.setdefault(note_id, []).append(ordinal)
                 self.assertEqual(
-                    [row[0] for row in collection.execute("SELECT ord FROM cards ORDER BY ord")],
-                    [0, 1, 2, 3],
+                    card_ordinals_by_id["major-C"],
+                    [0, 2, 3],
                 )
+                for note_id in set(actual_notes) - {"major-C"}:
+                    self.assertEqual(card_ordinals_by_id[note_id], [0, 1, 2, 3])
                 self.assertEqual(
                     collection.execute("SELECT COUNT(*) FROM revlog").fetchone()[0],
                     0,
@@ -143,8 +170,9 @@ class BuildDeckTest(unittest.TestCase):
                         ),
                         (
                             "Added accidental",
-                            "Moving from {{PreviousKey}} major to {{Key}} major in the "
-                            "circle-of-fifths sequence,<br>what accidental is added?",
+                            "{{#PreviousKey}}Moving from {{PreviousKey}} major to "
+                            "{{Key}} major in the circle-of-fifths sequence,<br>"
+                            "what accidental is added?{{/PreviousKey}}",
                             "{{FrontSide}}<hr id=answer>{{AddedAccidental}}",
                         ),
                         (

@@ -1,11 +1,13 @@
 # Anki Major Scales
 
-This project builds an Anki deck for learning major scales and key signatures. The first prototype contains one source note for D major, from which Anki generates four card types:
+This project builds an Anki deck for learning major scales and key signatures. It currently covers C, G, D, A, E, B, F♯, F, B♭, E♭, A♭, D♭, and G♭ major. Each key is represented by one source note, from which Anki generates these card types:
 
 1. Given a major key, recall how many sharps or flats it has.
 2. Moving to that key in the circle-of-fifths sequence, recall the accidental that is added.
 3. Given a major key, recall its complete key signature.
 4. Given a key signature, recall its major key.
+
+C major is the starting point of both accidental sequences, so it has no “added accidental” card. The package therefore contains 13 notes and 51 cards: three for C major and four for every other key.
 
 Each source note has a stable `ID`. The generator derives the Anki note GUID from that ID. Once an ID has been imported into Anki, it must not change: later packages use it to update the existing note without replacing that note or losing its review history. The generator's deck ID, model ID, field order, and card-template order must also remain stable.
 
@@ -22,7 +24,7 @@ python3 -m venv .venv
 .venv/bin/python build_deck.py
 ```
 
-The generator reads `data/major-scales.tsv` and writes `anki-major-scales.apkg`. The package contains no review history or media.
+The generator reads `data/major-scales.tsv` and writes `anki-major-scales.apkg`. The package contains no review history or media. Sharps and flats use Unicode music symbols and appear in standard key-signature order.
 
 ## Workflow
 

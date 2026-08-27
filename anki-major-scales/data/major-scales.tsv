@@ -1,2 +1,14 @@
 ID	Key	PreviousKey	NextKey	AccidentalType	AccidentalCount	AddedAccidental	KeySignature
+major-C	C		G	sharps or flats	0		No sharps or flats
+major-G	G	C	D	sharp	1	F♯	F♯
 major-D	D	G	A	sharps	2	C♯	F♯ C♯
+major-A	A	D	E	sharps	3	G♯	F♯ C♯ G♯
+major-E	E	A	B	sharps	4	D♯	F♯ C♯ G♯ D♯
+major-B	B	E	F♯	sharps	5	A♯	F♯ C♯ G♯ D♯ A♯
+major-F-sharp	F♯	B	C♯	sharps	6	E♯	F♯ C♯ G♯ D♯ A♯ E♯
+major-F	F	C	B♭	flat	1	B♭	B♭
+major-B-flat	B♭	F	E♭	flats	2	E♭	B♭ E♭
+major-E-flat	E♭	B♭	A♭	flats	3	A♭	B♭ E♭ A♭
+major-A-flat	A♭	E♭	D♭	flats	4	D♭	B♭ E♭ A♭ D♭
+major-D-flat	D♭	A♭	G♭	flats	5	G♭	B♭ E♭ A♭ D♭ G♭
+major-G-flat	G♭	D♭	C♭	flats	6	C♭	B♭ E♭ A♭ D♭ G♭ C♭
