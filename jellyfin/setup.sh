@@ -49,6 +49,26 @@ command -v podman >/dev/null || die "podman not found (it ships with Bazzite)"
 note "Creating data dirs under $JF_DATA_DIR"
 mkdir -p "$JF_DATA_DIR/config" "$JF_DATA_DIR/cache"
 
+# helper used by the unit's ExecStartPre: snapshot config + image sidecar
+mkdir -p "$JF_DATA_DIR/bin"
+cat > "$JF_DATA_DIR/bin/snapshot-config.sh" <<'EOF'
+#!/bin/sh
+# snapshot-config.sh — installed by jellyfin/setup.sh. Runs before every
+# service (re)start. Snapshots config/ and records which image last ran
+# (sidecar config-<ts>.image), so a rollback knows exactly what to re-pin.
+S="${1:-$HOME/.local/share/jellyfin}"
+D="$S/config-snapshots"
+mkdir -p "$D" || exit 0
+TS=$(date +%Y%m%d-%H%M%S)
+cp -a --reflink=auto "$S/config" "$D/config-$TS" || exit 0
+[ -f "$D/.current-image" ] && cp "$D/.current-image" "$D/config-$TS.image"
+# rotate: keep the last 6 snapshots (dirs) and their sidecars
+ls -1dt "$D"/config-*/ 2>/dev/null | tail -n +7 | xargs -r rm -rf
+ls -1t "$D"/config-*.image 2>/dev/null | tail -n +7 | xargs -r rm -f
+exit 0
+EOF
+chmod +x "$JF_DATA_DIR/bin/snapshot-config.sh"
+
 # --------------------------------------------------------------- quadlet unit
 # The service is defined declaratively in a Quadlet file; systemd's podman
 # user generator turns it into container-jellyfin.service on daemon-reload
@@ -96,7 +116,7 @@ Volume=${JF_DATA_DIR}/config:/config
 Volume=${JF_DATA_DIR}/cache:/cache
 Volume=${JF_MEDIA_DIR}:/media:ro
 SecurityLabelDisable=true
-# Update policy for `podman auto-update` (driven by the daily
+# Update policy for 'podman auto-update' (driven by the daily
 # podman-auto-update.timer). 'registry' compares the digest of the tag
 # in Image= against the registry, so with a pinned release tag this is
 # normally a no-op; it becomes live if Image= is ever changed to a
@@ -109,9 +129,14 @@ Restart=on-failure
 # Snapshot the config dir before every (re)start — precisely the moment
 # an image change (manual re-pin or podman auto-update) takes effect.
 # Jellyfin upgrades run DB schema migrations that do not reverse
-# cleanly, so these snapshots are the downgrade safety net. Reflink
-# copies are near-free on btrfs; keeps the last 6.
-ExecStartPre=-/bin/sh -c 'S="%h/.local/share/jellyfin"; D="\$S/config-snapshots"; mkdir -p "\$D" && cp -a --reflink=auto "\$S/config" "\$D/config-\$(date +%%Y%%m%%d-%%H%%M%%S)" && ls -1dt "\$D"/config-* | tail -n +7 | xargs -r rm -rf'
+# cleanly, so these snapshots are the downgrade safety net. Each snapshot
+# gets a .image sidecar recording the image that was RUNNING when it was
+# taken (written by ExecStartPost after each successful start — the
+# .container file can't be trusted for this, since it already names the
+# NEW image during an upgrade restart). Reflink copies are near-free on
+# btrfs; keeps the last 6.
+ExecStartPre=-${JF_DATA_DIR}/bin/snapshot-config.sh ${JF_DATA_DIR}
+ExecStartPost=-/bin/sh -c 'podman inspect jellyfin --format "{{.ImageName}}" > "${JF_DATA_DIR}/config-snapshots/.current-image" 2>/dev/null'
 
 [Install]
 WantedBy=default.target

@@ -79,14 +79,44 @@ Updates touch two layers, each with its own safety net:
 - **Config/data**: every service start (including right before an upgrade
   restart, whether manual or auto) snapshots `config/` to
   `~/.local/share/jellyfin/config-snapshots/` (reflink copy, last 6 kept).
+  Each snapshot has a sidecar `config-<ts>.image` recording the image
+  that was RUNNING when it was taken (captured from the container after
+  each successful start — during an upgrade restart the `.container`
+  file already names the NEW image, so it can't be trusted for this).
 
-Downgrading = re-pin: set `Image=` back to the older tag (or a digest,
-`Image=docker.io/jellyfin/jellyfin@sha256:...`), then
-`systemctl --user daemon-reload && systemctl --user restart container-jellyfin`.
+### Rollback — worked example
+
+```sh
+S=~/.local/share/jellyfin
+
+# 1. list snapshots and the image each was taken under
+ls -1t "$S"/config-snapshots/
+for f in "$S"/config-snapshots/*.image; do
+    echo "$(basename "$f") -> $(cat "$f")"; done
+
+# 2. stop the server
+systemctl --user stop container-jellyfin.service
+
+# 3. restore config from the snapshot taken under the good version
+rm -rf "$S/config"
+cp -a "$S/config-snapshots/config-YYYYMMDD-HHMMSS" "$S/config"
+
+# 4. re-pin Image= in the Quadlet file to the tag from that snapshot's
+#    .image sidecar (older tag, or a digest: ...jellyfin@sha256:...)
+$EDITOR ~/.config/containers/systemd/container-jellyfin.container
+
+# 5. reload + start (ExecStartPre takes a fresh snapshot first)
+systemctl --user daemon-reload
+systemctl --user start container-jellyfin.service
+
+# 6. verify
+./verify.sh
+```
+
 Old images are kept locally by podman (auto-update never deletes them),
-so this is instant and offline. Caveat: Jellyfin DB schema migrations do
-not reverse cleanly — restore `config/` from `config-snapshots/` when
-stepping back across a version that migrated the database.
+so re-pinning is instant and offline. Pair the config restore with the
+re-pin: restarting a NEW image on an OLD config just re-runs the
+database migrations you were escaping.
 ```
 
 ## Notes / caveats
