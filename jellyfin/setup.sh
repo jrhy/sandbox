@@ -96,9 +96,22 @@ Volume=${JF_DATA_DIR}/config:/config
 Volume=${JF_DATA_DIR}/cache:/cache
 Volume=${JF_MEDIA_DIR}:/media:ro
 SecurityLabelDisable=true
+# Update policy for `podman auto-update` (driven by the daily
+# podman-auto-update.timer). 'registry' compares the digest of the tag
+# in Image= against the registry, so with a pinned release tag this is
+# normally a no-op; it becomes live if Image= is ever changed to a
+# mutable tag like :latest. NOTE: 'registry' requires a fully-qualified
+# image name (registry/repo:tag).
+AutoUpdate=registry
 
 [Service]
 Restart=on-failure
+# Snapshot the config dir before every (re)start — precisely the moment
+# an image change (manual re-pin or podman auto-update) takes effect.
+# Jellyfin upgrades run DB schema migrations that do not reverse
+# cleanly, so these snapshots are the downgrade safety net. Reflink
+# copies are near-free on btrfs; keeps the last 6.
+ExecStartPre=-/bin/sh -c 'S="%h/.local/share/jellyfin"; D="\$S/config-snapshots"; mkdir -p "\$D" && cp -a --reflink=auto "\$S/config" "\$D/config-\$(date +%%Y%%m%%d-%%H%%M%%S)" && ls -1dt "\$D"/config-* | tail -n +7 | xargs -r rm -rf'
 
 [Install]
 WantedBy=default.target
@@ -119,6 +132,15 @@ for _ in 1 2 3; do
 done
 systemctl --user is-active --quiet container-jellyfin.service \
     || die "container-jellyfin.service failed to start; check: journalctl --user -u container-jellyfin"
+
+# Daily update *checks* (no-op while Image= is pinned to a release tag;
+# see AutoUpdate= in the Quadlet file).
+if systemctl --user list-unit-files podman-auto-update.timer --no-legend 2>/dev/null | grep -q '^podman-auto-update.timer'; then
+    note "Enabling podman-auto-update.timer (daily update checks)"
+    systemctl --user enable --now podman-auto-update.timer
+else
+    echo "NOTE: podman-auto-update.timer not found; skipping periodic update checks"
+fi
 
 # --------------------------------------------------------------- helper API functions
 http_code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }

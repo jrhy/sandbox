@@ -34,7 +34,10 @@ Kinoite-style host, and installs entirely inside your home directory.
 5. Enables remote access (LAN clients) via `POST /System/Configuration/network`
 6. Creates a library from the media dir and triggers a scan
 7. Enables `loginctl` linger so the server starts at **boot without login**
-8. Prints a summary and runs `verify.sh`
+8. Adds `AutoUpdate=registry` to the container and enables the daily
+   `podman-auto-update.timer` (inert while the image tag is pinned —
+   see *Upgrading and downgrading* below)
+9. Prints a summary and runs `verify.sh`
 
 Admin credentials are stored in `~/.local/share/jellyfin/ADMIN_CREDENTIALS`
 (mode 600). Pass `JF_ADMIN_PASSWORD=...` to set your own instead.
@@ -61,6 +64,29 @@ podman logs -f jellyfin
 # update: bump the tag in setup.sh (or the .container file), then:
 podman pull docker.io/jellyfin/jellyfin:10.11.11 && systemctl --user restart container-jellyfin
 # (or re-run ./setup.sh with JF_IMAGE=... to rewrite the Quadlet file)
+
+## Upgrading and downgrading
+
+Updates touch two layers, each with its own safety net:
+
+- **Image**: the daily `podman-auto-update.timer` runs `podman auto-update`,
+  which checks the registry digest of the tag in `Image=`. With a pinned
+  release tag that digest doesn't change, so it's a no-op; if you ever
+  switch `Image=` to a mutable tag like `:latest`, updates happen
+  automatically. `podman auto-update` rolls back to the previous image
+  automatically if the unit fails to come up after the restart (detected
+  via sd_notify) — but it cannot detect a functionally-broken server.
+- **Config/data**: every service start (including right before an upgrade
+  restart, whether manual or auto) snapshots `config/` to
+  `~/.local/share/jellyfin/config-snapshots/` (reflink copy, last 6 kept).
+
+Downgrading = re-pin: set `Image=` back to the older tag (or a digest,
+`Image=docker.io/jellyfin/jellyfin@sha256:...`), then
+`systemctl --user daemon-reload && systemctl --user restart container-jellyfin`.
+Old images are kept locally by podman (auto-update never deletes them),
+so this is instant and offline. Caveat: Jellyfin DB schema migrations do
+not reverse cleanly — restore `config/` from `config-snapshots/` when
+stepping back across a version that migrated the database.
 ```
 
 ## Notes / caveats
