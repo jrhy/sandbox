@@ -1,9 +1,9 @@
 # Jellyfin on Bazzite — per-user, sudo-free
 
-Jellyfin media server running as a **rootless Podman container** managed
-by a `systemctl --user` unit. No sudo, no system packages, no rpm-ostree
-layering — works on any Bazzite / Silverblue / Kinoite-style host, and
-installs entirely inside your home directory.
+Jellyfin media server running as a **rootless Podman container** defined by a
+**Quadlet** file and managed by a `systemctl --user` unit. No sudo, no system
+packages, no rpm-ostree layering — works on any Bazzite / Silverblue /
+Kinoite-style host, and installs entirely inside your home directory.
 
 ## Files
 
@@ -14,17 +14,18 @@ installs entirely inside your home directory.
 
 1. Creates `~/.local/share/jellyfin/{config,cache}`
 2. Pulls the **pinned** image (default `docker.io/jellyfin/jellyfin:10.11.11`,
-   override with `JF_IMAGE`), creates the container and generates
-   `~/.config/systemd/user/container-jellyfin.service` from its spec via
-   `podman generate systemd --new`. Because the unit embeds the full
-   `podman run` flags, systemd rebuilds the container on every start —
-   if the container is ever removed, the next unit start restores it.
-   It runs `docker.io/jellyfin/jellyfin` with:
+   override with `JF_IMAGE`) and writes a **Quadlet** file,
+   `~/.config/containers/systemd/container-jellyfin.container`, which
+   systemd's podman user generator turns into `container-jellyfin.service`.
+   The generated unit rebuilds the container on every start — if the
+   container is ever removed, the next unit start restores it. (Re-running
+   setup.sh also migrates an older generate-systemd install automatically.)
+   The container runs `docker.io/jellyfin/jellyfin` with:
    - config/cache from your home
    - your media dir mounted **read-only** at `/media` inside the container
      (resolved to `/var/mnt/...` — rootless podman cannot bind through the
      `/mnt → /var/mnt` symlink on Bazzite)
-   - `--security-opt label=disable` so SELinux doesn't relabel the shared
+   - `SecurityLabelDisable=true` so SELinux doesn't relabel the shared
      media drive; the `:ro` mount keeps writes out of it either way
 3. Enables and starts the unit, waits for the HTTP API
 4. Completes the first-run wizard over the API (Jellyfin 10.11 quirk:
@@ -57,10 +58,9 @@ systemctl --user restart container-jellyfin
 journalctl --user -u container-jellyfin -f
 podman logs -f jellyfin
 
-# update to the pinned tag (bump the tag in setup.sh first, or override):
-JF_IMAGE=docker.io/jellyfin/jellyfin:10.11.12 ./setup.sh   # recreates unit + container
-# or, for an already-installed unit after pulling a new image:
+# update: bump the tag in setup.sh (or the .container file), then:
 podman pull docker.io/jellyfin/jellyfin:10.11.11 && systemctl --user restart container-jellyfin
+# (or re-run ./setup.sh with JF_IMAGE=... to rewrite the Quadlet file)
 ```
 
 ## Notes / caveats
@@ -75,7 +75,7 @@ podman pull docker.io/jellyfin/jellyfin:10.11.11 && systemctl --user restart con
 
 ```sh
 systemctl --user disable --now container-jellyfin
-rm ~/.config/systemd/user/container-jellyfin.service ~/.config/systemd/user/default.target.wants/container-jellyfin.service
+rm ~/.config/containers/systemd/container-jellyfin.container
 podman rm -f jellyfin 2>/dev/null; podman rmi docker.io/jellyfin/jellyfin:10.11.11
 rm -rf ~/.local/share/jellyfin
 systemctl --user daemon-reload

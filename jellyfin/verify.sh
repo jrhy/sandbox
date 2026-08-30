@@ -32,9 +32,16 @@ check(){ "$@" >/dev/null 2>&1 && ok "$1" || bad "$1"; }
 podman ps --format '{{.Names}}' | grep -qx jellyfin \
     && ok "podman container running" || bad "podman container running"
 
-# 3. HTTP API reachable
-INFO=$(curl -s --max-time 10 "$B/System/Info/Public")
-if echo "$INFO" | python3 -c 'import json,sys;json.load(sys.stdin)' 2>/dev/null; then
+# 3. HTTP API reachable (poll briefly — the server may still be starting
+#    right after a container restart)
+INFO=""
+for _ in $(seq 1 15); do
+    INFO=$(curl -s --max-time 10 "$B/System/Info/Public")
+    echo "$INFO" | python3 -c 'import json,sys;json.load(sys.stdin)' 2>/dev/null && break
+    INFO=""
+    sleep 2
+done
+if [ -n "$INFO" ]; then
     VER=$(echo "$INFO" | python3 -c 'import json,sys;print(json.load(sys.stdin)["Version"])')
     ok "HTTP API reachable (Jellyfin $VER)"
 else
