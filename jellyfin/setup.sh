@@ -13,7 +13,9 @@
 #   JF_ADMIN_PASSWORD   Admin password (default: generated, saved to
 #                       $JF_DATA_DIR/ADMIN_CREDENTIALS, mode 600)
 #   JF_LIBRARY_NAME     Library display name (default Movies)
-#   JF_IMAGE            Container image (default docker.io/jellyfin/jellyfin:latest)
+#   JF_IMAGE            Container image (default: pinned
+#                       docker.io/jellyfin/jellyfin:10.11.11; override
+#                       for a different tag/release)
 #
 # The script is idempotent: re-run it to repair or reconfigure.
 set -euo pipefail
@@ -24,7 +26,7 @@ JF_MEDIA_DIR="${JF_MEDIA_DIR:-/var/mnt/hdd/media}"
 JF_ADMIN_USER="${JF_ADMIN_USER:-admin}"
 JF_ADMIN_PASSWORD="${JF_ADMIN_PASSWORD:-}"
 JF_LIBRARY_NAME="${JF_LIBRARY_NAME:-Movies}"
-JF_IMAGE="${JF_IMAGE:-docker.io/jellyfin/jellyfin:latest}"
+JF_IMAGE="${JF_IMAGE:-docker.io/jellyfin/jellyfin:10.11.11}"
 JF_LIBRARY_TYPE="${JF_LIBRARY_TYPE:-movies}"   # movies / tvshows / music / ...
 
 JF_DATA_DIR="${JF_DATA_DIR:-$HOME/.local/share/jellyfin}"
@@ -48,35 +50,34 @@ mkdir -p "$JF_DATA_DIR/config" "$JF_DATA_DIR/cache" \
          "$(dirname "$JF_UNIT")"
 
 # --------------------------------------------------------------- unit file
+# The unit is GENERATED from the container spec with
+# `podman generate systemd --new`: the ExecStart embeds the full
+# `podman run` flags, so systemd rebuilds the container from this spec
+# on every start. If the container is ever removed, the next unit start
+# restores it (self-healing); `podman pull` + restart picks up image
+# updates. (podman marks this command deprecated in favor of Quadlet,
+# but the generated unit is stable and dependency-free.)
+#
 # --security-opt label=disable: avoids SELinux relabeling of the
 #   (possibly root-owned, shared) media directory. The mount is :ro.
 # --replace: makes restarts robust against name collisions.
-note "Writing systemd user unit: $JF_UNIT"
-cat > "$JF_UNIT" <<EOF
-[Unit]
-Description=Jellyfin media server (rootless podman container)
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-ExecStart=/usr/bin/podman run --rm --replace --name jellyfin \\
-    -p ${JF_PORT}:8096 -p 8920:8920 \\
-    -v ${JF_DATA_DIR}/config:/config \\
-    -v ${JF_DATA_DIR}/cache:/cache \\
-    -v ${JF_MEDIA_DIR}:/media:ro \\
-    --security-opt label=disable \\
-    ${JF_IMAGE}
-ExecStop=/usr/bin/podman stop -t 30 jellyfin
-
-[Install]
-WantedBy=default.target
-EOF
-
-systemctl --user daemon-reload
-
-# --------------------------------------------------------------- container
 note "Pulling image: $JF_IMAGE"
 podman pull "$JF_IMAGE"
+
+note "Creating container + generating systemd user unit: $JF_UNIT"
+podman rm -f jellyfin 2>/dev/null || true
+podman run -d --name jellyfin \
+    -p "${JF_PORT}:8096" -p 8920:8920 \
+    -v "${JF_DATA_DIR}/config:/config" \
+    -v "${JF_DATA_DIR}/cache:/cache" \
+    -v "${JF_MEDIA_DIR}:/media:ro" \
+    --security-opt label=disable \
+    "${JF_IMAGE}"
+podman generate systemd --name jellyfin --new > "$JF_UNIT"
+# cosmetic: human-readable unit Description
+sed -i 's|^Description=.*|Description=Jellyfin media server (rootless podman container)|' "$JF_UNIT"
+
+systemctl --user daemon-reload
 
 note "Enabling + starting service"
 systemctl --user enable --now container-jellyfin.service

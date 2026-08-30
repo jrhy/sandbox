@@ -13,8 +13,13 @@ installs entirely inside your home directory.
 ## What setup.sh does
 
 1. Creates `~/.local/share/jellyfin/{config,cache}`
-2. Writes `~/.config/systemd/user/container-jellyfin.service` running
-   `docker.io/jellyfin/jellyfin:latest` with:
+2. Pulls the **pinned** image (default `docker.io/jellyfin/jellyfin:10.11.11`,
+   override with `JF_IMAGE`), creates the container and generates
+   `~/.config/systemd/user/container-jellyfin.service` from its spec via
+   `podman generate systemd --new`. Because the unit embeds the full
+   `podman run` flags, systemd rebuilds the container on every start —
+   if the container is ever removed, the next unit start restores it.
+   It runs `docker.io/jellyfin/jellyfin` with:
    - config/cache from your home
    - your media dir mounted **read-only** at `/media` inside the container
      (resolved to `/var/mnt/...` — rootless podman cannot bind through the
@@ -52,8 +57,10 @@ systemctl --user restart container-jellyfin
 journalctl --user -u container-jellyfin -f
 podman logs -f jellyfin
 
-# update the server image:
-podman pull docker.io/jellyfin/jellyfin:latest && systemctl --user restart container-jellyfin
+# update to the pinned tag (bump the tag in setup.sh first, or override):
+JF_IMAGE=docker.io/jellyfin/jellyfin:10.11.12 ./setup.sh   # recreates unit + container
+# or, for an already-installed unit after pulling a new image:
+podman pull docker.io/jellyfin/jellyfin:10.11.11 && systemctl --user restart container-jellyfin
 ```
 
 ## Notes / caveats
@@ -62,12 +69,14 @@ podman pull docker.io/jellyfin/jellyfin:latest && systemctl --user restart conta
   firewall is blocking port 8096 — allow it in the desktop Firewall settings.
 - Media is read-only to Jellyfin; downloaded metadata/artwork lives in
   `~/.local/share/jellyfin/config`.
+- The unit is self-healing: `podman rm -f jellyfin` and the service
+  rebuilds the container on the next start.
 - Full removal:
 
 ```sh
 systemctl --user disable --now container-jellyfin
 rm ~/.config/systemd/user/container-jellyfin.service ~/.config/systemd/user/default.target.wants/container-jellyfin.service
-podman rm -f jellyfin 2>/dev/null; podman rmi docker.io/jellyfin/jellyfin:latest
+podman rm -f jellyfin 2>/dev/null; podman rmi docker.io/jellyfin/jellyfin:10.11.11
 rm -rf ~/.local/share/jellyfin
 systemctl --user daemon-reload
 ```
