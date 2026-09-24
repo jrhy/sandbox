@@ -10,7 +10,6 @@ package main
 
 import (
 	"bytes"
-	"strconv"
 	"context"
 	"encoding/json"
 	"flag"
@@ -22,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -98,14 +98,14 @@ func defaultCacheDir() string {
 // ---------------------------------------------------------------- server
 
 type server struct {
-	jira  *jiraClient
-	gh    *githubClient
+	jira    *jiraClient
+	gh      *githubClient
 	repo    string
 	project string
 	prMin   int
 	cache   *fileCache
-	ttl   time.Duration
-	bus   *bus
+	ttl     time.Duration
+	bus     *bus
 
 	mu      sync.Mutex
 	fetches map[string]bool // resource ids with an in-flight refresh or prefetch
