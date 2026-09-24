@@ -48,7 +48,8 @@ ul.files li { font-family:ui-monospace,monospace; font-size:13px } .add{color:va
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html><title>gojira</title><style>` + css + `</style>
 <header><a href="/"><b>gojira</b></a><form action="/"><input name="q" placeholder="GOLD-352, 117792, or a Jira/GitHub URL" autofocus></form></header>
-<div class="idx"><h2>Cached</h2><ul>{{range .IDs}}<li><a href="/{{.}}">{{.}}</a></li>{{else}}<li>Nothing yet. Type a key above.</li>{{end}}</ul></div>`))
+<div class="idx"><h2>Cached</h2><ul>{{range .IDs}}<li><a href="/{{.}}">{{.}}</a></li>{{else}}<li>Nothing yet. Type a key above.</li>{{end}}</ul></div>
+<script>document.addEventListener('keydown', e => { if (e.key === '/' && e.target.tagName !== 'INPUT') { e.preventDefault(); document.querySelector('input[name=q]').focus(); } });</script>`))
 
 var errorTmpl = template.Must(template.New("error").Parse(`<!doctype html><title>{{.ID}} · error</title><style>` + css + `</style>
 <header><a href="/"><b>gojira</b></a><form action="/"><input name="q"></form></header>
@@ -72,8 +73,11 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
     document.getElementById('main').innerHTML = await r.text();
     state.textContent = 'updated just now'; state.className = 'updated';
   });
-  document.addEventListener('keydown', e => { if (e.key === 'r' && e.target.tagName !== 'INPUT') {
-    state.textContent = 'refreshing…'; fetch('/refresh/' + id + '?force=1'); } });
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'r') { state.textContent = 'refreshing…'; fetch('/refresh/' + id + '?force=1'); }
+    if (e.key === '/') { e.preventDefault(); const q = document.querySelector('input[name=q]'); q.focus(); q.select(); }
+  });
 })();
 </script></body></html>`))
 

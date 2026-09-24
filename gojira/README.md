@@ -14,7 +14,7 @@ Jira descriptions and comments link to the local PR page.
 The page loads from a local file cache, opens a Server-Sent Events stream, and
 the server refetches the issue from the Jira REST API. If the content changed,
 the page body is swapped in place and the header says "updated just now";
-otherwise it says "up to date". Press `r` on a page to force a refetch.
+otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch.
 
 Every local link on a page you view (linked issues, subtasks, epics, PRs
 mentioned in comments) is prefetched in the background so the next click is a
