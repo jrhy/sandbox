@@ -42,6 +42,15 @@ GitHub uses `GITHUB_TOKEN` or falls back to `gh auth token`.
 
 So if `jira` and `gh` already work, `gojira` works with no configuration.
 
+## Local access control
+
+Anything that can reach loopback (Docker Desktop containers included) could
+otherwise read your private issues and PRs through gojira. On first start it
+writes a random token to `~/Library/Application Support/gojira/token` (mode
+0600) and rejects every request without a matching cookie. Visit
+`http://localhost:9393/auth/<token>` once per browser to set the cookie; the
+launcher does this for you. Override the location with `-token-file`.
+
 ## Install and run at login (macOS)
 
     go install .

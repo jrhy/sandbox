@@ -39,6 +39,7 @@ func main() {
 	repo := flag.String("repo", os.Getenv("GOJIRA_REPO"), "default owner/name for /pull/N links")
 	project := flag.String("project", os.Getenv("GOJIRA_PROJECT"), "default Jira project so a bare number like 352 means PROJECT-352")
 	prMin := flag.Int("pr-min", envInt("GOJIRA_PR_MIN", 0), "bare numbers >= this are PRs, below are Jira issues in the default project (0: always Jira when -project is set)")
+	tokenPath := flag.String("token-file", defaultTokenPath(), "local access token; browsers authenticate once via /auth/<token>")
 	prewarmTTL := flag.Duration("prewarm-ttl", 10*time.Minute, "prefetch linked resources not cached within this window (0 disables)")
 	prewarmWorkers := flag.Int("prewarm-workers", 2, "max concurrent prefetches")
 	flag.Parse()
@@ -52,6 +53,10 @@ func main() {
 		log.Printf("github disabled: %v", err)
 	}
 	if err := os.MkdirAll(*cacheDir, 0o700); err != nil {
+		log.Fatal(err)
+	}
+	token, err := loadOrCreateToken(*tokenPath)
+	if err != nil {
 		log.Fatal(err)
 	}
 
@@ -77,8 +82,12 @@ func main() {
 	mux.HandleFunc("GET /events/{id...}", s.events)
 	mux.HandleFunc("GET /refresh/{id...}", s.refresh)
 	mux.HandleFunc("GET /attachment/{id}/{name}", s.attachment)
-	log.Printf("gojira listening on http://%s (cache %s, jira %s, repo %q)", *addr, *cacheDir, jira.base, *repo)
-	log.Fatal(http.ListenAndServe(*addr, mux))
+
+	root := http.NewServeMux()
+	root.HandleFunc("GET /auth/{token}", authHandler(token))
+	root.Handle("/", requireAuth(token, mux))
+	log.Printf("gojira listening on http://%s (cache %s, jira %s, repo %q, token %s)", *addr, *cacheDir, jira.base, *repo, *tokenPath)
+	log.Fatal(http.ListenAndServe(*addr, root))
 }
 
 func envInt(name string, def int) int {
