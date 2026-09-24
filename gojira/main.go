@@ -1,16 +1,19 @@
-// gojira is a local, read-only Jira browser that serves the last cached
-// render of an issue instantly and refreshes it in the background.
+// gojira is a local, read-only browser for Jira issues and GitHub pull
+// requests that serves the last cached render instantly and refreshes it in
+// the background.
 //
 //	http://localhost:9393/GOLD-352
+//	http://localhost:9393/pull/123               (default repo, -repo flag)
+//	http://localhost:9393/gh/owner/repo/pull/123
 package main
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net/http"
@@ -22,24 +25,34 @@ import (
 	"time"
 )
 
-var issueKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]+-\d+$`)
+var (
+	issueKeyRe = regexp.MustCompile(`^[A-Z][A-Z0-9_]+-\d+$`)
+	prIDRe     = regexp.MustCompile(`^gh/([^/]+)/([^/]+)/pull/(\d+)$`)
+)
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:9393", "listen address")
 	cacheDir := flag.String("cache", defaultCacheDir(), "cache directory")
-	ttl := flag.Duration("ttl", 30*time.Second, "don't refetch an issue viewed within this window")
+	ttl := flag.Duration("ttl", 30*time.Second, "don't refetch a resource viewed within this window")
+	repo := flag.String("repo", os.Getenv("GOJIRA_REPO"), "default owner/name for /pull/N links")
 	flag.Parse()
 
-	client, err := newJiraClient()
+	jira, err := newJiraClient()
 	if err != nil {
 		log.Fatal(err)
+	}
+	gh, err := newGitHubClient()
+	if err != nil {
+		log.Printf("github disabled: %v", err)
 	}
 	if err := os.MkdirAll(*cacheDir, 0o700); err != nil {
 		log.Fatal(err)
 	}
 
 	s := &server{
-		jira:    client,
+		jira:    jira,
+		gh:      gh,
+		repo:    *repo,
 		cache:   &fileCache{dir: *cacheDir},
 		ttl:     *ttl,
 		bus:     newBus(),
@@ -47,11 +60,13 @@ func main() {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
-	mux.HandleFunc("GET /{key}", s.issuePage)
-	mux.HandleFunc("GET /{key}/events", s.issueEvents)
-	mux.HandleFunc("GET /{key}/refresh", s.issueRefresh)
+	mux.HandleFunc("GET /{key}", s.jiraPage)
+	mux.HandleFunc("GET /pull/{n}", s.defaultPRPage)
+	mux.HandleFunc("GET /gh/{owner}/{repo}/pull/{n}", s.prPage)
+	mux.HandleFunc("GET /events/{id...}", s.events)
+	mux.HandleFunc("GET /refresh/{id...}", s.refresh)
 	mux.HandleFunc("GET /attachment/{id}/{name}", s.attachment)
-	log.Printf("gojira listening on http://%s (cache %s, jira %s)", *addr, *cacheDir, client.base)
+	log.Printf("gojira listening on http://%s (cache %s, jira %s, repo %q)", *addr, *cacheDir, jira.base, *repo)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
@@ -66,51 +81,116 @@ func defaultCacheDir() string {
 
 type server struct {
 	jira  *jiraClient
+	gh    *githubClient
+	repo  string
 	cache *fileCache
 	ttl   time.Duration
 	bus   *bus
 
 	mu      sync.Mutex
-	fetches map[string]bool // keys with an in-flight refresh
+	fetches map[string]bool // resource ids with an in-flight refresh
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
-	if key := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("q"))); key != "" {
-		http.Redirect(w, r, "/"+key, http.StatusFound)
+	if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
+		http.Redirect(w, r, s.resolveQuery(q), http.StatusFound)
 		return
 	}
-	keys, _ := s.cache.list()
-	render(w, indexTmpl, map[string]any{"Keys": keys})
+	ids, _ := s.cache.list()
+	render(w, indexTmpl, map[string]any{"IDs": ids})
 }
 
-func (s *server) issuePage(w http.ResponseWriter, r *http.Request) {
+// resolveQuery turns whatever was typed in the search box into a local path:
+// an issue key, a PR number, or a pasted Jira/GitHub URL.
+func (s *server) resolveQuery(q string) string {
+	if m := ghPRURLRe.FindStringSubmatch(q); m != nil {
+		return "/gh/" + m[1] + "/" + m[2] + "/pull/" + m[3]
+	}
+	if i := strings.LastIndex(q, "/browse/"); i >= 0 {
+		q = q[i+len("/browse/"):]
+	}
+	q = strings.TrimPrefix(q, "#")
+	if regexp.MustCompile(`^\d+$`).MatchString(q) {
+		return "/pull/" + q
+	}
+	return "/" + strings.ToUpper(q)
+}
+
+func (s *server) jiraPage(w http.ResponseWriter, r *http.Request) {
 	key := strings.ToUpper(r.PathValue("key"))
 	if !issueKeyRe.MatchString(key) {
 		http.NotFound(w, r)
 		return
 	}
-	cached, err := s.cache.get(key)
-	if err == nil {
-		if time.Since(cached.FetchedAt) > s.ttl {
-			s.refreshAsync(key)
-		}
-		render(w, issueTmpl, s.viewData(key, cached, true))
-		return
-	}
-	// Cache miss: fetch synchronously so the first visit is complete.
-	fresh, err := s.fetch(r.Context(), key)
-	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		render(w, errorTmpl, map[string]any{"Key": key, "Error": err.Error()})
-		return
-	}
-	render(w, issueTmpl, s.viewData(key, fresh, false))
+	s.page(w, r, key)
 }
 
-// issueEvents streams "updated" events for an issue via Server-Sent Events so
-// the page can swap in a fresh render without reloading.
-func (s *server) issueEvents(w http.ResponseWriter, r *http.Request) {
-	key := strings.ToUpper(r.PathValue("key"))
+func (s *server) defaultPRPage(w http.ResponseWriter, r *http.Request) {
+	if s.repo == "" {
+		http.Error(w, "no default repo: start with -repo owner/name", http.StatusNotFound)
+		return
+	}
+	s.page(w, r, "gh/"+s.repo+"/pull/"+r.PathValue("n"))
+}
+
+func (s *server) prPage(w http.ResponseWriter, r *http.Request) {
+	s.page(w, r, "gh/"+r.PathValue("owner")+"/"+r.PathValue("repo")+"/pull/"+r.PathValue("n"))
+}
+
+// page is the stale-while-revalidate core: serve the cache if present and
+// refresh in the background; otherwise fetch synchronously.
+func (s *server) page(w http.ResponseWriter, r *http.Request, id string) {
+	cached, err := s.cache.get(id)
+	if err == nil {
+		if time.Since(cached.FetchedAt) > s.ttl {
+			s.refreshAsync(id)
+		}
+		s.renderPage(w, id, cached, true)
+		return
+	}
+	fresh, err := s.fetch(r.Context(), id)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		render(w, errorTmpl, map[string]any{"ID": id, "Error": err.Error()})
+		return
+	}
+	s.renderPage(w, id, fresh, false)
+}
+
+func (s *server) renderPage(w http.ResponseWriter, id string, ci *cached, stale bool) {
+	body, title := s.body(id, ci)
+	render(w, pageTmpl, map[string]any{
+		"ID": id, "Title": title, "Body": body,
+		"Age": time.Since(ci.FetchedAt).Round(time.Second), "Stale": stale,
+	})
+}
+
+// body renders the swappable part of the page for either resource kind.
+func (s *server) body(id string, ci *cached) (template.HTML, string) {
+	var buf bytes.Buffer
+	var title string
+	if prIDRe.MatchString(id) {
+		v, err := parsePR(ci.Raw, s.jira.base)
+		if err != nil {
+			return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>"), id
+		}
+		title = fmt.Sprintf("#%d %s", v.Number, v.Title)
+		prBodyTmpl.Execute(&buf, map[string]any{"PR": v, "FetchedAt": ci.FetchedAt})
+	} else {
+		v, err := parseIssue(ci.Raw, s.jira.base, s.repo)
+		if err != nil {
+			return template.HTML("<pre>" + template.HTMLEscapeString(err.Error()) + "</pre>"), id
+		}
+		title = id + " · " + v.Summary
+		issueBodyTmpl.Execute(&buf, map[string]any{"Issue": v, "FetchedAt": ci.FetchedAt, "JiraBase": s.jira.base})
+	}
+	return template.HTML(buf.String()), title
+}
+
+// events streams "updated"/"fresh"/"error" events for a resource via
+// Server-Sent Events so the page can swap in a fresh render without reloading.
+func (s *server) events(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	fl, ok := w.(http.Flusher)
@@ -118,7 +198,7 @@ func (s *server) issueEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
 		return
 	}
-	ch, unsub := s.bus.subscribe(key)
+	ch, unsub := s.bus.subscribe(id)
 	defer unsub()
 	fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
@@ -133,27 +213,27 @@ func (s *server) issueEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// issueRefresh returns the freshly rendered body fragment (used by the page
-// after an "updated" event, and by a manual refresh button).
-func (s *server) issueRefresh(w http.ResponseWriter, r *http.Request) {
-	key := strings.ToUpper(r.PathValue("key"))
+// refresh returns the freshly rendered body fragment; ?force=1 refetches first.
+func (s *server) refresh(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
 	if r.URL.Query().Get("force") == "1" {
-		if _, err := s.fetch(r.Context(), key); err != nil {
+		if _, err := s.fetch(r.Context(), id); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
 	}
-	cached, err := s.cache.get(key)
+	ci, err := s.cache.get(id)
 	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	render(w, bodyTmpl, s.viewData(key, cached, false))
+	body, _ := s.body(id, ci)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	io.WriteString(w, string(body))
 }
 
 func (s *server) attachment(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	resp, err := s.jira.get(r.Context(), "/rest/api/3/attachment/content/"+id)
+	resp, err := s.jira.get(r.Context(), "/rest/api/3/attachment/content/"+r.PathValue("id"))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -164,112 +244,109 @@ func (s *server) attachment(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-func (s *server) refreshAsync(key string) {
+func (s *server) refreshAsync(id string) {
 	s.mu.Lock()
-	if s.fetches[key] {
+	if s.fetches[id] {
 		s.mu.Unlock()
 		return
 	}
-	s.fetches[key] = true
+	s.fetches[id] = true
 	s.mu.Unlock()
 	go func() {
 		defer func() {
 			s.mu.Lock()
-			delete(s.fetches, key)
+			delete(s.fetches, id)
 			s.mu.Unlock()
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		if _, err := s.fetch(ctx, key); err != nil {
-			log.Printf("refresh %s: %v", key, err)
-			s.bus.publish(key, event{"error", err.Error()})
+		if _, err := s.fetch(ctx, id); err != nil {
+			log.Printf("refresh %s: %v", id, err)
+			s.bus.publish(id, event{"error", err.Error()})
 		}
 	}()
 }
 
-// fetch pulls the issue from Jira, stores it, and publishes "updated" only if
-// the content actually changed, or "fresh" if it did not.
-func (s *server) fetch(ctx context.Context, key string) (*cachedIssue, error) {
-	raw, err := s.jira.issue(ctx, key)
+// fetch pulls the resource from its source, stores it, and publishes "updated"
+// only if the content actually changed, or "fresh" if it did not.
+func (s *server) fetch(ctx context.Context, id string) (*cached, error) {
+	var raw json.RawMessage
+	var err error
+	if m := prIDRe.FindStringSubmatch(id); m != nil {
+		if s.gh == nil {
+			return nil, fmt.Errorf("github not configured")
+		}
+		raw, err = s.gh.pullRequest(ctx, m[1], m[2], m[3])
+	} else {
+		raw, err = s.jira.issue(ctx, id)
+	}
 	if err != nil {
 		return nil, err
 	}
-	prev, _ := s.cache.get(key)
+	prev, _ := s.cache.get(id)
 	now := time.Now()
-	ci := &cachedIssue{Key: key, FetchedAt: now, Raw: raw}
+	ci := &cached{ID: id, FetchedAt: now, Raw: raw}
 	if err := s.cache.put(ci); err != nil {
 		return nil, err
 	}
-	changed := prev == nil || !bytes.Equal(prev.Raw, raw)
-	if changed {
-		s.bus.publish(key, event{"updated", now.Format(time.RFC3339)})
-	} else {
-		s.bus.publish(key, event{"fresh", now.Format(time.RFC3339)})
+	kind := "fresh"
+	if prev == nil || !bytes.Equal(prev.Raw, raw) {
+		kind = "updated"
 	}
+	s.bus.publish(id, event{kind, now.Format(time.RFC3339)})
 	return ci, nil
-}
-
-func (s *server) viewData(key string, ci *cachedIssue, stale bool) map[string]any {
-	v, err := parseIssue(ci.Raw, s.jira.base)
-	if err != nil {
-		v = &issueView{Key: key, Summary: "(unparseable cache entry: " + err.Error() + ")"}
-	}
-	return map[string]any{
-		"Key":       key,
-		"Issue":     v,
-		"FetchedAt": ci.FetchedAt,
-		"Age":       time.Since(ci.FetchedAt).Round(time.Second),
-		"Stale":     stale,
-		"JiraBase":  s.jira.base,
-	}
 }
 
 // ---------------------------------------------------------------- cache
 
-type cachedIssue struct {
-	Key       string          `json:"key"`
+type cached struct {
+	ID        string          `json:"id"`
 	FetchedAt time.Time       `json:"fetched_at"`
 	Raw       json.RawMessage `json:"raw"`
 }
 
 type fileCache struct{ dir string }
 
-func (c *fileCache) path(key string) string { return filepath.Join(c.dir, key+".json") }
+// path maps a resource id (which may contain slashes) to one flat file.
+func (c *fileCache) path(id string) string {
+	return filepath.Join(c.dir, strings.ReplaceAll(id, "/", "__")+".json")
+}
 
-func (c *fileCache) get(key string) (*cachedIssue, error) {
-	b, err := os.ReadFile(c.path(key))
+func (c *fileCache) get(id string) (*cached, error) {
+	b, err := os.ReadFile(c.path(id))
 	if err != nil {
 		return nil, err
 	}
-	var ci cachedIssue
+	var ci cached
 	if err := json.Unmarshal(b, &ci); err != nil {
 		return nil, err
 	}
 	return &ci, nil
 }
 
-func (c *fileCache) put(ci *cachedIssue) error {
+func (c *fileCache) put(ci *cached) error {
 	b, err := json.Marshal(ci)
 	if err != nil {
 		return err
 	}
-	tmp := c.path(ci.Key) + ".tmp"
+	tmp := c.path(ci.ID) + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, c.path(ci.Key))
+	return os.Rename(tmp, c.path(ci.ID))
 }
 
+// list returns cached ids, most recently fetched first.
 func (c *fileCache) list() ([]string, error) {
 	entries, err := os.ReadDir(c.dir)
 	if err != nil {
 		return nil, err
 	}
-	type kt struct {
-		key string
-		t   time.Time
+	type it struct {
+		id string
+		t  time.Time
 	}
-	var all []kt
+	var all []it
 	for _, e := range entries {
 		if !strings.HasSuffix(e.Name(), ".json") {
 			continue
@@ -278,19 +355,19 @@ func (c *fileCache) list() ([]string, error) {
 		if err != nil {
 			continue
 		}
-		all = append(all, kt{strings.TrimSuffix(e.Name(), ".json"), info.ModTime()})
+		id := strings.ReplaceAll(strings.TrimSuffix(e.Name(), ".json"), "__", "/")
+		all = append(all, it{id, info.ModTime()})
 	}
-	// Most recently fetched first.
 	for i := 1; i < len(all); i++ {
 		for j := i; j > 0 && all[j].t.After(all[j-1].t); j-- {
 			all[j], all[j-1] = all[j-1], all[j]
 		}
 	}
-	keys := make([]string, 0, len(all))
+	ids := make([]string, 0, len(all))
 	for _, k := range all {
-		keys = append(keys, k.key)
+		ids = append(ids, k.id)
 	}
-	return keys, nil
+	return ids, nil
 }
 
 // ---------------------------------------------------------------- events
@@ -304,94 +381,28 @@ type bus struct {
 
 func newBus() *bus { return &bus{subs: map[string]map[chan event]struct{}{}} }
 
-func (b *bus) subscribe(key string) (<-chan event, func()) {
+func (b *bus) subscribe(id string) (<-chan event, func()) {
 	ch := make(chan event, 4)
 	b.mu.Lock()
-	if b.subs[key] == nil {
-		b.subs[key] = map[chan event]struct{}{}
+	if b.subs[id] == nil {
+		b.subs[id] = map[chan event]struct{}{}
 	}
-	b.subs[key][ch] = struct{}{}
+	b.subs[id][ch] = struct{}{}
 	b.mu.Unlock()
 	return ch, func() {
 		b.mu.Lock()
-		delete(b.subs[key], ch)
+		delete(b.subs[id], ch)
 		b.mu.Unlock()
 	}
 }
 
-func (b *bus) publish(key string, ev event) {
+func (b *bus) publish(id string, ev event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	for ch := range b.subs[key] {
+	for ch := range b.subs[id] {
 		select {
 		case ch <- ev:
 		default: // slow subscriber; drop rather than block the fetcher
 		}
 	}
-}
-
-// ---------------------------------------------------------------- jira
-
-type jiraClient struct {
-	base  string
-	user  string
-	token string
-	http  *http.Client
-}
-
-func newJiraClient() (*jiraClient, error) {
-	base := strings.TrimRight(os.Getenv("JIRA_SERVER"), "/")
-	user := os.Getenv("JIRA_USER")
-	token := os.Getenv("JIRA_API_TOKEN")
-	if base == "" || user == "" {
-		// Fall back to the jira-cli config so one login serves both tools.
-		cfg := readJiraCLIConfig()
-		if base == "" {
-			base = strings.TrimRight(cfg["server"], "/")
-		}
-		if user == "" {
-			user = cfg["login"]
-		}
-	}
-	if base == "" || user == "" {
-		return nil, errors.New("set JIRA_SERVER and JIRA_USER (or configure jira-cli)")
-	}
-	if token == "" {
-		token = tokenFromNetrc(base)
-	}
-	if token == "" {
-		token = tokenFromKeychain(user)
-	}
-	if token == "" {
-		return nil, errors.New("no API token: set JIRA_API_TOKEN, add a .netrc entry, or log in with jira-cli")
-	}
-	return &jiraClient{base: base, user: user, token: token, http: &http.Client{Timeout: 60 * time.Second}}, nil
-}
-
-func (c *jiraClient) get(ctx context.Context, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.base+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.SetBasicAuth(c.user, c.token)
-	req.Header.Set("Accept", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode/100 != 2 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
-		return nil, fmt.Errorf("jira %s: %s: %s", path, resp.Status, strings.TrimSpace(string(body)))
-	}
-	return resp, nil
-}
-
-func (c *jiraClient) issue(ctx context.Context, key string) (json.RawMessage, error) {
-	resp, err := c.get(ctx, "/rest/api/3/issue/"+key+"?expand=renderedFields,names")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
 }

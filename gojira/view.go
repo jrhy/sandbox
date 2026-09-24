@@ -57,7 +57,7 @@ var (
 	issueKeyInTextRe = regexp.MustCompile(`(^|[\s(>])([A-Z][A-Z0-9_]+-\d+)\b`)
 )
 
-func parseIssue(raw json.RawMessage, base string) (*issueView, error) {
+func parseIssue(raw json.RawMessage, base, _ string) (*issueView, error) {
 	var doc struct {
 		Key            string                     `json:"key"`
 		Fields         map[string]json.RawMessage `json:"fields"`
@@ -187,12 +187,14 @@ func parseIssue(raw json.RawMessage, base string) (*issueView, error) {
 	return v, nil
 }
 
+// localizeHTML rewrites Jira-rendered HTML so attachments load through the
+// local proxy and links to other issues or GitHub PRs stay inside gojira.
 func localizeHTML(s, base string) template.HTML {
 	s = attachmentURLRe.ReplaceAllString(s, "/attachment/$1/x")
 	s = secureAttachRe.ReplaceAllString(s, "/attachment/$1/x")
-	// Links to other issues on the same instance become local.
 	s = strings.ReplaceAll(s, `href="`+base+`/browse/`, `href="/`)
 	s = strings.ReplaceAll(s, `href="/browse/`, `href="/`)
+	s = ghPRURLRe.ReplaceAllString(s, "/gh/$1/$2/pull/$3")
 	return template.HTML(s)
 }
 
