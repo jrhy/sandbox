@@ -14,7 +14,12 @@ Jira descriptions and comments link to the local PR page.
 The page loads from a local file cache, opens a Server-Sent Events stream, and
 the server refetches the issue from the Jira REST API. If the content changed,
 the page body is swapped in place and the header says "updated just now";
-otherwise it says "up to date". Press `r` on an issue page to force a refetch.
+otherwise it says "up to date". Press `r` on a page to force a refetch.
+
+Every local link on a page you view (linked issues, subtasks, epics, PRs
+mentioned in comments) is prefetched in the background so the next click is a
+cache hit. Prefetched pages are stored but not scanned, so this goes exactly one
+link deep and cannot recurse.
 
 Jira descriptions and comments use Jira's own server-rendered HTML
 (`expand=renderedFields`); PR bodies, comments, reviews and review threads use
@@ -42,4 +47,5 @@ So if `jira` and `gh` already work, `gojira` works with no configuration.
 
 Flags: `-addr` (default `127.0.0.1:9393`), `-cache` (default
 `~/Library/Caches/gojira`), `-ttl` (default 30s, skip refetch when the cache
-is younger than this), `-repo owner/name` (or `GOJIRA_REPO`) for `/pull/N`.
+is younger than this), `-repo owner/name` (or `GOJIRA_REPO`) for `/pull/N`, `-prewarm-ttl` (default
+10m, 0 disables link prefetching), `-prewarm-workers` (default 2).

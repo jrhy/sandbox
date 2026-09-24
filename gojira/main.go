@@ -35,6 +35,8 @@ func main() {
 	cacheDir := flag.String("cache", defaultCacheDir(), "cache directory")
 	ttl := flag.Duration("ttl", 30*time.Second, "don't refetch a resource viewed within this window")
 	repo := flag.String("repo", os.Getenv("GOJIRA_REPO"), "default owner/name for /pull/N links")
+	prewarmTTL := flag.Duration("prewarm-ttl", 10*time.Minute, "prefetch linked resources not cached within this window (0 disables)")
+	prewarmWorkers := flag.Int("prewarm-workers", 2, "max concurrent prefetches")
 	flag.Parse()
 
 	jira, err := newJiraClient()
@@ -57,6 +59,9 @@ func main() {
 		ttl:     *ttl,
 		bus:     newBus(),
 		fetches: map[string]bool{},
+
+		prewarmTTL: *prewarmTTL,
+		prewarmSem: make(chan struct{}, max(1, *prewarmWorkers)),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
@@ -88,7 +93,10 @@ type server struct {
 	bus   *bus
 
 	mu      sync.Mutex
-	fetches map[string]bool // resource ids with an in-flight refresh
+	fetches map[string]bool // resource ids with an in-flight refresh or prefetch
+
+	prewarmTTL time.Duration
+	prewarmSem chan struct{}
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
@@ -159,6 +167,7 @@ func (s *server) page(w http.ResponseWriter, r *http.Request, id string) {
 
 func (s *server) renderPage(w http.ResponseWriter, id string, ci *cached, stale bool) {
 	body, title := s.body(id, ci)
+	go s.prewarm(id, body)
 	render(w, pageTmpl, map[string]any{
 		"ID": id, "Title": title, "Body": body,
 		"Age": time.Since(ci.FetchedAt).Round(time.Second), "Stale": stale,
