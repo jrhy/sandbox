@@ -7,7 +7,10 @@ the last cached render in a few milliseconds and refreshes it in the background.
     http://localhost:9393/pull/123                 # default repo (-repo owner/name)
     http://localhost:9393/gh/owner/repo/pull/123
 
-The search box accepts a key, a PR number, or a pasted Jira/GitHub URL.
+The search box (and the URL path) accepts a key, a bare number, `#N` for a PR,
+or a pasted Jira/GitHub URL. A bare number means `PROJECT-N` when `-project`
+is set; `#N` always means a PR; and with `-pr-min 10000`, bare numbers of five
+or more digits are PRs too, since PR and issue numbers rarely share a magnitude.
 Jira keys in PR titles and bodies link to the local Jira page, and PR URLs in
 Jira descriptions and comments link to the local PR page.
 
@@ -47,5 +50,6 @@ So if `jira` and `gh` already work, `gojira` works with no configuration.
 
 Flags: `-addr` (default `127.0.0.1:9393`), `-cache` (default
 `~/Library/Caches/gojira`), `-ttl` (default 30s, skip refetch when the cache
-is younger than this), `-repo owner/name` (or `GOJIRA_REPO`) for `/pull/N`, `-prewarm-ttl` (default
+is younger than this), `-repo owner/name` (or `GOJIRA_REPO`) for `/pull/N`, `-project KEY` (or
+`GOJIRA_PROJECT`) and `-pr-min N` (or `GOJIRA_PR_MIN`) for bare numbers, `-prewarm-ttl` (default
 10m, 0 disables link prefetching), `-prewarm-workers` (default 2).

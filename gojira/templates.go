@@ -47,7 +47,7 @@ ul.files li { font-family:ui-monospace,monospace; font-size:13px } .add{color:va
 `
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html><title>gojira</title><style>` + css + `</style>
-<header><a href="/"><b>gojira</b></a><form action="/"><input name="q" placeholder="GOLD-352, 117792, or a Jira/GitHub URL" autofocus></form></header>
+<header><a href="/"><b>gojira</b></a><form action="/"><input name="q" placeholder="352, GOLD-352, #117792, or a URL" autofocus></form></header>
 <div class="idx"><h2>Cached</h2><ul>{{range .IDs}}<li><a href="/{{.}}">{{.}}</a></li>{{else}}<li>Nothing yet. Type a key above.</li>{{end}}</ul></div>
 <script>document.addEventListener('keydown', e => { if (e.key === '/' && e.target.tagName !== 'INPUT') { e.preventDefault(); document.querySelector('input[name=q]').focus(); } });</script>`))
 
@@ -60,7 +60,7 @@ var errorTmpl = template.Must(template.New("error").Parse(`<!doctype html><title
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta charset="utf-8">
 <title>{{.Title}}</title><style>` + css + `</style></head><body>
 <header><a href="/"><b>gojira</b></a> <span id="state">{{if .Stale}}cached {{.Age}} ago · refreshing…{{else}}fresh{{end}}</span>
-<form action="/"><input name="q" placeholder="GOLD-352, 117792, or a URL"></form></header>
+<form action="/"><input name="q" placeholder="352, GOLD-352, #117792, or a URL"></form></header>
 <main id="main">{{.Body}}</main>
 <script>
 (function(){

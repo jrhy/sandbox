@@ -3,12 +3,14 @@
 // the background.
 //
 //	http://localhost:9393/GOLD-352
+//	http://localhost:9393/352                    (default project, -project flag)
 //	http://localhost:9393/pull/123               (default repo, -repo flag)
 //	http://localhost:9393/gh/owner/repo/pull/123
 package main
 
 import (
 	"bytes"
+	"strconv"
 	"context"
 	"encoding/json"
 	"flag"
@@ -35,6 +37,8 @@ func main() {
 	cacheDir := flag.String("cache", defaultCacheDir(), "cache directory")
 	ttl := flag.Duration("ttl", 30*time.Second, "don't refetch a resource viewed within this window")
 	repo := flag.String("repo", os.Getenv("GOJIRA_REPO"), "default owner/name for /pull/N links")
+	project := flag.String("project", os.Getenv("GOJIRA_PROJECT"), "default Jira project so a bare number like 352 means PROJECT-352")
+	prMin := flag.Int("pr-min", envInt("GOJIRA_PR_MIN", 0), "bare numbers >= this are PRs, below are Jira issues in the default project (0: always Jira when -project is set)")
 	prewarmTTL := flag.Duration("prewarm-ttl", 10*time.Minute, "prefetch linked resources not cached within this window (0 disables)")
 	prewarmWorkers := flag.Int("prewarm-workers", 2, "max concurrent prefetches")
 	flag.Parse()
@@ -55,6 +59,8 @@ func main() {
 		jira:    jira,
 		gh:      gh,
 		repo:    *repo,
+		project: strings.ToUpper(*project),
+		prMin:   *prMin,
 		cache:   &fileCache{dir: *cacheDir},
 		ttl:     *ttl,
 		bus:     newBus(),
@@ -75,6 +81,13 @@ func main() {
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
+func envInt(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil {
+		return v
+	}
+	return def
+}
+
 func defaultCacheDir() string {
 	if d, err := os.UserCacheDir(); err == nil {
 		return filepath.Join(d, "gojira")
@@ -87,8 +100,10 @@ func defaultCacheDir() string {
 type server struct {
 	jira  *jiraClient
 	gh    *githubClient
-	repo  string
-	cache *fileCache
+	repo    string
+	project string
+	prMin   int
+	cache   *fileCache
 	ttl   time.Duration
 	bus   *bus
 
@@ -117,15 +132,34 @@ func (s *server) resolveQuery(q string) string {
 	if i := strings.LastIndex(q, "/browse/"); i >= 0 {
 		q = q[i+len("/browse/"):]
 	}
-	q = strings.TrimPrefix(q, "#")
-	if regexp.MustCompile(`^\d+$`).MatchString(q) {
-		return "/pull/" + q
+	if n, err := strconv.Atoi(strings.TrimPrefix(q, "#")); err == nil {
+		return s.resolveNumber(n, strings.HasPrefix(q, "#"))
 	}
 	return "/" + strings.ToUpper(q)
 }
 
+// resolveNumber decides what a bare number means. "#" always means a PR.
+// Otherwise a default project turns small numbers into issues, and -pr-min
+// (when set) turns large numbers into PRs; in most repos PR numbers and issue
+// numbers live in different magnitudes, so this is unambiguous in practice.
+func (s *server) resolveNumber(n int, forcePR bool) string {
+	num := strconv.Itoa(n)
+	switch {
+	case forcePR, s.project == "":
+		return "/pull/" + num
+	case s.prMin > 0 && n >= s.prMin:
+		return "/pull/" + num
+	default:
+		return "/" + s.project + "-" + num
+	}
+}
+
 func (s *server) jiraPage(w http.ResponseWriter, r *http.Request) {
 	key := strings.ToUpper(r.PathValue("key"))
+	if n, err := strconv.Atoi(key); err == nil {
+		http.Redirect(w, r, s.resolveNumber(n, false), http.StatusFound)
+		return
+	}
 	if !issueKeyRe.MatchString(key) {
 		http.NotFound(w, r)
 		return
