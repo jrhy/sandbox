@@ -17,14 +17,14 @@ Jira descriptions and comments link to the local PR page.
 The page loads from a local file cache, opens a Server-Sent Events stream, and
 the server refetches the issue from the Jira REST API. If the content changed,
 the page body is swapped in place and the header says "updated just now";
-otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch. Ctrl-Tab opens an
-alt-tab style switcher over your recently viewed issues and PRs: keep holding
-Ctrl, press Tab (Shift-Tab reverses) to cycle, release Ctrl to go. Chrome
-reserves Ctrl-Tab in tabbed windows, so use app mode
-(`open -na "Google Chrome" --args --app=http://localhost:9393`) or press
-backtick for the same list driven by arrows or `j`/`k`, Enter, and Esc. The
-stack is server-side (`recent.json` in the cache dir), so it survives restarts,
-and only pages you view count, not prefetches.
+otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch. Backtick opens a
+switcher over your recently viewed issues and PRs, most recent first: `j`/`k`
+or arrows move, Enter goes, Esc closes. The stack is server-side
+(`recent.json` in the cache dir), so it survives restarts, and only pages you
+view count, not prefetches. Ctrl-Tab drives the same switcher alt-tab style
+(hold Ctrl, Tab to cycle, release to go), but browsers reserve Ctrl-Tab for
+their own tabs, so it only works in a tabless window such as Chrome app mode
+(`open -na "Google Chrome" --args --app=http://localhost:9393`).
 
 Every local link on a page you view (linked issues, subtasks, epics, PRs
 mentioned in comments) is prefetched in the background so the next click is a
