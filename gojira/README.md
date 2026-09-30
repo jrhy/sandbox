@@ -17,7 +17,14 @@ Jira descriptions and comments link to the local PR page.
 The page loads from a local file cache, opens a Server-Sent Events stream, and
 the server refetches the issue from the Jira REST API. If the content changed,
 the page body is swapped in place and the header says "updated just now";
-otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch.
+otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch. Ctrl-Tab opens an
+alt-tab style switcher over your recently viewed issues and PRs: keep holding
+Ctrl, press Tab (Shift-Tab reverses) to cycle, release Ctrl to go. Chrome
+reserves Ctrl-Tab in tabbed windows, so use app mode
+(`open -na "Google Chrome" --args --app=http://localhost:9393`) or press
+backtick for the same list driven by arrows or `j`/`k`, Enter, and Esc. The
+stack is server-side (`recent.json` in the cache dir), so it survives restarts,
+and only pages you view count, not prefetches.
 
 Every local link on a page you view (linked issues, subtasks, epics, PRs
 mentioned in comments) is prefetched in the background so the next click is a

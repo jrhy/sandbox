@@ -67,6 +67,7 @@ func main() {
 		project: strings.ToUpper(*project),
 		prMin:   *prMin,
 		cache:   &fileCache{dir: *cacheDir},
+		recent:  loadRecent(filepath.Join(*cacheDir, "recent.json")),
 		ttl:     *ttl,
 		bus:     newBus(),
 		fetches: map[string]bool{},
@@ -82,6 +83,7 @@ func main() {
 	mux.HandleFunc("GET /events/{id...}", s.events)
 	mux.HandleFunc("GET /refresh/{id...}", s.refresh)
 	mux.HandleFunc("GET /attachment/{id}/{name}", s.attachment)
+	mux.HandleFunc("GET /recent", s.recentJSON)
 
 	root := http.NewServeMux()
 	root.HandleFunc("GET /auth/{token}", authHandler(token))
@@ -113,6 +115,7 @@ type server struct {
 	project string
 	prMin   int
 	cache   *fileCache
+	recent  *recentList
 	ttl     time.Duration
 	bus     *bus
 
@@ -128,8 +131,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, s.resolveQuery(q), http.StatusFound)
 		return
 	}
-	ids, _ := s.cache.list()
-	render(w, indexTmpl, map[string]any{"IDs": ids})
+	render(w, indexTmpl, map[string]any{"Recent": s.recent.list()})
 }
 
 // resolveQuery turns whatever was typed in the search box into a local path:
@@ -210,6 +212,7 @@ func (s *server) page(w http.ResponseWriter, r *http.Request, id string) {
 
 func (s *server) renderPage(w http.ResponseWriter, id string, ci *cached, stale bool) {
 	body, title := s.body(id, ci)
+	s.recent.touch(id, title)
 	go s.prewarm(id, body)
 	render(w, pageTmpl, map[string]any{
 		"ID": id, "Title": title, "Body": body,
@@ -282,6 +285,13 @@ func (s *server) refresh(w http.ResponseWriter, r *http.Request) {
 	body, _ := s.body(id, ci)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	io.WriteString(w, string(body))
+}
+
+// recentJSON feeds the Ctrl-Tab switcher: most recently viewed first.
+func (s *server) recentJSON(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(s.recent.list())
 }
 
 func (s *server) attachment(w http.ResponseWriter, r *http.Request) {

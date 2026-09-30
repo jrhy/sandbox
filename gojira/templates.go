@@ -44,11 +44,16 @@ ul.links { list-style:none; padding:0; margin:0 } ul.links li { margin:2px 0 } u
 ul.files li { font-family:ui-monospace,monospace; font-size:13px } .add{color:var(--ok)} .del{color:var(--bad)}
 .idx { padding:20px } .idx li { margin:3px 0 }
 .err { padding:20px; color:var(--bad) }
+#switcher { position:fixed; inset:0; background:rgba(0,0,0,.35); display:none; align-items:flex-start; justify-content:center; padding-top:12vh; z-index:10 }
+#switcher.on { display:flex }
+#switcher ul { list-style:none; margin:0; padding:6px; background:var(--bg); border:1px solid var(--line); border-radius:8px; box-shadow:0 12px 40px rgba(0,0,0,.35); width:min(640px,90vw); max-height:70vh; overflow:auto }
+#switcher li { padding:6px 10px; border-radius:5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis } #switcher li.sel { background:var(--ind) }
+#switcher li .id { color:var(--muted); font-size:12px; margin-right:8px }
 `
 
 var indexTmpl = template.Must(template.New("index").Parse(`<!doctype html><title>gojira</title><style>` + css + `</style>
 <header><a href="/"><b>gojira</b></a><form action="/"><input name="q" placeholder="352, GOLD-352, #117792, or a URL" autofocus></form></header>
-<div class="idx"><h2>Cached</h2><ul>{{range .IDs}}<li><a href="/{{.}}">{{.}}</a></li>{{else}}<li>Nothing yet. Type a key above.</li>{{end}}</ul></div>
+<div class="idx"><h2>Recently viewed</h2><ul>{{range .Recent}}<li><a href="/{{.ID}}">{{.Title}}</a></li>{{else}}<li>Nothing yet. Type a key above.</li>{{end}}</ul></div>
 <script>document.addEventListener('keydown', e => { if (e.key === '/' && e.target.tagName !== 'INPUT') { e.preventDefault(); document.querySelector('input[name=q]').focus(); } });</script>`))
 
 var errorTmpl = template.Must(template.New("error").Parse(`<!doctype html><title>{{.ID}} · error</title><style>` + css + `</style>
@@ -62,9 +67,35 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
 <header><a href="/"><b>gojira</b></a> <span id="state">{{if .Stale}}cached {{.Age}} ago · refreshing…{{else}}fresh{{end}}</span>
 <form action="/"><input name="q" placeholder="352, GOLD-352, #117792, or a URL"></form></header>
 <main id="main">{{.Body}}</main>
+<div id="switcher"><ul id="switcher-list"></ul></div>
 <script>
 (function(){
   const id = {{.ID}}, state = document.getElementById('state');
+  // Ctrl-Tab switcher over the server's most-recently-viewed stack. Hold Ctrl,
+  // press Tab to cycle (Shift reverses), release Ctrl to go. Backtick opens the
+  // same list for browsers that reserve Ctrl-Tab; arrows/Enter/Esc drive it.
+  const sw = document.getElementById('switcher'), list = document.getElementById('switcher-list');
+  let items = [], sel = 0, open = false, viaCtrl = false;
+  function draw(){ list.innerHTML = items.map((e,i) => '<li class="'+(i===sel?'sel':'')+'"><span class="id">'+e.id+'</span>'+e.title.replace(/</g,'&lt;')+'</li>').join('');
+    const el = list.children[sel]; if (el) el.scrollIntoView({block:'nearest'}); }
+  async function show(ctrl){ if (!open) { const r = await fetch('/recent'); items = (await r.json()).filter(e => e.id !== id); if (!items.length) return;
+      sel = 0; open = true; viaCtrl = ctrl; sw.classList.add('on'); } draw(); }
+  function move(d){ if (!items.length) return; sel = (sel + d + items.length) % items.length; draw(); }
+  function go(){ const e = items[sel]; close(); if (e) location.href = '/' + e.id; }
+  function close(){ open = false; sw.classList.remove('on'); }
+  document.addEventListener('keydown', async e => {
+    if (e.key === 'Tab' && e.ctrlKey) { e.preventDefault(); if (!open) await show(true); else move(e.shiftKey ? -1 : 1); return; }
+    if (open) {
+      if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); move(1); }
+      else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); move(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); go(); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+      return;
+    }
+    if (e.key === '\u0060' && e.target.tagName !== 'INPUT' && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); show(false); }
+  });
+  document.addEventListener('keyup', e => { if (open && viaCtrl && e.key === 'Control') go(); });
+  sw.addEventListener('click', close);
   const es = new EventSource('/events/' + id);
   es.addEventListener('fresh', () => { state.textContent = 'up to date'; state.className=''; });
   es.addEventListener('error', e => { if (e.data) { state.textContent = 'refresh failed: ' + e.data; } });
