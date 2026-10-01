@@ -930,3 +930,48 @@ func httpTestHandler(body string) http.HandlerFunc {
 		_, _ = w.Write([]byte(body))
 	}
 }
+
+func TestExecLong_AllowReadAndWriteOutsideCwd(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	roDir := userTempDir(t)
+	rwDir := userTempDir(t)
+	if err := os.WriteFile(filepath.Join(roDir, "f"), []byte("ro"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := sandboxProfileOptions{MinimalFS: true, AllowRead: []string{roDir}, AllowWrite: []string{rwDir}}
+	run := func(script string) int {
+		t.Helper()
+		var out bytes.Buffer
+		code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", script}, nil, opts, bytes.NewReader(nil), &out, &out)
+		if err != nil {
+			t.Fatalf("run %q: %v", script, err)
+		}
+		return code
+	}
+	if code := run("cat " + filepath.Join(roDir, "f")); code != 0 {
+		t.Errorf("--allow-read path not readable (code %d)", code)
+	}
+	if code := run("echo x > " + filepath.Join(roDir, "g")); code == 0 {
+		t.Errorf("--allow-read path unexpectedly writable")
+	}
+	if code := run("echo x > " + filepath.Join(rwDir, "g") + " && cat " + filepath.Join(rwDir, "g")); code != 0 {
+		t.Errorf("--allow-write path not writable/readable (code %d)", code)
+	}
+	other := userTempDir(t)
+	if code := run("echo x > " + filepath.Join(other, "g")); code == 0 {
+		t.Errorf("path outside allow lists unexpectedly writable")
+	}
+}
+
+func TestExecLong_NoUserRejectsAllowPathUnderUsers(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	var out bytes.Buffer
+	_, err := runSandboxExecWithOptions(baseDir, []string{"/usr/bin/true"}, nil, sandboxProfileOptions{NoUser: true, AllowRead: []string{baseDir}}, bytes.NewReader(nil), &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "--no-user cannot be combined") {
+		t.Fatalf("expected --no-user conflict error, got %v", err)
+	}
+}

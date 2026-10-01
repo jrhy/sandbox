@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -54,6 +56,22 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 				LocalhostAllowPorts: []int{5432},
 			},
 			wantCmd: []string{"/bin/echo"},
+		},
+		{
+			name:     "allow read and write, both forms, repeatable",
+			args:     []string{"--allow-read", "/a", "--allow-read=/b", "--allow-write", "/c", "--allow-write=/d", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{AllowRead: []string{"/a", "/b"}, AllowWrite: []string{"/c", "/d"}},
+			wantCmd:  []string{"/bin/echo"},
+		},
+		{
+			name:    "allow read missing value",
+			args:    []string{"--allow-read"},
+			wantErr: "missing value for --allow-read",
+		},
+		{
+			name:    "allow write empty value",
+			args:    []string{"--allow-write=", "/bin/echo"},
+			wantErr: "missing value for --allow-write",
 		},
 		{
 			name:    "help",
@@ -526,4 +544,59 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestExecShort_BuildAllowPathRules(t *testing.T) {
+	t.Parallel()
+	got := buildAllowPathRules([]string{"/Users/x/ro"}, []string{"/Users/x/rw"})
+	for _, want := range []string{
+		`(allow file-read* (subpath "/Users/x/ro"))`,
+		`(allow file-read* (subpath "/Users/x/rw"))`,
+		`(allow file-write* (subpath "/Users/x/rw"))`,
+		`(allow file-read-metadata (literal "/Users/x"))`,
+		`(allow file-read-metadata (literal "/Users"))`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing rule %s in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, `(allow file-write* (subpath "/Users/x/ro"))`) {
+		t.Errorf("read-only path got a write rule:\n%s", got)
+	}
+}
+
+func TestExecShort_AllowPathRulesFollowUsersDeny(t *testing.T) {
+	t.Parallel()
+	profile, err := buildSandboxProfileWithOptions("/Users/x/cwd", "/Users/x/cwd", "/Users/x", "/tmp/t", "/usr/bin", sandboxProfileOptions{AllowRead: []string{"/Users/x/ro"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deny := strings.Index(profile, "(deny file-read-data (regex")
+	allow := strings.Index(profile, `(allow file-read* (subpath "/Users/x/ro"))`)
+	if deny < 0 || allow < 0 || allow < deny {
+		t.Fatalf("allow rule must come after the /Users deny rules (deny=%d allow=%d):\n%s", deny, allow, profile)
+	}
+}
+
+func TestExecShort_ResolveAllowPaths(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveAllowPaths(dir, []string{"sub"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	real, _ := filepath.EvalSymlinks(filepath.Join(dir, "sub"))
+	want := []string{filepath.Join(dir, "sub")}
+	if real != want[0] {
+		want = append(want, real)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v want %v", got, want)
+	}
+	if _, err := resolveAllowPaths(dir, []string{"missing"}); err == nil {
+		t.Fatal("expected error for nonexistent path")
+	}
 }

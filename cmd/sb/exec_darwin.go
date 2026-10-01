@@ -27,18 +27,24 @@ type sandboxProfileOptions struct {
 	HTTPAllowHosts      []string
 	LocalhostAllowPorts []int
 	LocalhostProxyPort  int
+	// AllowRead and AllowWrite are paths opened up beyond the mode's defaults.
+	// Write implies read. Paths are resolved against cwd at run time.
+	AllowRead  []string
+	AllowWrite []string
 }
 
 const localhostNoProxyValue = "localhost,127.0.0.1,::1"
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] <command> [args...]
+		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... <command> [args...]
     --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
     --network          allow network access
     --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob
     --localhost-allow  allow direct TCP connections only to selected localhost ports
-    --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed`,
+    --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed
+    --allow-read       allow reading an existing file or directory tree (repeatable)
+    --allow-write      allow reading and writing an existing file or directory tree (repeatable)`,
 		"Run a command under a macOS sandbox profile",
 		func(a []string) int {
 			opts, cmdArgs, err := parseSandboxExecArgs(a)
@@ -97,7 +103,33 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			remaining = remaining[1:]
 			continue
 		}
+		if v, ok := strings.CutPrefix(a, "--allow-read="); ok {
+			if v == "" {
+				return sandboxProfileOptions{}, nil, errors.New("missing value for --allow-read")
+			}
+			opts.AllowRead = append(opts.AllowRead, v)
+			remaining = remaining[1:]
+			continue
+		}
+		if v, ok := strings.CutPrefix(a, "--allow-write="); ok {
+			if v == "" {
+				return sandboxProfileOptions{}, nil, errors.New("missing value for --allow-write")
+			}
+			opts.AllowWrite = append(opts.AllowWrite, v)
+			remaining = remaining[1:]
+			continue
+		}
 		switch a {
+		case "--allow-read", "--allow-write":
+			if len(remaining) < 2 || remaining[1] == "" {
+				return sandboxProfileOptions{}, nil, fmt.Errorf("missing value for %s", a)
+			}
+			if a == "--allow-read" {
+				opts.AllowRead = append(opts.AllowRead, remaining[1])
+			} else {
+				opts.AllowWrite = append(opts.AllowWrite, remaining[1])
+			}
+			remaining = remaining[1:]
 		case "--minimal-fs", "--runtime", "--allow-runtime":
 			opts.MinimalFS = true
 		case "--network":
@@ -178,6 +210,22 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 	homeDir, err := os.MkdirTemp(tmpDir, "sandbox-home.")
 	if err != nil {
 		return exitError, fmt.Errorf("home: %w", err)
+	}
+
+	opts.AllowRead, err = resolveAllowPaths(baseDir, opts.AllowRead)
+	if err != nil {
+		return exitError, fmt.Errorf("--allow-read: %w", err)
+	}
+	opts.AllowWrite, err = resolveAllowPaths(baseDir, opts.AllowWrite)
+	if err != nil {
+		return exitError, fmt.Errorf("--allow-write: %w", err)
+	}
+	if opts.NoUser {
+		for _, p := range append(append([]string{}, opts.AllowRead...), opts.AllowWrite...) {
+			if isUsersPath(p) {
+				return exitError, fmt.Errorf("--no-user cannot be combined with an allowed path under /Users: %s", p)
+			}
+		}
 	}
 
 	pathEnv := os.Getenv("PATH")
@@ -283,6 +331,9 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 		buf.WriteString(parentRules)
 		buf.WriteString(userDenyRules)
 	}
+
+	// Last, so these allows take precedence over the /Users deny rules above.
+	buf.WriteString(buildAllowPathRules(opts.AllowRead, opts.AllowWrite))
 
 	if opts.MinimalFS {
 		// Extra compatibility allowances for programs that probe host runtime state.
@@ -445,6 +496,63 @@ func buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv string) string {
 		"(deny file-map-executable (regex #\"^/System/Volumes/Data/Users/(?!(%s)(/|$)).*\"))\n",
 		allowGroup, allowGroup, allowGroup, allowGroup,
 	)
+}
+
+// resolveAllowPaths makes each path absolute relative to baseDir and returns
+// both the cleaned and the symlink-resolved forms, since the sandbox matches
+// on the path the kernel sees. Paths must exist so a typo fails loudly
+// instead of silently granting nothing.
+func resolveAllowPaths(baseDir string, paths []string) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	add := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range paths {
+		if rest, ok := strings.CutPrefix(p, "~/"); ok {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return nil, err
+			}
+			p = filepath.Join(home, rest)
+		}
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(baseDir, p)
+		}
+		p = filepath.Clean(p)
+		real, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			return nil, err
+		}
+		add(p)
+		add(real)
+	}
+	return out, nil
+}
+
+func isUsersPath(p string) bool {
+	return p == "/Users" || strings.HasPrefix(p, "/Users/") ||
+		p == "/System/Volumes/Data/Users" || strings.HasPrefix(p, "/System/Volumes/Data/Users/")
+}
+
+func buildAllowPathRules(readPaths, writePaths []string) string {
+	var buf bytes.Buffer
+	ancestors := map[string]bool{}
+	for _, p := range append(append([]string{}, readPaths...), writePaths...) {
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(p)))
+		buf.WriteString(fmt.Sprintf("(allow file-map-executable (subpath %s))\n", quoteProfile(p)))
+		for parent := filepath.Dir(p); parent != "/" && !ancestors[parent]; parent = filepath.Dir(parent) {
+			ancestors[parent] = true
+			buf.WriteString(fmt.Sprintf("(allow file-read-metadata (literal %s))\n", quoteProfile(parent)))
+		}
+	}
+	for _, p := range writePaths {
+		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(p)))
+	}
+	return buf.String()
 }
 
 func quoteProfile(p string) string {
