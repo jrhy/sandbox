@@ -312,8 +312,7 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	if opts.NoUser {
 		// --no-user: no cwd access, no /Users access. Only system paths,
 		// package manager roots (discovered from PATH), and a temp dir.
-		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(tmpDir)))
-		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(tmpDir)))
+		buf.WriteString(buildTmpDirRules(tmpDir))
 		buf.WriteString(buildNoUserPathRules(pathEnv))
 		buf.WriteString(buildNoUserDenyRules())
 	} else {
@@ -325,8 +324,7 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDirReal)))
 		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(baseDir)))
 		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(baseDirReal)))
-		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(tmpDir)))
-		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(tmpDir)))
+		buf.WriteString(buildTmpDirRules(tmpDir))
 		buf.WriteString(pathRules)
 		buf.WriteString(parentRules)
 		buf.WriteString(userDenyRules)
@@ -351,6 +349,23 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	}
 
 	return buf.String(), nil
+}
+
+// buildTmpDirRules grants read/write on the temp dir under both its given and
+// symlink-resolved paths. The default macOS TMPDIR is under /var, a symlink to
+// /private/var, and the sandbox matches the resolved path, so a rule on the
+// /var form alone would deny every file opened through $TMPDIR.
+func buildTmpDirRules(tmpDir string) string {
+	paths := []string{tmpDir}
+	if real, err := filepath.EvalSymlinks(tmpDir); err == nil && real != tmpDir {
+		paths = append(paths, real)
+	}
+	var buf bytes.Buffer
+	for _, p := range paths {
+		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(p)))
+		buf.WriteString(fmt.Sprintf("(allow file-write* (subpath %s))\n", quoteProfile(p)))
+	}
+	return buf.String()
 }
 
 // buildNoUserPathRules discovers package manager roots from PATH entries

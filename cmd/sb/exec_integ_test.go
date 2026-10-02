@@ -975,3 +975,16 @@ func TestExecLong_NoUserRejectsAllowPathUnderUsers(t *testing.T) {
 		t.Fatalf("expected --no-user conflict error, got %v", err)
 	}
 }
+
+func TestExecLong_WriteViaTMPDIR(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	for _, opts := range []sandboxProfileOptions{{}, {MinimalFS: true}, {NoUser: true}} {
+		baseDir := userTempDir(t)
+		var out bytes.Buffer
+		code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", `echo x > "$TMPDIR/probe" && cat "$TMPDIR/probe"`}, nil, opts, bytes.NewReader(nil), &out, &out)
+		if err != nil || code != 0 {
+			t.Errorf("opts=%+v: writing through $TMPDIR failed: code=%d err=%v out=%s", opts, code, err, out.String())
+		}
+	}
+}
