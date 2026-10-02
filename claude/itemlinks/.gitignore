@@ -1,0 +1,4 @@
+# Per-session transcript mirrors: conversation content, never committed.
+data/
+# Written by Claude Code when it loads the mod.
+.claude-plugin/types/

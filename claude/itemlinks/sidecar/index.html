@@ -1,0 +1,284 @@
+<!doctype html><html><head><meta charset="utf-8"><title>itemlinks</title>
+<script src="/vendor/marked.min.js"></script>
+<style>
+:root{--bg:#fff;--fg:#1d1d1f;--mut:#6e6e73;--acc:#0a66c2;--card:#f5f5f7;--line:#e2e2e7}
+@media (prefers-color-scheme:dark){:root{--bg:#161618;--fg:#eee;--mut:#999;--acc:#6cb2ff;--card:#232326;--line:#333}}
+body{background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif;margin:0}
+main{max-width:900px;margin:0 auto;padding:16px}
+.row{border-bottom:1px solid var(--line);padding:12px 0}.row.user{color:var(--mut)}
+.who{font-size:12px;color:var(--mut);text-transform:uppercase}
+a.id{color:var(--acc);text-decoration:none;border-bottom:1px dotted var(--acc);cursor:pointer}
+.def{background:color-mix(in srgb,var(--acc) 12%,transparent);border-radius:3px}
+.flash{outline:2px solid var(--acc)}
+#card{position:fixed;max-width:520px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px;box-shadow:0 6px 24px #0003;display:none;font-size:14px;z-index:9}
+#card .v{border-left:3px solid var(--acc);padding-left:8px;margin:6px 0}
+pre{overflow:auto;background:var(--card);padding:8px;border-radius:6px}
+button.copy{float:right;font-size:12px}
+.row.draft{opacity:.85}.row.draft .who::after{content:" · streaming…"}
+main{padding-bottom:170px}
+#status{max-width:900px;margin:0 auto 6px;font-size:13px;color:var(--acc);min-height:18px;font-family:ui-monospace,monospace}
+#status .meta{color:var(--mut)}
+details.think{color:var(--mut);font-size:13px;border-left:2px solid var(--line);padding-left:8px;margin:6px 0}
+details.think summary{cursor:pointer}
+#composer{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 16px}
+#composer form{max-width:900px;margin:0 auto;display:flex;gap:8px;align-items:flex-end}
+#composer textarea{flex:1;min-height:44px;max-height:40vh;resize:vertical;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg)}
+#composer small{color:var(--mut)}
+#follow{position:fixed;right:16px;bottom:110px;font-size:13px;padding:6px 10px;border-radius:16px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+</style></head><body><main id="log"></main><div id="card"></div><button id="follow"></button>
+<div id="composer"><div id="status"></div><form><textarea placeholder="Prompt the session (⌘↩ to send)"></textarea><div><button type="submit">Send</button><br><small id="sendState"></small></div></form></div>
+<script>
+// A definition is an ID that leads a line or list item, e.g. "**F3:**", "- R2.", "P1 -".
+const ID = '[A-Z]{1,3}\\d+(?:\\.\\d+)?'
+const DEF = new RegExp(`^\\s*(?:[-*]\\s+|\\d+\\.\\s+)?\\**(${ID})\\**\\s*[:.)\\-–]`, 'gm')
+const defs = {}   // id -> [{rowIdx, text}]
+const rows = []
+const log = document.getElementById('log'), card = document.getElementById('card')
+
+// G1: an ID reused for a new topic starts a new generation of its prefix, so a
+// mention resolves to its own list rather than to every list that used the ID.
+const REFINED = /\b(refin|clarif|extend|updat|revis|amend)/i
+const genStarts = {}  // prefix -> row indexes where a new generation begins
+const prefixOf = id => id.match(/^[A-Z]+/)[0]
+const genAt = (prefix, i) => (genStarts[prefix] || []).filter(r => r <= i).length
+function index(row, i) {
+  const found = []
+  for (const line of row.text.split('\n')) {
+    DEF.lastIndex = 0
+    const m = DEF.exec(line)
+    if (m) found.push({ id: m[1], text: line.trim() })
+  }
+  // G1a: a fresh "X1" (not marked as a refinement) restarts X's numbering.
+  for (const { id, text } of found) {
+    const prefix = prefixOf(id)
+    const isRestart = id === prefix + '1' && !REFINED.test(text)
+    const hasEarlier = Object.keys(defs).some(k => prefixOf(k) === prefix && defs[k].some(d => d.rowIdx < i))
+    if (isRestart && hasEarlier && !(genStarts[prefix] || []).includes(i)) (genStarts[prefix] ??= []).push(i)
+  }
+  for (const { id, text } of found) (defs[id] ??= []).push({ rowIdx: i, text, gen: genAt(prefixOf(id), i) })
+}
+function linkify(html, i) {
+  const known = Object.keys(defs)
+  if (!known.length) return html
+  const re = new RegExp(`\\b(${known.map(k => k.replace('.', '\\.')).join('|')})\\b`, 'g')
+  // Only rewrite text nodes, never inside tags or code.
+  const tpl = document.createElement('template'); tpl.innerHTML = html
+  const walk = n => {
+    for (const c of [...n.childNodes]) {
+      if (c.nodeType === 3) {
+        const s = c.textContent; if (!re.test(s)) continue; re.lastIndex = 0
+        const span = document.createElement('span')
+        span.innerHTML = s.replace(/[&<>]/g, x => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[x]))
+          .replace(re, id => `<a class="id" data-id="${id}" data-row="${i}">${id}</a>`)
+        c.replaceWith(...span.childNodes)
+      } else if (!['CODE','PRE','A'].includes(c.nodeName)) walk(c)
+    }
+  }
+  walk(tpl.content); return tpl.innerHTML
+}
+// Latest version of an ID at or before the row that mentions it.
+// G1b/G1c: versions of an ID within the generation current at row i.
+const versionsUpTo = (id, i) => {
+  const gen = genAt(prefixOf(id), i)
+  // A restated definition (a recap repeating the item) adds nothing to the hover.
+  const seen = new Set()
+  return (defs[id] || []).filter(d => {
+    if (d.rowIdx > i || d.gen !== gen) return false
+    const key = normalize(d.text)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+const normalize = text => text.replace(/[*_`]/g, '').replace(/\s+/g, ' ').trim().toLowerCase()
+const olderGenerations = (id, i) => {
+  const gen = genAt(prefixOf(id), i)
+  return new Set((defs[id] || []).filter(d => d.rowIdx <= i && d.gen < gen).map(d => d.gen)).size
+}
+
+function render(row, i) {
+  const el = document.createElement('section')
+  el.className = 'row ' + row.role; el.id = 'row-' + i
+  const body = linkify(marked.parse(row.text), i)
+  el.innerHTML = `<button class="copy">copy w/ refs</button><div class="who">${row.role}</div>${body}`
+  el.querySelectorAll('a.id').forEach(a => { if (defs[a.dataset.id]?.some(d => d.rowIdx === i)) a.classList.add('def') })
+  el.querySelector('.copy').onclick = () => navigator.clipboard.writeText(withRefs(row.text, i))
+  return el
+}
+function withRefs(text, i) {
+  const ids = [...new Set(text.match(new RegExp(`\\b${ID}\\b`, 'g')) || [])].filter(id => defs[id])
+  const notes = ids.map(id => versionsUpTo(id, i).at(-1)).filter(Boolean)
+    .filter(d => !text.includes(d.text)).map(d => `> ${d.text}`)
+  return notes.length ? `${text}\n\n---\nReferenced:\n${notes.join('\n')}` : text
+}
+function relinkAll() {
+  const anchor = [...log.children].find(c => c.getBoundingClientRect().bottom > 0)
+  const offset = anchor?.getBoundingClientRect().top ?? 0
+  rows.forEach((row, i) => { const old = document.getElementById('row-' + i); if (old) old.replaceWith(render(row, i)) })
+  const again = anchor?.id ? document.getElementById(anchor.id) : anchor
+  if (again) { selfScroll = true; scrollBy(0, again.getBoundingClientRect().top - offset) }
+}
+function rerenderAll() { log.replaceChildren(...rows.map(render), ...drafts.values()) }
+
+// Live drafts keyed by turn:step:block, replaced when the stored row lands.
+// settled: drafts already replaced by their stored row; a late draft frame for one is dropped.
+const drafts = new Map(), draftSeq = new Map(), settled = new Set()
+// Run a DOM change without moving what the reader is looking at: if the change
+// resizes something above the viewport, scroll by the same amount to compensate.
+function holdView(fn) {
+  const anchor = [...log.children].find(c => c.getBoundingClientRect().bottom > 0)
+  const before = anchor?.getBoundingClientRect().top
+  fn()
+  if (anchor?.isConnected && before !== undefined) {
+    const delta = anchor.getBoundingClientRect().top - before
+    if (delta) { selfScroll = true; scrollBy(0, delta); creepPos = scrollY }
+  }
+}
+function showDraft(d) {
+  if (settled.has(d.id) || (draftSeq.get(d.id) ?? 0) >= d.seq || d.text == null) return
+  draftSeq.set(d.id, d.seq)
+  let el = drafts.get(d.id)
+  const isNew = !el
+  if (isNew) { el = document.createElement('section'); el.className = 'row assistant draft'; drafts.set(d.id, el); log.append(el) }
+  el.dataset.text = d.text
+  holdView(() => el.innerHTML = d.isThinking
+    ? `<details class="think" ${d.isDone ? '' : 'open'}><summary>thinking${d.isDone ? '' : '…'}</summary>${marked.parse(d.text)}</details>`
+    : `<div class="who">assistant</div>${marked.parse(d.text)}`)
+  if (d.isThinking) el.dataset.text = '\u0000'  // never matches a stored row; cleared at turn end
+  if (isNew) startReading(el)
+}
+function settleDraftsFor(row) {
+  const head = row.text.trim().slice(0, 60)
+  holdView(() => { for (const [id, el] of drafts) if (head.startsWith(el.dataset.text.trim().slice(0, 60))) { el.remove(); drafts.delete(id); settled.add(id) } })
+}
+
+// Spinner mirror: "✻ Hullaballooing… (42s · ↓ 895 tokens)".
+const statusEl = document.getElementById('status')
+const GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
+let st = {}
+function onStatus(s) {
+  if (s.startedAt && s.startedAt !== st.startedAt) jumpedThisTurn = false
+  st = s
+  // A finished turn retires its thinking drafts; the stored rows hold no thinking.
+  // Thinking stays in place, collapsed; it is not in the stored rows, so a refresh drops it.
+  if (s.isDone) holdView(() => { for (const [id, el] of drafts) if (id.endsWith(':thinking')) { el.querySelector('details')?.removeAttribute('open'); el.classList.remove('draft'); drafts.delete(id); settled.add(id) } })
+}
+setInterval(() => {
+  if (!st.startedAt || st.isDone) { statusEl.textContent = ''; return }
+  const secs = Math.floor((Date.now() - st.startedAt) / 1000)
+  const glyph = GLYPHS[Math.floor(Date.now() / 120) % GLYPHS.length]
+  const word = st.word || ({ thinking: 'Thinking', 'tool-use': 'Running tools', responding: 'Responding' }[st.mode] ?? 'Working')
+  const dots = '.'.repeat(1 + Math.floor(Date.now() / 400) % 3).padEnd(3)
+  const tokens = st.outTokens ? ` · ↓ ${st.outTokens.toLocaleString()} tokens` : ''
+  statusEl.innerHTML = `${glyph} ${word}${dots} <span class="meta">(${secs}s${tokens}${st.mode ? ' · ' + st.mode : ''})</span>`
+}, 120)
+
+// Reading-pace follow.
+// FM1: once per turn, jump to the start of the turn's first new text.
+// FM2: creep only while the newest text is below the screen; faster when far behind.
+// FM3: scrolling up pauses; reaching the bottom resumes.
+// Tuned for reading: a narrow band, so the pace stays nearly constant.
+const SPEED_MIN = 32, SPEED_MAX = 96, CATCHUP_SCREENS = 6
+// The person's own prompt needs no reading; skim past it.
+const SPEED_OWN_PROMPT = 1200
+let following = true, last = 0, jumpedThisTurn = false, lastY = scrollY
+const followBtn = document.getElementById('follow')
+const paint = () => followBtn.textContent = following ? '⏸ reading pace' : '▶ follow'
+followBtn.onclick = () => { following = !following; paint() }
+paint()
+function startReading(el) {
+  if (!following || jumpedThisTurn) return
+  jumpedThisTurn = true
+  // Only move down to new text; never yank the reader back up.
+  if (el.getBoundingClientRect().top > 0) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+const atBottom = () => scrollY >= document.documentElement.scrollHeight - innerHeight - 4
+let selfScroll = false, creepPos = scrollY
+// Append ?debug to the URL (before the #token) for a live readout of the follow state.
+const debugEl = new URLSearchParams(location.search).has('debug') ? document.body.appendChild(Object.assign(document.createElement('pre'), { style: 'position:fixed;top:0;right:0;margin:0;padding:4px 8px;font-size:11px;background:var(--card);z-index:10' })) : null
+addEventListener('scroll', () => {
+  if (selfScroll) { selfScroll = false; lastY = scrollY; return }
+  if (scrollY < lastY - 2 && following) { following = false; paint() }
+  else if (!following && atBottom()) { following = true; paint() }
+  lastY = scrollY
+}, { passive: true })
+requestAnimationFrame(function tick(t) {
+  const dt = last ? Math.min(0.1, (t - last) / 1000) : 0; last = t
+  const behind = document.documentElement.scrollHeight - innerHeight - scrollY
+  if (following && behind > 1) {
+    const reading = document.elementFromPoint(innerWidth / 2, innerHeight / 3)?.closest('.row')
+    const speed = reading?.classList.contains('user')
+      ? SPEED_OWN_PROMPT
+      : Math.min(SPEED_MAX, SPEED_MIN + (SPEED_MAX - SPEED_MIN) * behind / (innerHeight * CATCHUP_SCREENS))
+    // Accumulate sub-pixel steps; the browser rounds each scrollTo to whole pixels,
+    // so 0.4px per frame would otherwise never move at all.
+    if (Math.abs(creepPos - scrollY) > 2) creepPos = scrollY
+    creepPos += Math.min(behind, speed * dt)
+    if (Math.round(creepPos) !== Math.round(scrollY)) { selfScroll = true; scrollTo(0, Math.round(creepPos)) }
+  } else creepPos = scrollY
+  if (debugEl) debugEl.textContent = `following=${following} jumped=${jumpedThisTurn} behind=${Math.round(behind)}px scrollY=${Math.round(scrollY)} creep=${creepPos.toFixed(1)}`
+  requestAnimationFrame(tick)
+})
+function add(row) {
+  const i = rows.push(row) - 1; const before = Object.keys(defs).length
+  index(row, i)
+  // A new ID can turn plain text in earlier rows into links.
+  settleDraftsFor(row)
+  const el = render(row, i)
+  const firstDraft = drafts.values().next().value
+  firstDraft ? log.insertBefore(el, firstDraft) : log.append(el)
+  // FM4: a new ID relinks earlier rows in place so the view keeps its position.
+  if (Object.keys(defs).length !== before) relinkAll()
+}
+
+log.addEventListener('mouseover', ev => {
+  const a = ev.target.closest('a.id'); if (!a) return
+  const vs = versionsUpTo(a.dataset.id, +a.dataset.row); if (!vs.length) return
+  const older = olderGenerations(a.dataset.id, +a.dataset.row)
+  card.innerHTML = vs.map((v, k) => `<div class="v"><small>${k ? 'refined' : 'defined'} in turn ${v.rowIdx + 1}</small>${marked.parse(v.text)}</div>`).join('')
+    + (older ? `<small style="color:var(--mut)">${older} earlier, unrelated list${older > 1 ? 's' : ''} also used ${a.dataset.id}</small>` : '')
+  const r = a.getBoundingClientRect()
+  card.style.left = Math.min(r.left, innerWidth - 540) + 'px'; card.style.top = (r.bottom + 6) + 'px'; card.style.display = 'block'
+})
+log.addEventListener('mouseout', ev => { if (ev.target.closest('a.id')) card.style.display = 'none' })
+log.addEventListener('click', ev => {
+  const a = ev.target.closest('a.id'); if (!a) return
+  const v = versionsUpTo(a.dataset.id, +a.dataset.row).at(-1); if (!v) return
+  const el = document.getElementById('row-' + v.rowIdx); el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1200)
+})
+
+// The token lives only in the fragment, which the browser never sends to the server.
+const token = location.hash.slice(1)
+const form = document.querySelector('#composer form'), box = form.querySelector('textarea'), sendState = document.getElementById('sendState')
+if (!token) { box.disabled = true; box.placeholder = 'Open the URL from /itemlinks to enable prompting' }
+async function send() {
+  const text = box.value; if (!text.trim()) return
+  sendState.textContent = 'sending…'
+  const res = await fetch('/prompt', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify({ text }) })
+  sendState.textContent = res.ok ? 'queued' : `failed (${res.status})`
+  if (res.ok) { box.value = ''; following = true; paint() }
+}
+form.onsubmit = ev => { ev.preventDefault(); send() }
+box.addEventListener('keydown', ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); send() } })
+
+const auth = { headers: { authorization: `Bearer ${token}` } }
+fetch('/rows', auth).then(r => {
+  // R3: say so at once when the URL's token is stale, not at the first Send.
+  if (!r.ok) throw new Error(r.status)
+  return r.json()
+}).then(all => {
+  all.forEach((r, i) => { rows.push(r); index(r, i) }); rerenderAll(); scrollTo(0, document.body.scrollHeight)
+  fetch('/status', auth).then(r => r.json()).then(onStatus)
+  const es = new EventSource(`/events?t=${encodeURIComponent(token)}`)
+  es.addEventListener('row', m => add(JSON.parse(m.data)))
+  es.addEventListener('draft', m => showDraft(JSON.parse(m.data)))
+  es.addEventListener('status', m => onStatus(JSON.parse(m.data)))
+  // A mod reload mid-session rotates the token; the stream is then refused for good.
+  es.onerror = () => { if (es.readyState === EventSource.CLOSED) staleBanner() }
+}).catch(() => staleBanner())
+function staleBanner() {
+  box.disabled = true
+  log.innerHTML = `<p style="padding:24px;border:1px solid var(--acc);border-radius:8px">This page's token is ${token ? 'out of date' : 'missing'}. The token changes when the itemlinks mod reloads: run <code>/itemlinks</code> in the session (or read the status line) and open that URL.</p>`
+}
+</script></body></html>
