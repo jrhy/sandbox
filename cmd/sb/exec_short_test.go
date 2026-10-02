@@ -64,6 +64,17 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 			wantCmd:  []string{"/bin/echo"},
 		},
 		{
+			name:     "home, both forms",
+			args:     []string{"--home", "/h", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{HomeDir: "/h"},
+			wantCmd:  []string{"/bin/echo"},
+		},
+		{
+			name:    "home missing value",
+			args:    []string{"--home=", "/bin/echo"},
+			wantErr: "missing value for --home",
+		},
+		{
 			name:    "allow read missing value",
 			args:    []string{"--allow-read"},
 			wantErr: "missing value for --allow-read",

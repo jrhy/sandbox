@@ -31,20 +31,24 @@ type sandboxProfileOptions struct {
 	// Write implies read. Paths are resolved against cwd at run time.
 	AllowRead  []string
 	AllowWrite []string
+	// HomeDir, when set, is used as HOME inside the sandbox (read-write)
+	// instead of a fresh temp dir, so caches under ~ survive between runs.
+	HomeDir string
 }
 
 const localhostNoProxyValue = "localhost,127.0.0.1,::1"
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... <command> [args...]
+		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
     --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
     --network          allow network access
     --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob
     --localhost-allow  allow direct TCP connections only to selected localhost ports
     --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed
     --allow-read       allow reading an existing file or directory tree (repeatable)
-    --allow-write      allow reading and writing an existing file or directory tree (repeatable)`,
+    --allow-write      allow reading and writing an existing file or directory tree (repeatable)
+    --home             use an existing directory as HOME (read-write) instead of a throwaway temp dir`,
 		"Run a command under a macOS sandbox profile",
 		func(a []string) int {
 			opts, cmdArgs, err := parseSandboxExecArgs(a)
@@ -111,6 +115,14 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			remaining = remaining[1:]
 			continue
 		}
+		if v, ok := strings.CutPrefix(a, "--home="); ok {
+			if v == "" {
+				return sandboxProfileOptions{}, nil, errors.New("missing value for --home")
+			}
+			opts.HomeDir = v
+			remaining = remaining[1:]
+			continue
+		}
 		if v, ok := strings.CutPrefix(a, "--allow-write="); ok {
 			if v == "" {
 				return sandboxProfileOptions{}, nil, errors.New("missing value for --allow-write")
@@ -120,6 +132,12 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			continue
 		}
 		switch a {
+		case "--home":
+			if len(remaining) < 2 || remaining[1] == "" {
+				return sandboxProfileOptions{}, nil, errors.New("missing value for --home")
+			}
+			opts.HomeDir = remaining[1]
+			remaining = remaining[1:]
 		case "--allow-read", "--allow-write":
 			if len(remaining) < 2 || remaining[1] == "" {
 				return sandboxProfileOptions{}, nil, fmt.Errorf("missing value for %s", a)
@@ -207,9 +225,22 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 	profilePath := profileFile.Name()
 	defer os.Remove(profilePath)
 
-	homeDir, err := os.MkdirTemp(tmpDir, "sandbox-home.")
-	if err != nil {
-		return exitError, fmt.Errorf("home: %w", err)
+	var homeDir string
+	if opts.HomeDir != "" {
+		resolved, err := resolveAllowPaths(baseDir, []string{opts.HomeDir})
+		if err != nil {
+			return exitError, fmt.Errorf("--home: %w", err)
+		}
+		if opts.NoUser && isUsersPath(resolved[0]) {
+			return exitError, fmt.Errorf("--no-user cannot be combined with --home under /Users: %s", resolved[0])
+		}
+		homeDir = resolved[0]
+		opts.AllowWrite = append(opts.AllowWrite, resolved...)
+	} else {
+		homeDir, err = os.MkdirTemp(tmpDir, "sandbox-home.")
+		if err != nil {
+			return exitError, fmt.Errorf("home: %w", err)
+		}
 	}
 
 	opts.AllowRead, err = resolveAllowPaths(baseDir, opts.AllowRead)

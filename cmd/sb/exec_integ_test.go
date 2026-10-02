@@ -988,3 +988,39 @@ func TestExecLong_WriteViaTMPDIR(t *testing.T) {
 		}
 	}
 }
+
+func TestExecLong_HomeDirPersistsAcrossRuns(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	home := userTempDir(t)
+	run := func(script string) (int, string) {
+		var out bytes.Buffer
+		code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", script}, nil, sandboxProfileOptions{MinimalFS: true, HomeDir: home}, bytes.NewReader(nil), &out, &out)
+		if err != nil {
+			t.Fatalf("run %q: %v", script, err)
+		}
+		return code, out.String()
+	}
+	if code, out := run(`[ "$HOME" = "` + home + `" ] && mkdir -p "$HOME/.cache" && echo v1 > "$HOME/.cache/x"`); code != 0 {
+		t.Fatalf("first run failed: %s", out)
+	}
+	if code, out := run(`cat "$HOME/.cache/x"`); code != 0 || strings.TrimSpace(out) != "v1" {
+		t.Fatalf("home did not persist: code=%d out=%q", code, out)
+	}
+	other := userTempDir(t)
+	if code, _ := run(`echo x > ` + other + `/y`); code == 0 {
+		t.Fatalf("--home unexpectedly widened access beyond the home dir")
+	}
+}
+
+func TestExecLong_NoUserRejectsHomeUnderUsers(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	baseDir := userTempDir(t)
+	var out bytes.Buffer
+	_, err := runSandboxExecWithOptions(baseDir, []string{"/usr/bin/true"}, nil, sandboxProfileOptions{NoUser: true, HomeDir: baseDir}, bytes.NewReader(nil), &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "--no-user cannot be combined with --home") {
+		t.Fatalf("expected --no-user/--home conflict, got %v", err)
+	}
+}
