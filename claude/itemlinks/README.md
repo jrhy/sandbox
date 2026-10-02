@@ -20,11 +20,13 @@ prints it too. Add `?debug` before the `#` for a follow-mode readout.
 ## How it works
 
 - `hooks/register.ts` (the mod): starts the sidecar, posts each prompt and reply
-  (`session.append`), streamed text and thinking (`turn.step`) and the spinner
-  (`ui.render`) to it, and submits prompts typed in the page (`$.prompt.submit`, read by
+  (`session.append`), streamed text and thinking (`turn.step`), the spinner
+  (`ui.render`) and each tool call (`tool.call`) to it, and submits prompts typed in the page (`$.prompt.submit`, read by
   the model as sent by this plugin).
 - `sidecar/server.ts` (Bun): picks a free port and a random token, keeps a per-session
   mirror in `data/`, and on start backfills it from the session's own transcript.
+  Tool calls are kept as name, a one-line summary and outcome; their output reaches
+  the page live but is never written to disk.
 - `sidecar/index.html`: the page. An ID that leads a line or list item is a definition;
   a fresh `X1` without a refinement marker starts a new list of that prefix.
 

@@ -29,6 +29,12 @@ const pendingRows: string[] = []
 let settledTokens = 0
 let streamedChars = 0
 
+// T1: the few input fields that say what a tool call is about, never its payload
+// (a Write's content, an Edit's strings).
+const SUMMARY_FIELDS = ['command', 'file_path', 'pattern', 'path', 'description', 'url', 'query', 'skill', 'subagent_type'] as const
+// T7a: output travels to the page live but is cut here and never stored.
+const OUTPUT_LINES = 40
+
 type Block = { type: string; text?: string }
 
 // Only rows a person reads as conversation: the prompt and the model's prose.
@@ -163,6 +169,29 @@ export const register: Register = on => {
         { const body = statusBody({ outTokens: settledTokens }); if (body) $.http.fetch(`${base}/status`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body }).catch(() => {}) }
       }
     })
+  })
+
+  on('tool.call', async ($, e, next) => {
+    if (e.agentId !== undefined || !base || !token) return next(e)
+    const fields: Record<string, string> = {}
+    for (const f of SUMMARY_FIELDS) {
+      const v = (e as Record<string, unknown>)[f]
+      if (typeof v === 'string') fields[f] = v.slice(0, 500)
+    }
+    const id = e.tool_use_id ?? `${e.tool}:${await $.clock.now()}`
+    const startedAt = await $.clock.now()
+    const send = (patch: object) =>
+      $.http.fetch(`${base}/tool`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}` },
+        body: JSON.stringify({ id, tool: e.tool, fields, startedAt, ...patch }),
+      }).catch(() => {})
+    send({ state: 'running' })
+    const ran = await next(e)
+    const state = ran.deny !== undefined ? 'denied' : ran.isError ? 'error' : 'ok'
+    const output = (ran.deny ?? ran.text ?? '').split('\n').slice(0, OUTPUT_LINES).join('\n')
+    send({ state, ms: (await $.clock.now()) - startedAt, output })
+    return ran
   })
 
   on('session.append', async ($, e, next) => {

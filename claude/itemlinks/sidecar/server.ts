@@ -10,10 +10,14 @@ const dataDir = join(dirname(import.meta.path), '..', 'data')
 const log = join(dataDir, `${sessionId}.jsonl`)
 mkdirSync(dataDir, { recursive: true })
 
-type Row = { uuid: string; role: string; text: string; at: number }
-const rows: Row[] = existsSync(log)
-  ? readFileSync(log, 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l))
-  : []
+const SUMMARY_FIELDS = ['command', 'file_path', 'pattern', 'path', 'description', 'url', 'query', 'skill', 'subagent_type']
+
+type Row = { uuid: string; role: string; text: string; at: number; tool?: ToolInfo }
+// A tool call as the mirror keeps it: what was called and how it ended, not its output (T7a).
+type ToolInfo = { tool: string; fields: Record<string, string>; state: string; ms?: number }
+const byUuid = new Map<string, Row>()
+if (existsSync(log)) for (const l of readFileSync(log, 'utf8').split('\n')) if (l) { const r = JSON.parse(l); byUuid.set(r.uuid, r) }
+const rows: Row[] = [...byUuid.values()]
 for (const row of backfill()) if (!rows.some(r => r.uuid === row.uuid)) {
   rows.push(row)
   appendFileSync(log, JSON.stringify(row) + '\n')
@@ -27,6 +31,7 @@ function backfill(): Row[] {
   const dir = existsSync(projects) ? readdirSync(projects).find(d => existsSync(join(projects, d, `${sessionId}.jsonl`))) : undefined
   if (!dir) return []
   const out: Row[] = []
+  const toolRows = new Map<string, Row>()
   for (const line of readFileSync(join(projects, dir, `${sessionId}.jsonl`), 'utf8').split('\n')) {
     if (!line) continue
     let entry: any
@@ -34,10 +39,22 @@ function backfill(): Row[] {
     if ((entry.type !== 'user' && entry.type !== 'assistant') || entry.isMeta || entry.isSidechain || !entry.uuid) continue
     const content = entry.message?.content
     const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : Array.isArray(content) ? content : []
+    const at = Date.parse(entry.timestamp) || 0
+    // T3: tool calls and their outcomes, matched up by tool_use id.
+    for (const b of blocks) {
+      if (b.type === 'tool_use' && b.id) {
+        const fields: Record<string, string> = {}
+        for (const f of SUMMARY_FIELDS) if (typeof b.input?.[f] === 'string') fields[f] = b.input[f].slice(0, 500)
+        const row: Row = { uuid: b.id, role: 'tool', text: '', at, tool: { tool: b.name, fields, state: 'ok' } }
+        toolRows.set(b.id, row)
+        out.push(row)
+      }
+      if (b.type === 'tool_result' && toolRows.has(b.tool_use_id) && b.is_error) toolRows.get(b.tool_use_id)!.tool!.state = 'error'
+    }
     const text = blocks.filter((b: any) => b.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n\n')
     // Skip injected wrappers (command records, reminders) a person never typed.
     if (text.trim() === '' || (entry.type === 'user' && text.trimStart().startsWith('<'))) continue
-    out.push({ uuid: entry.uuid, role: entry.type, text, at: Date.parse(entry.timestamp) || 0 })
+    out.push({ uuid: entry.uuid, role: entry.type, text, at })
   }
   return out
 }
@@ -88,6 +105,17 @@ const handler = {
       return new Response('ok')
     }
     if (pathname === '/status' && req.method === 'GET') return Response.json(lastStatus)
+    // A tool call starting or finishing: stored without its output, broadcast with it.
+    if (pathname === '/tool' && req.method === 'POST') {
+      const t = (await req.json()) as { id: string; tool: string; fields: Record<string, string>; startedAt: number; state: string; ms?: number; output?: string }
+      const existing = rows.find(r => r.uuid === t.id)
+      const row: Row = existing ?? { uuid: t.id, role: 'tool', text: '', at: t.startedAt }
+      row.tool = { tool: t.tool, fields: t.fields, state: t.state, ms: t.ms }
+      if (!existing) rows.push(row)
+      appendFileSync(log, JSON.stringify(row) + '\n')
+      broadcast('tool', { ...row, output: t.output })
+      return new Response('ok')
+    }
     if (pathname === '/draft' && req.method === 'POST') {
       broadcast('draft', await req.json())
       return new Response('ok')

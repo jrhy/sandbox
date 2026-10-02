@@ -18,6 +18,12 @@ button.copy{float:right;font-size:12px}
 main{padding-bottom:170px}
 #status{max-width:900px;margin:0 auto 6px;font-size:13px;color:var(--acc);min-height:18px;font-family:ui-monospace,monospace}
 #status .meta{color:var(--mut)}
+/* T4: a compact line per tool call between the prose. */
+.row.tool{padding:2px 0;border-bottom:none;font:13px/1.4 ui-monospace,monospace;color:var(--mut)}
+.row.tool summary{cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row.tool .name{color:var(--fg);font-weight:600}
+.row.tool .err{color:#d33}.row.tool .ok{color:#2a2}
+.row.tool pre{margin:4px 0 6px 18px;max-height:40vh;font-size:12px}
 details.think{color:var(--mut);font-size:13px;border-left:2px solid var(--line);padding-left:8px;margin:6px 0}
 details.think summary{cursor:pointer}
 #composer{position:fixed;left:0;right:0;bottom:0;background:var(--bg);border-top:1px solid var(--line);padding:10px 16px}
@@ -42,6 +48,7 @@ const genStarts = {}  // prefix -> row indexes where a new generation begins
 const prefixOf = id => id.match(/^[A-Z]+/)[0]
 const genAt = (prefix, i) => (genStarts[prefix] || []).filter(r => r <= i).length
 function index(row, i) {
+  if (row.role === 'tool') return
   const found = []
   for (const line of row.text.split('\n')) {
     DEF.lastIndex = 0
@@ -96,7 +103,36 @@ const olderGenerations = (id, i) => {
   return new Set((defs[id] || []).filter(d => d.rowIdx <= i && d.gen < gen).map(d => d.gen)).size
 }
 
+const TOOL_SPIN = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏']
+const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+function toolLine(t) {
+  const f = t.fields || {}
+  const what = f.command ?? f.file_path ?? f.pattern ?? f.description ?? f.url ?? f.query ?? f.skill ?? f.path ?? ''
+  const mark = t.state === 'running' ? `<span class="spin">${TOOL_SPIN[0]}</span>`
+    : t.state === 'ok' ? '<span class="ok">✓</span>' : `<span class="err">✗ ${t.state}</span>`
+  const ms = t.ms != null ? ` · ${t.ms < 1000 ? t.ms + 'ms' : (t.ms / 1000).toFixed(1) + 's'}` : ''
+  return `${mark} <span class="name">${esc(t.tool)}</span> ${esc(what.split('\n')[0])}<span>${ms}</span>`
+}
+function renderTool(row, i, output) {
+  const el = document.createElement('section')
+  el.className = 'row tool'; el.id = 'row-' + i; el.dataset.uuid = row.uuid
+  const out = output ? `<pre>${esc(output)}</pre>` : row.tool.state === 'running' ? '' : '<pre>(output is shown live only)</pre>'
+  el.innerHTML = `<details><summary>${toolLine(row.tool)}</summary>${out}</details>`
+  return el
+}
+setInterval(() => document.querySelectorAll('.row.tool .spin').forEach(s => s.textContent = TOOL_SPIN[Math.floor(Date.now() / 80) % TOOL_SPIN.length]), 80)
+function upsertTool(t) {
+  const i = rows.findIndex(r => r.uuid === t.uuid)
+  if (i < 0) return add(t)
+  rows[i] = t
+  const old = document.getElementById('row-' + i)
+  const wasOpen = old?.querySelector('details')?.open
+  const el = renderTool(t, i, t.output)
+  if (wasOpen) el.querySelector('details').open = true
+  if (old) holdView(() => old.replaceWith(el))
+}
 function render(row, i) {
+  if (row.role === 'tool') return renderTool(row, i, row.output)
   const el = document.createElement('section')
   el.className = 'row ' + row.role; el.id = 'row-' + i
   const body = linkify(marked.parse(row.text), i)
@@ -116,7 +152,7 @@ function relinkAll() {
   const offset = anchor?.getBoundingClientRect().top ?? 0
   rows.forEach((row, i) => { const old = document.getElementById('row-' + i); if (old) old.replaceWith(render(row, i)) })
   const again = anchor?.id ? document.getElementById(anchor.id) : anchor
-  if (again) { selfScroll = true; scrollBy(0, again.getBoundingClientRect().top - offset) }
+  if (again) { scrollBy(0, again.getBoundingClientRect().top - offset); creepPos = scrollY }
 }
 function rerenderAll() { log.replaceChildren(...rows.map(render), ...drafts.values()) }
 
@@ -131,7 +167,7 @@ function holdView(fn) {
   fn()
   if (anchor?.isConnected && before !== undefined) {
     const delta = anchor.getBoundingClientRect().top - before
-    if (delta) { selfScroll = true; scrollBy(0, delta); creepPos = scrollY }
+    if (delta) { scrollBy(0, delta); creepPos = scrollY }
   }
 }
 function showDraft(d) {
@@ -157,6 +193,7 @@ const statusEl = document.getElementById('status')
 const GLYPHS = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢']
 let st = {}
 function onStatus(s) {
+  if (s.isDone || (s.startedAt && s.startedAt !== st.startedAt)) sendState.textContent = ''
   if (s.startedAt && s.startedAt !== st.startedAt) jumpedThisTurn = false
   st = s
   // A finished turn retires its thinking drafts; the stored rows hold no thinking.
@@ -190,16 +227,24 @@ function startReading(el) {
   if (!following || jumpedThisTurn) return
   jumpedThisTurn = true
   // Only move down to new text; never yank the reader back up.
-  if (el.getBoundingClientRect().top > 0) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  const top = el.getBoundingClientRect().top
+  if (top > 0) jumpTo = scrollY + top
 }
 const atBottom = () => scrollY >= document.documentElement.scrollHeight - innerHeight - 4
-let selfScroll = false, creepPos = scrollY
+let creepPos = scrollY, jumpTo = null
+const JUMP_SPEED = 2500  // px/s: FM1's glide to a new reply
 // Append ?debug to the URL (before the #token) for a live readout of the follow state.
 const debugEl = new URLSearchParams(location.search).has('debug') ? document.body.appendChild(Object.assign(document.createElement('pre'), { style: 'position:fixed;top:0;right:0;margin:0;padding:4px 8px;font-size:11px;background:var(--card);z-index:10' })) : null
+// FM3: an upward move by the reader pauses. Wheel and touch say so directly; the
+// scroll check catches the rest (scrollbar drags, keys) by comparing against where
+// the creep last put the page, so the creep's own scrolls never count.
+const pause = () => { jumpTo = null; if (following) { following = false; paint() } }
+addEventListener('wheel', ev => { if (ev.deltaY < 0) pause() }, { passive: true })
+addEventListener('touchmove', pause, { passive: true })
 addEventListener('scroll', () => {
-  if (selfScroll) { selfScroll = false; lastY = scrollY; return }
-  if (scrollY < lastY - 2 && following) { following = false; paint() }
+  if (following && scrollY < creepPos - 4) pause()
   else if (!following && atBottom()) { following = true; paint() }
+  if (!following) creepPos = scrollY
   lastY = scrollY
 }, { passive: true })
 requestAnimationFrame(function tick(t) {
@@ -207,14 +252,17 @@ requestAnimationFrame(function tick(t) {
   const behind = document.documentElement.scrollHeight - innerHeight - scrollY
   if (following && behind > 1) {
     const reading = document.elementFromPoint(innerWidth / 2, innerHeight / 3)?.closest('.row')
-    const speed = reading?.classList.contains('user')
+    const skim = reading?.classList.contains('user') || (reading?.classList.contains('tool') && !reading.querySelector('details[open]'))
+    const speed = skim
       ? SPEED_OWN_PROMPT
       : Math.min(SPEED_MAX, SPEED_MIN + (SPEED_MAX - SPEED_MIN) * behind / (innerHeight * CATCHUP_SCREENS))
     // Accumulate sub-pixel steps; the browser rounds each scrollTo to whole pixels,
     // so 0.4px per frame would otherwise never move at all.
-    if (Math.abs(creepPos - scrollY) > 2) creepPos = scrollY
-    creepPos += Math.min(behind, speed * dt)
-    if (Math.round(creepPos) !== Math.round(scrollY)) { selfScroll = true; scrollTo(0, Math.round(creepPos)) }
+    if (jumpTo !== null && creepPos < jumpTo) creepPos = Math.min(jumpTo, creepPos + JUMP_SPEED * dt)
+    else { jumpTo = null; creepPos += Math.min(behind, speed * dt) }
+    // Never aim past the end: the browser clamps there, and the gap would read as the reader scrolling up.
+    creepPos = Math.min(creepPos, scrollY + behind)
+    if (Math.round(creepPos) !== Math.round(scrollY)) scrollTo(0, Math.round(creepPos))
   } else creepPos = scrollY
   if (debugEl) debugEl.textContent = `following=${following} jumped=${jumpedThisTurn} behind=${Math.round(behind)}px scrollY=${Math.round(scrollY)} creep=${creepPos.toFixed(1)}`
   requestAnimationFrame(tick)
@@ -272,6 +320,7 @@ fetch('/rows', auth).then(r => {
   fetch('/status', auth).then(r => r.json()).then(onStatus)
   const es = new EventSource(`/events?t=${encodeURIComponent(token)}`)
   es.addEventListener('row', m => add(JSON.parse(m.data)))
+  es.addEventListener('tool', m => upsertTool(JSON.parse(m.data)))
   es.addEventListener('draft', m => showDraft(JSON.parse(m.data)))
   es.addEventListener('status', m => onStatus(JSON.parse(m.data)))
   // A mod reload mid-session rotates the token; the stream is then refused for good.
