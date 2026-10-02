@@ -64,8 +64,10 @@ export const register: Register = on => {
     void (async () => {
       const server = $.process.spawn({
         // Absolute bun path and a stderr log: the session's PATH may lack Homebrew,
-        // and a sidecar that dies at startup otherwise leaves no trace.
-        argv: ['/bin/sh', '-c', `exec /opt/homebrew/bin/bun "$0" "$2" 2>>"$1"`,
+        // and a sidecar that dies at startup otherwise leaves no trace. The log's
+        // folder is created first: it is gitignored, so a fresh checkout lacks it,
+        // and a redirect into a missing folder fails before bun ever runs.
+        argv: ['/bin/sh', '-c', `mkdir -p "$(dirname "$1")" && exec /opt/homebrew/bin/bun "$0" "$2" 2>>"$1"`,
           `${$.plugin.root}/sidecar/server.ts`, `${$.plugin.root}/data/sidecar.log`, sessionId],
       })
       for await (const { text } of server) {
