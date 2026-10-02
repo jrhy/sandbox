@@ -31,6 +31,10 @@ run_cmd() {
 # --- Configuration ---
 CACHE_FILE="/tmp/swiftbar-pr-cache.txt"
 IDLE_THRESHOLD=60
+# Last known mergeStateStatus per PR, keyed by head SHA. GitHub computes
+# mergeability lazily and often answers UNKNOWN, so we fall back to this.
+MERGE_CACHE_FILE="/tmp/swiftbar-pr-merge-cache.json"
+MERGE_CACHE_TTL=1800
 
 log_debug "========== Script started =========="
 
@@ -71,6 +75,43 @@ QUERY_MERGED="is:pr is:merged involves:${GITHUB_USERNAME} sort:updated-desc"
 prs_json=$(run_cmd gh api "search/issues?q=$(echo "$QUERY_OPEN" | jq -sRr @uri)&per_page=8")
 merged_json=$(run_cmd gh api "search/issues?q=$(echo "$QUERY_MERGED" | jq -sRr @uri)&per_page=5")
 log_debug "prs_json length: ${#prs_json}"
+
+# --- Merge readiness (one GraphQL call for all open PRs) ---
+# mergeStateStatus folds in branch protection: required reviews (incl.
+# CODEOWNERS), required checks, conflicts, draft state.
+MERGE_QUERY='query($q: String!) { search(query: $q, type: ISSUE, first: 8) { nodes { ... on PullRequest { number headRefOid mergeStateStatus repository { nameWithOwner } } } } }'
+merge_json=$(run_cmd gh api graphql -H 'Accept: application/vnd.github.merge-info-preview+json' -F q="$QUERY_OPEN" -f query="$MERGE_QUERY")
+
+# Resolve UNKNOWN from the cache when the head SHA hasn't moved; a new push
+# invalidates the cached entry. Output: {"owner/repo#N": {sha, state, ts}}.
+now=$(date +%s)
+[[ -s "$MERGE_CACHE_FILE" ]] || echo '{}' > "$MERGE_CACHE_FILE"
+merge_resolved=$(echo "$merge_json" | jq -c --slurpfile cache "$MERGE_CACHE_FILE" --argjson now "$now" --argjson ttl "$MERGE_CACHE_TTL" '
+  ($cache[0] // {}) as $c
+  | [.data.search.nodes[]?
+     | ("\(.repository.nameWithOwner)#\(.number)") as $k
+     | if .mergeStateStatus != "UNKNOWN" then {($k): {sha: .headRefOid, state: .mergeStateStatus, ts: $now}}
+       elif ($c[$k].sha == .headRefOid and ($now - $c[$k].ts) < $ttl) then {($k): $c[$k]}
+       else {} end]
+  | add // {}')
+if [[ -n "$merge_resolved" ]]; then
+  echo "$merge_resolved" > "$MERGE_CACHE_FILE"
+else
+  merge_resolved='{}'
+fi
+log_debug "merge_resolved: $merge_resolved"
+
+merge_state_for() {
+  echo "$merge_resolved" | jq -r --arg k "$1" '.[$k].state // "UNKNOWN"'
+}
+
+# CLEAN: all green. UNSTABLE: mergeable, only non-required checks failing.
+# HAS_HOOKS: mergeable, pre-receive hooks exist.
+is_mergeable() {
+  case "$1" in CLEAN|UNSTABLE|HAS_HOOKS) return 0 ;; esac
+  return 1
+}
+ready_count=0
 
 # --- Parse PRs and collect their check statuses ---
 overall_status="green"
@@ -123,6 +164,11 @@ while IFS= read -r line; do
   # Prepend DRAFT label for draft PRs
   if [[ "$is_draft" == "true" ]]; then
     safe_title="DRAFT $safe_title"
+  elif is_mergeable "$(merge_state_for "${repo_path}#${pr_number}")"; then
+    safe_title="READY $safe_title"
+    status_icon="arrow.triangle.merge"
+    pr_status="green"
+    [[ "$author" == "$GITHUB_USERNAME" ]] && ((ready_count++))
   fi
 
   pr_line="$pr_status"$'\t'"$status_icon"$'\t'"$safe_title"$'\t'"$html_url"$'\t'"$repo_path"$'\t'"$pr_number"
@@ -168,10 +214,13 @@ out() {
   cache_output+="$*"$'\n'
 }
 
+ready_badge=""
+(( ready_count > 0 )) && ready_badge=" ⇡${ready_count}"
+
 case "$overall_status" in
-  red)    out "🔴 | color=red" ;;
-  yellow) out "🟡 | color=yellow" ;;
-  green)  out "🟢 | color=green" ;;
+  red)    out "🔴${ready_badge} | color=red" ;;
+  yellow) out "🟡${ready_badge} | color=yellow" ;;
+  green)  out "🟢${ready_badge} | color=green" ;;
 esac
 
 out "---"
