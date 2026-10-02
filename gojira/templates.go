@@ -96,17 +96,28 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
   });
   document.addEventListener('keyup', e => { if (open && viaCtrl && e.key === 'Control') go(); });
   sw.addEventListener('click', close);
-  const es = new EventSource('/events/' + id);
-  es.addEventListener('fresh', () => { state.textContent = 'up to date'; state.className=''; });
-  es.addEventListener('error', e => { if (e.data) { state.textContent = 'refresh failed: ' + e.data; } });
-  es.addEventListener('updated', async () => {
-    const r = await fetch('/refresh/' + id);
-    document.getElementById('main').innerHTML = await r.text();
-    state.textContent = 'updated just now'; state.className = 'updated';
-  });
+  // The refresh stream is opened only while a result is pending and closed as
+  // soon as it lands. Browsers cap HTTP/1.1 connections per host (six), so
+  // streams held open by idle tabs would starve every other request.
+  let es = null;
+  function closeStream(){ if (es) { es.close(); es = null; } }
+  function listen(){
+    closeStream();
+    es = new EventSource('/events/' + id);
+    es.addEventListener('fresh', () => { state.textContent = 'up to date'; state.className=''; closeStream(); });
+    es.addEventListener('error', e => { if (e.data) { state.textContent = 'refresh failed: ' + e.data; } closeStream(); });
+    es.addEventListener('updated', async () => {
+      closeStream();
+      const r = await fetch('/refresh/' + id);
+      document.getElementById('main').innerHTML = await r.text();
+      state.textContent = 'updated just now'; state.className = 'updated';
+    });
+  }
+  if ({{.Stale}}) listen();
+  window.addEventListener('pagehide', closeStream);
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === 'r') { state.textContent = 'refreshing…'; fetch('/refresh/' + id + '?force=1'); }
+    if (e.key === 'r') { state.textContent = 'refreshing…'; listen(); fetch('/refresh/' + id + '?force=1'); }
     if (e.key === '/') { e.preventDefault(); const q = document.querySelector('input[name=q]'); q.focus(); q.select(); }
   });
 })();

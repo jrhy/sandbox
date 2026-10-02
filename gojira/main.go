@@ -257,9 +257,15 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	defer unsub()
 	fmt.Fprint(w, ": connected\n\n")
 	fl.Flush()
+	// Backstop for clients that never close: a refresh lands well within
+	// this, and a held stream costs the browser one of its few connections.
+	deadline := time.NewTimer(90 * time.Second)
+	defer deadline.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-deadline.C:
 			return
 		case ev := <-ch:
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.kind, ev.data)
