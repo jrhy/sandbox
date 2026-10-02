@@ -58,6 +58,14 @@ writes a random token to `~/Library/Application Support/gojira/token` (mode
 `http://localhost:9393/auth/<token>` once per browser to set the cookie; the
 launcher does this for you. Override the location with `-token-file`.
 
+## Debugging
+
+`/debug/pprof/` serves Go's standard profiles behind the same auth. Profiling
+routes also accept `?token=<token>`, since `go tool pprof` can't send cookies.
+The launcher wraps the common cases: `gojira stacks` dumps every goroutine's
+stack, and `gojira pprof` takes a 30-second CPU profile
+(`PROFILE=heap gojira pprof -http=:0` for a heap profile in the browser).
+
 ## Install and run at login (macOS)
 
     go install .

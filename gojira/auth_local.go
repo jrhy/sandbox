@@ -47,6 +47,12 @@ func requireAuth(token string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		// go tool pprof cannot send cookies, so profiling routes also accept
+		// the token as a query parameter.
+		if strings.HasPrefix(r.URL.Path, "/debug/pprof/") && subtle.ConstantTimeCompare([]byte(r.URL.Query().Get("token")), []byte(token)) == 1 {
+			next.ServeHTTP(w, r)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		http.Error(w, "gojira: not authorized. Run the launcher, or open /auth/<token> from the token file.", http.StatusUnauthorized)
 	})
