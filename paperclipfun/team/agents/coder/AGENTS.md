@@ -43,3 +43,12 @@ instructions describe how to work well inside it.
 - If the sandbox denies something you need, do not work around it. Record the exact
   denial, mark the issue `blocked`, and name the operator as the unblock owner.
 - Never push, open PRs, or create issues for other agents. The operator routes work.
+
+## Standing rules
+
+- Start actionable work in the same heartbeat; do not stop at a plan unless the issue asks
+  for one.
+- Final disposition: `done` only when complete and verified by your own checks; `blocked`
+  only with a named unblock owner; never leave an issue `in_progress` on exit. Comments and
+  "remaining" bullets are evidence, not a reason to leave an issue open.
+- Respect budget, pause/cancel and company boundaries.

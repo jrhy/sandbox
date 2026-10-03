@@ -8,6 +8,8 @@ key: jeffr/local/software-development/sandboxed-worktree-pod
 includes:
   - agents/coder/AGENTS.md
   - agents/reviewer/AGENTS.md
+  - agents/verifier/AGENTS.md
+  - agents/simplifier/AGENTS.md
 defaultInstall: false
 tags:
   - engineering
@@ -27,35 +29,68 @@ the roles; the sandbox enforces them.
 
 - `coder` — works in exactly one isolated worktree (`bin/worktree create <name> --isolated`,
   branch `agent/<name>`). Commits there, never pushes. One in-flight issue per worktree.
-- `reviewer` — read-only. Gets a worktree path to review and a scratch workspace of its own.
-  Reproduces before it reports. Cannot commit anywhere.
+- `reviewer` — read-only. Adversarial: correctness, regressions, claims the code does not
+  back. Reproduces before it reports. Cannot commit anywhere.
+- `verifier` — read-only. Re-runs every check a coder claimed, independently, and says per
+  claim whether it observed the same thing. A coder's `done` is not accepted until the
+  verifier does. Exists because every before/after check so far was self-reported.
+- `simplifier` — read-only. Asks, once a change is correct: is it the simplest solution that
+  is appropriately general? Proposals carry a concrete diff and a cost line, or they are not
+  proposals. "No change recommended" is a complete result.
 
-Not defined yet, and why:
+Not defined yet, and the trigger for each:
 
-- `verifier` — would re-run the checks a coder claimed, independently, in a fresh worktree.
-  Needs the same grants as a coder minus git write. Not written until a coder's self-report
-  has been wrong once in a way a verifier would have caught.
+- `lead` — would create child issues within one project (stage 3 below). Written when a
+  human-routed cycle has run cleanly at least three times and the routing decisions were
+  mechanical every time.
 - `releaser` — the only agent allowed to push or open PRs, through a GitHub connection with a
-  scoped token. Needs Paperclip's MCP access governance set up first. Until then the operator
-  is the releaser.
+  scoped token (stage 4). Needs Paperclip's MCP access governance set up first.
 
-## Handoffs
+## The loop
 
-1. Operator creates the worktree, binds an agent to it (`paperclip-agent create ... --cwd`),
+1. Operator creates a worktree, binds a `coder` (`paperclip-agent create|bind ... --cwd`),
    files one issue, assigns it.
-2. `coder` works the issue to `done` with a per-finding report, or to `blocked` naming who
-   can unblock it. It does not open review issues itself.
-3. Operator imports the branch (`paperclip-agent import <worktree>`), reads it from the main
-   checkout, and files a review issue for `reviewer` when the change warrants one.
-4. `reviewer` posts numbered findings and a verdict, marks `done`.
-5. Operator files fix issues from the reviewer's own text, one worktree per cluster, back to
-   step 1. Conflicting fixes are re-run on the new base rather than rebased.
+2. `coder` works it to `done` with a per-finding report, or to `blocked` naming who can
+   unblock it. It does not open issues for other agents.
+3. Operator imports the branch (`paperclip-agent import <worktree>`) and files a `verifier`
+   issue naming the worktree and the coder's report. `return` goes back to the coder as a
+   new issue quoting the failed claims; `accept` continues.
+4. Operator files a `reviewer` issue. `request changes` becomes coder issues, one worktree
+   per cluster, back to step 1; conflicting fixes are re-run on the new base, not rebased.
+   `approve` continues.
+5. Operator files a `simplifier` issue. Proposals marked `worth it` become coder issues,
+   back to step 1. `no change recommended` ends the loop.
 6. Operator pushes and owns the PR.
 
-Steps 3 and 5 are deliberately human: they are where this pod's judgement is checked. Making
-either one an agent decision is the next experiment, not the default.
+Stopping rule, so the loop cannot become an open-ended spend: the loop ends at the first
+round where the reviewer approves and the simplifier recommends no change, or after four
+rounds, or when the company budget cap is hit, whichever comes first. A round that ends on
+the cap or the count is reported as such, not as approved.
+
+## Stages of agent autonomy
+
+Each stage adds exactly one capability. Everything not listed stays with the operator.
+
+| stage | agents may additionally | status |
+|---|---|---|
+| 0 | comment, set their own issue's status, commit in their own worktree | done |
+| 1 | `verifier` and `simplifier` roles receive issues (routing still human) | current |
+| 2 | reviewer/verifier set `in_review` and raise a Paperclip interaction (question or confirmation) instead of writing "operator must..." in prose | next |
+| 3 | one `lead` role creates child issues within one project, under a round cap and budget | not yet |
+| 4 | `releaser` pushes and opens PRs through a scoped GitHub token; the operator approves via `request_board_approval` | not yet |
+
+Stage 3 is the only one that lets an agent spend money on another agent's behalf. The
+default Paperclip execution contract's "create child issues directly" rule is deliberately
+absent from every AGENTS.md here until that stage.
 
 ## Standing rules (repeated in each AGENTS.md)
+
+- Start actionable work in the same heartbeat; do not stop at a plan unless the issue asks
+  for one.
+- Final disposition: `done` only when complete and verified by your own checks; `blocked`
+  only with a named unblock owner; never leave an issue `in_progress` on exit. Comments and
+  "remaining" bullets are evidence, not a reason to leave an issue open.
+- Respect budget, pause/cancel and company boundaries.
 
 - Reproduce before reporting; say what was reproduced.
 - One commit per finding; conventional-commit prefix; plain message, no trailers, no

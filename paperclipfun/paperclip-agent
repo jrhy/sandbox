@@ -70,10 +70,10 @@ role_binding() {
       [[ -d $cwd && -f $cwd/.git ]] || die "--cwd must be an existing linked worktree (has a .git file): $cwd"
       [[ -n "$(ls -A "$cwd" | grep -v '^\.git$')" ]] || die "--cwd is an empty checkout: $cwd"
       BIND_CWD="$cwd"; BIND_EXTRA="" ;;
-    reviewer)
+    reviewer|verifier|simplifier)
       [[ -d $review ]] || die "--review must be an existing worktree"
       BIND_CWD="$dir/workspace"; BIND_EXTRA="--allow-read $review --allow-read $main_git" ;;
-    *) die "role must be coder or reviewer" ;;
+    *) die "role must be coder, reviewer, verifier or simplifier" ;;
   esac
 }
 
@@ -179,7 +179,7 @@ cmd_bind() {
       *) name="$1"; shift ;;
     esac
   done
-  [[ -n $name && -n $role ]] || die "need <name> --role coder|reviewer (--cwd <wt> | --review <wt>)"
+  [[ -n $name && -n $role ]] || die "need <name> --role coder|reviewer|verifier|simplifier (--cwd <wt> | --review <wt>)"
   local company id; company=$(company_id)
   id=$(curl -sf "$api/api/companies/$company/agents" | jq -r --arg n "$name" '.[] | select(.name==$n) | .id')
   [[ -n $id && $(wc -l <<<"$id") -eq 1 ]] || die "no single agent named $name"
@@ -215,7 +215,7 @@ case "${1:-}" in
   create) shift; cmd_create "$@" ;;
   import) shift; cmd_import "$@" ;;
   *) echo "usage: paperclip-agent bootstrap [<company name>]
-       paperclip-agent create <name> --role coder|reviewer --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
-       paperclip-agent bind <name> --role coder|reviewer (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>]
+       paperclip-agent create <name> --role coder|reviewer|verifier|simplifier --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
+       paperclip-agent bind <name> --role coder|reviewer|verifier|simplifier (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>]
        paperclip-agent import <worktree>" >&2; exit 1 ;;
 esac

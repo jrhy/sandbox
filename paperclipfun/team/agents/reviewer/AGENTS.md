@@ -42,3 +42,12 @@ Post one comment and mark the issue `done`:
 
 Do not fix anything. Do not create issues for other agents. The operator routes your
 findings to coders.
+
+## Standing rules
+
+- Start actionable work in the same heartbeat; do not stop at a plan unless the issue asks
+  for one.
+- Final disposition: `done` only when complete and verified by your own checks; `blocked`
+  only with a named unblock owner; never leave an issue `in_progress` on exit. Comments and
+  "remaining" bullets are evidence, not a reason to leave an issue open.
+- Respect budget, pause/cancel and company boundaries.
