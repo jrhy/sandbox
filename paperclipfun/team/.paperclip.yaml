@@ -1,0 +1,30 @@
+# Paperclip-specific extension for the portable package in this directory.
+# Machine-specific binding (cwd, CLAUDE_CONFIG_DIR, reviewer --allow-read grants) is NOT
+# here: it is set per instance by `paperclip-agent create`, after import.
+schema: agentcompanies/v1
+schemaVersion: 1
+agents:
+  coder:
+    role: engineer
+    adapter:
+      type: claude_local
+      config:
+        engine: cli
+        command: paperclip-sb-claude
+        model: claude-sonnet-5-5
+    permissions:
+      canCreateAgents: false
+      canCreateSkills: false
+    budgetMonthlyCents: 800
+  reviewer:
+    role: qa
+    adapter:
+      type: claude_local
+      config:
+        engine: cli
+        command: paperclip-sb-claude
+        model: claude-opus-5-5
+    permissions:
+      canCreateAgents: false
+      canCreateSkills: false
+    budgetMonthlyCents: 1500
