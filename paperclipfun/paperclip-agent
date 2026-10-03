@@ -129,7 +129,7 @@ cmd_bootstrap() {
     || { echo "missing: cargo (brew install rustup; rustup default stable; add /opt/homebrew/opt/rustup/bin to PATH)" >&2; ok=false; }
   [[ -d "${PAPERCLIP_SRC:-$HOME/src/paperclip}/node_modules" ]] || { echo "missing: pnpm install in ${PAPERCLIP_SRC:-$HOME/src/paperclip}" >&2; ok=false; }
   [[ -f "$HOME/.claude.json" ]] || { echo "missing: ~/.claude.json (run claude once)" >&2; ok=false; }
-  sb exec -h 2>&1 | grep -q 'allow-write' || { echo "sb exec lacks --allow-write; rebuild from ~/sandbox/cmd/sb" >&2; ok=false; }
+  (sb exec -h 2>&1 || true) | grep -q allow-write || { echo "sb exec lacks --allow-write; rebuild from ~/sandbox/cmd/sb" >&2; ok=false; }
   [[ -d $main_git ]] || { echo "PAPERCLIP_SB_GIT_COMMON is not a dir: $main_git" >&2; ok=false; }
   $ok || exit 1
   curl -sf "$api/api/health" >/dev/null || die "Paperclip is not running at $api (start paperclip-proxy)"
