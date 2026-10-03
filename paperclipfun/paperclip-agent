@@ -29,40 +29,16 @@ company_id() {
   echo "$ids"
 }
 
-cmd_create() {
-  local name="" role="" model="" cwd="" review="" budget=500
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --role) role="$2"; shift 2 ;;
-      --model) model="$2"; shift 2 ;;
-      --cwd) cwd="$2"; shift 2 ;;
-      --review) review="$2"; shift 2 ;;
-      --budget) budget="$2"; shift 2 ;;
-      -*) die "unknown option $1" ;;
-      *) name="$1"; shift ;;
-    esac
-  done
-  [[ -n $name && -n $role && -n $model ]] || die "need <name> --role --model"
-
-  local dir="$agents_root/$name" extra=""
-  case "$role" in
-    coder)
-      [[ -d $cwd && -f $cwd/.git ]] || die "--cwd must be an existing linked worktree (has a .git file): $cwd"
-      [[ -n "$(ls -A "$cwd" | grep -v '^\.git$')" ]] || die "--cwd is an empty checkout: $cwd"
-      ;;
-    reviewer)
-      [[ -d $review ]] || die "--review must be an existing worktree"
-      cwd="$dir/workspace"
-      extra="--allow-read $review --allow-read $main_git"
-      ;;
-    *) die "role must be coder or reviewer" ;;
-  esac
-
-  [[ -e $dir ]] && die "agent config dir exists: $dir"
+# Per-agent Claude config dir: the operator's client id, attribution off, deny
+# rules as a second layer under the sandbox, a persistent HOME, a scratch cwd.
+setup_config_dir() {
+  local dir="$1" cwd="$2"
   mkdir -p "$dir/tmp" "$dir/home" "$cwd"
-  # Same Claude client id as the operator's own install.
-  jq '{userID, hasCompletedOnboarding: true}' "$HOME/.claude.json" >"$dir/.claude.json"
-  chmod 600 "$dir/.claude.json"
+  if [[ ! -f $dir/.claude.json ]]; then
+    # Same Claude client id as the operator's own install.
+    jq '{userID, hasCompletedOnboarding: true}' "$HOME/.claude.json" >"$dir/.claude.json"
+    chmod 600 "$dir/.claude.json"
+  fi
   cat >"$dir/settings.json" <<'JSON'
 {
   "includeCoAuthoredBy": false,
@@ -83,6 +59,51 @@ cmd_create() {
 JSON
   # The main checkout is agent-readable (through the worktree's git) but never writable.
   sed -i '' "s#MAIN_REPO#$(dirname "$main_git")#" "$dir/settings.json"
+
+}
+
+# Role-specific binding shared by create and bind: cwd, extra sb grants, env.
+role_binding() {
+  local role="$1" cwd="$2" review="$3" dir="$4"
+  case "$role" in
+    coder)
+      [[ -d $cwd && -f $cwd/.git ]] || die "--cwd must be an existing linked worktree (has a .git file): $cwd"
+      [[ -n "$(ls -A "$cwd" | grep -v '^\.git$')" ]] || die "--cwd is an empty checkout: $cwd"
+      BIND_CWD="$cwd"; BIND_EXTRA="" ;;
+    reviewer)
+      [[ -d $review ]] || die "--review must be an existing worktree"
+      BIND_CWD="$dir/workspace"; BIND_EXTRA="--allow-read $review --allow-read $main_git" ;;
+    *) die "role must be coder or reviewer" ;;
+  esac
+}
+
+# Body of the team package's AGENTS.md for a role, without the frontmatter.
+role_instructions() {
+  local f="$here/team/agents/$1/AGENTS.md"
+  [[ -f $f ]] || die "no instructions for role $1 at $f"
+  awk 'f==2{print} /^---$/{f++}' "$f" | sed '1{/^$/d;}'
+}
+
+cmd_create() {
+  local name="" role="" model="" cwd="" review="" budget=500
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role) role="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --cwd) cwd="$2"; shift 2 ;;
+      --review) review="$2"; shift 2 ;;
+      --budget) budget="$2"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n $name && -n $role && -n $model ]] || die "need <name> --role --model"
+
+  local dir="$agents_root/$name"
+  [[ -e $dir ]] && die "agent config dir exists: $dir (use bind to re-point an existing agent)"
+  role_binding "$role" "$cwd" "$review" "$dir"
+  cwd="$BIND_CWD"; local extra="$BIND_EXTRA"
+  setup_config_dir "$dir" "$cwd"
 
   local env
   env=$(jq -n --arg d "$dir" --arg x "$extra" '
@@ -142,11 +163,54 @@ cmd_bootstrap() {
   echo "ok"
 }
 
+# Re-point an existing Paperclip agent at a role from the team package: its
+# instructions become the role's AGENTS.md, and cwd/grants/env bind it to a
+# worktree. Use after `paperclipai company import team/` or to move an agent.
+cmd_bind() {
+  local name="" role="" model="" cwd="" review="" budget=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role) role="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --cwd) cwd="$2"; shift 2 ;;
+      --review) review="$2"; shift 2 ;;
+      --budget) budget="$2"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n $name && -n $role ]] || die "need <name> --role coder|reviewer (--cwd <wt> | --review <wt>)"
+  local company id; company=$(company_id)
+  id=$(curl -sf "$api/api/companies/$company/agents" | jq -r --arg n "$name" '.[] | select(.name==$n) | .id')
+  [[ -n $id && $(wc -l <<<"$id") -eq 1 ]] || die "no single agent named $name"
+
+  local dir="$agents_root/$name"
+  role_binding "$role" "$cwd" "$review" "$dir"
+  setup_config_dir "$dir" "$BIND_CWD"
+
+  local env patch
+  env=$(jq -n --arg d "$dir" --arg x "$BIND_EXTRA" '
+    {CLAUDE_CONFIG_DIR: {type:"plain", value:$d}}
+    + (if $x == "" then {} else {PAPERCLIP_SB_EXTRA_ARGS: {type:"plain", value:$x}} end)')
+  patch=$(curl -sf "$api/api/agents/$id" | jq --arg c "$BIND_CWD" --arg w "$wrapper" --arg m "$model" \
+    --arg t "$role" --argjson e "$env" --arg b "$budget" '{
+      title: $t,
+      adapterConfig: (.adapterConfig + {engine:"cli", command:$w, cwd:$c, env:$e}
+                      + (if $m == "" then {} else {model:$m} end))
+    } + (if $b == "" then {} else {budgetMonthlyCents: ($b|tonumber)} end)')
+  curl -sf -X PATCH "$api/api/agents/$id" -H 'content-type: application/json' -d "$patch" >/dev/null
+  curl -sf -X PUT "$api/api/agents/$id/instructions-bundle/file" -H 'content-type: application/json' \
+    -d "$(jq -n --arg c "$(role_instructions "$role")" '{path:"AGENTS.md", content:$c}')" >/dev/null
+  curl -sf "$api/api/agents/$id" | jq -r '"bound \(.name): role=\(.title) model=\(.adapterConfig.model) cwd=\(.adapterConfig.cwd)"'
+}
+
 case "${1:-}" in
+  bind) shift; cmd_bind "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
   create) shift; cmd_create "$@" ;;
   import) shift; cmd_import "$@" ;;
   *) echo "usage: paperclip-agent bootstrap [<company name>]
        paperclip-agent create <name> --role coder|reviewer --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
+       paperclip-agent bind <name> --role coder|reviewer (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>]
        paperclip-agent import <worktree>" >&2; exit 1 ;;
 esac
