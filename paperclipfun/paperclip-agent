@@ -199,8 +199,13 @@ cmd_bind() {
                       + (if $m == "" then {} else {model:$m} end))
     } + (if $b == "" then {} else {budgetMonthlyCents: ($b|tonumber)} end)')
   curl -sf -X PATCH "$api/api/agents/$id" -H 'content-type: application/json' -d "$patch" >/dev/null
+  # The entry file is written with optimistic concurrency: read its current
+  # revision id (null when there is none yet) and send it back.
+  local base
+  base=$(curl -sf "$api/api/agents/$id/instructions-bundle/file?path=AGENTS.md" | jq -c '.revision.id // null')
   curl -sf -X PUT "$api/api/agents/$id/instructions-bundle/file" -H 'content-type: application/json' \
-    -d "$(jq -n --arg c "$(role_instructions "$role")" '{path:"AGENTS.md", content:$c}')" >/dev/null
+    -d "$(jq -n --arg c "$(role_instructions "$role")" --argjson b "${base:-null}" '{path:"AGENTS.md", content:$c, baseRevisionId:$b}')" >/dev/null \
+    || die "could not write instructions for $name"
   curl -sf "$api/api/agents/$id" | jq -r '"bound \(.name): role=\(.title) model=\(.adapterConfig.model) cwd=\(.adapterConfig.cwd)"'
 }
 
