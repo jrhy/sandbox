@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Run Paperclip with its agents pinned to Anthropic models through an LLM proxy.
+# Reads optional settings from ~/.config/paperclipfun/env (see env.example).
+
+set -euo pipefail
+
+[[ -f "${PAPERCLIPFUN_ENV:-$HOME/.config/paperclipfun/env}" ]] && . "${PAPERCLIPFUN_ENV:-$HOME/.config/paperclipfun/env}"
+
+app="${PAPERCLIP_SRC:-$HOME/src/paperclip}"
+llm_host="${PAPERCLIP_SB_LLM_HOST:?set PAPERCLIP_SB_LLM_HOST (the LLM proxy hostname)}"
+# Command that prints a bearer token for the proxy. The default mints a ZR
+# gateway key from the monorepo with a Granted profile; set PAPERCLIP_KEY_CMD
+# for anything else, e.g. 'cat ~/.config/paperclipfun/token'.
+key_cmd="${PAPERCLIP_KEY_CMD:-cd ${ZR_REPO:-$HOME/ziprecruiter} && AWS_PROFILE=${ZR_LLM_AWS_PROFILE:-dev/developers-dev} go run ./llm/gateway/cmd/cli key}"
+
+err="$(mktemp)"
+key="$(bash -c "$key_cmd" 2>"$err")" || true
+if [[ -z "$key" ]]; then
+  echo "paperclip-proxy: PAPERCLIP_KEY_CMD produced no token." >&2
+  [[ -s "$err" ]] && sed 's/^/  /' "$err" >&2
+  rm -f "$err"
+  exit 1
+fi
+rm -f "$err"
+# Nothing from the key step reaches the agents.
+unset AWS_PROFILE
+
+# Only the proxy credential reaches Paperclip and the claude CLI it spawns.
+unset ANTHROPIC_API_KEY CLAUDE_CODE_OAUTH_TOKEN CLAUDE_CODE_USE_BEDROCK \
+  ANTHROPIC_BEDROCK_BASE_URL OPENAI_API_KEY OPENROUTER_API_KEY XAI_API_KEY \
+  GEMINI_API_KEY GOOGLE_API_KEY
+export ANTHROPIC_BASE_URL="${PAPERCLIP_SB_LLM_BASE_URL:-http://$llm_host/anthropic}"
+export ANTHROPIC_AUTH_TOKEN="$key"
+export ANTHROPIC_MODEL="${ANTHROPIC_MODEL-claude-sonnet-5-5}"
+export ANTHROPIC_SMALL_FAST_MODEL="claude-haiku-4-5"
+
+# Keep agents off ~/.claude (personal login, hooks, MCP servers).
+export CLAUDE_CONFIG_DIR="$HOME/.paperclip-claude"
+mkdir -p "$CLAUDE_CONFIG_DIR"
+
+export PAPERCLIP_TELEMETRY_DISABLED=1 DO_NOT_TRACK=1
+
+# Signs the per-run token agents use to call back into the Paperclip API.
+# `paperclipai onboard` generates one; a source checkout has to supply it.
+jwt_file="$HOME/.paperclip/agent-jwt-secret"
+if [[ ! -s "$jwt_file" ]]; then
+  mkdir -p "${jwt_file%/*}"
+  (umask 077 && openssl rand -hex 32 > "$jwt_file")
+fi
+export PAPERCLIP_AGENT_JWT_SECRET="$(<"$jwt_file")"
+
+cd "$app"
+exec pnpm "${@:-dev}"

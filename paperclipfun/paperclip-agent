@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# Create a sandboxed Paperclip agent: its Claude config dir, a persistent fake
+# HOME, and the Paperclip agent record pointing at paperclip-sb-claude.
+#
+#   paperclip-agent create <name> --role coder   --model <id> --cwd <worktree> [--budget <cents>]
+#   paperclip-agent create <name> --role reviewer --model <id> --review <worktree> [--budget <cents>]
+#
+# coder:    cwd is an isolated worktree on an agent/ branch; may commit there.
+# reviewer: cwd is a private scratch workspace; the reviewed worktree and the
+#           main repo's .git are read-only. Cannot commit anywhere.
+
+set -euo pipefail
+
+here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+[[ -f "${PAPERCLIPFUN_ENV:-$HOME/.config/paperclipfun/env}" ]] && . "${PAPERCLIPFUN_ENV:-$HOME/.config/paperclipfun/env}"
+
+api="${PAPERCLIP_API_URL:-http://127.0.0.1:3100}"
+agents_root="$HOME/.paperclip-claude/agents"
+main_git="${PAPERCLIP_SB_GIT_COMMON:?set PAPERCLIP_SB_GIT_COMMON (the main repo .git dir)}"
+wrapper="$here/paperclip-sb-claude"
+
+die() { echo "paperclip-agent: $*" >&2; exit 1; }
+
+# The company to act in: PAPERCLIP_COMPANY_ID, else the only company the server has.
+company_id() {
+  if [[ -n "${PAPERCLIP_COMPANY_ID:-}" ]]; then echo "$PAPERCLIP_COMPANY_ID"; return; fi
+  local ids; ids=$(curl -sf "$api/api/companies" | jq -r '.[].id') || die "cannot reach $api"
+  [[ -n $ids && $(wc -l <<<"$ids") -eq 1 ]] || die "set PAPERCLIP_COMPANY_ID; server has $(wc -l <<<"$ids" | tr -d ' ') companies"
+  echo "$ids"
+}
+
+cmd_create() {
+  local name="" role="" model="" cwd="" review="" budget=500
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role) role="$2"; shift 2 ;;
+      --model) model="$2"; shift 2 ;;
+      --cwd) cwd="$2"; shift 2 ;;
+      --review) review="$2"; shift 2 ;;
+      --budget) budget="$2"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *) name="$1"; shift ;;
+    esac
+  done
+  [[ -n $name && -n $role && -n $model ]] || die "need <name> --role --model"
+
+  local dir="$agents_root/$name" extra=""
+  case "$role" in
+    coder)
+      [[ -d $cwd && -f $cwd/.git ]] || die "--cwd must be an existing linked worktree (has a .git file): $cwd"
+      [[ -n "$(ls -A "$cwd" | grep -v '^\.git$')" ]] || die "--cwd is an empty checkout: $cwd"
+      ;;
+    reviewer)
+      [[ -d $review ]] || die "--review must be an existing worktree"
+      cwd="$dir/workspace"
+      extra="--allow-read $review --allow-read $main_git"
+      ;;
+    *) die "role must be coder or reviewer" ;;
+  esac
+
+  [[ -e $dir ]] && die "agent config dir exists: $dir"
+  mkdir -p "$dir/tmp" "$dir/home" "$cwd"
+  # Same Claude client id as the operator's own install.
+  jq '{userID, hasCompletedOnboarding: true}' "$HOME/.claude.json" >"$dir/.claude.json"
+  chmod 600 "$dir/.claude.json"
+  cat >"$dir/settings.json" <<'JSON'
+{
+  "includeCoAuthoredBy": false,
+  "permissions": {
+    "deny": [
+      "WebFetch", "WebSearch",
+      "Read(~/.aws/**)", "Edit(~/.aws/**)",
+      "Read(~/.ssh/**)", "Edit(~/.ssh/**)",
+      "Read(~/.kube/**)", "Edit(~/.kube/**)",
+      "Read(~/.config/**)", "Edit(~/.config/**)",
+      "Read(~/.granted/**)", "Read(~/.docker/**)", "Read(~/.netrc)",
+      "Read(~/.claude/**)", "Edit(~/.claude/**)", "Read(~/.claude.json)", "Edit(~/.claude.json)",
+      "Edit(~/.paperclip-claude/**)", "Read(~/.paperclip/agent-jwt-secret)", "Edit(~/.paperclip/**)",
+      "Edit(~/bin/**)", "Edit(MAIN_REPO/**)"
+    ]
+  }
+}
+JSON
+  # The main checkout is agent-readable (through the worktree's git) but never writable.
+  sed -i '' "s#MAIN_REPO#$(dirname "$main_git")#" "$dir/settings.json"
+
+  local env
+  env=$(jq -n --arg d "$dir" --arg x "$extra" '
+    {CLAUDE_CONFIG_DIR: {type:"plain", value:$d}}
+    + (if $x == "" then {} else {PAPERCLIP_SB_EXTRA_ARGS: {type:"plain", value:$x}} end)')
+  local body company; company=$(company_id)
+  body=$(jq -n --arg n "$name" --arg t "$role" --arg m "$model" --arg c "$cwd" --arg w "$wrapper" \
+    --argjson b "$budget" --argjson e "$env" '{
+      name:$n, role:"general", title:$t, adapterType:"claude_local", budgetMonthlyCents:$b,
+      adapterConfig:{model:$m, engine:"cli", command:$w, cwd:$c, env:$e}}')
+  curl -sf -X POST "$api/api/companies/$company/agents" -H 'content-type: application/json' -d "$body" \
+    | jq -r '"created \(.name) id=\(.id) model=\(.adapterConfig.model) cwd=\(.adapterConfig.cwd)"'
+}
+
+# Copy an agent worktree's private objects into the main repo through
+# index-pack --strict, so every object is re-hashed and fsck'd before host git
+# can read it. Run this before `git log agent/<name>` on the host.
+cmd_import() {
+  local wt="$1" admin ids
+  [[ -d $wt ]] || die "no such worktree: $wt"
+  admin="$main_git/worktrees/$(basename "$wt")"
+  [[ -d $admin/objects ]] || { echo "nothing to import"; return 0; }
+  ids=$(cd "$admin/objects" && {
+    for f in [0-9a-f][0-9a-f]/*; do [[ -f $f ]] && echo "${f%%/*}${f#*/}"; done
+    for i in pack/*.idx; do [[ -f $i ]] && git show-index <"$i" | awk '{print $2}'; done
+  } | grep -E '^[0-9a-f]{40}$|^[0-9a-f]{64}$' | sort -u || true)
+  [[ -n $ids ]] || { echo "nothing to import"; return 0; }
+  printf '%s\n' "$ids" \
+    | GIT_DIR="$main_git" GIT_ALTERNATE_OBJECT_DIRECTORIES="$admin/objects" git pack-objects --stdout -q \
+    | GIT_DIR="$main_git" git index-pack --strict --stdin >/dev/null
+  echo "imported $(printf '%s\n' "$ids" | wc -l | tr -d ' ') objects from $(basename "$wt")"
+}
+
+# One-time setup checks, plus the two things the Paperclip onboarding wizard
+# can't do with a proxy token: create the company, and (via paperclip-proxy) the
+# agent JWT secret.
+cmd_bootstrap() {
+  local name="${1:-}" ok=true t
+  for t in node pnpm claude sb jq curl git; do
+    command -v "$t" >/dev/null || { echo "missing: $t" >&2; ok=false; }
+  done
+  # Paperclip's native runner is a Rust build; rustup's keg-only prefix is a common home.
+  command -v cargo >/dev/null || [[ -x /opt/homebrew/opt/rustup/bin/cargo ]] \
+    || { echo "missing: cargo (brew install rustup; rustup default stable; add /opt/homebrew/opt/rustup/bin to PATH)" >&2; ok=false; }
+  [[ -d "${PAPERCLIP_SRC:-$HOME/src/paperclip}/node_modules" ]] || { echo "missing: pnpm install in ${PAPERCLIP_SRC:-$HOME/src/paperclip}" >&2; ok=false; }
+  [[ -f "$HOME/.claude.json" ]] || { echo "missing: ~/.claude.json (run claude once)" >&2; ok=false; }
+  sb exec -h 2>&1 | grep -q 'allow-write' || { echo "sb exec lacks --allow-write; rebuild from ~/sandbox/cmd/sb" >&2; ok=false; }
+  [[ -d $main_git ]] || { echo "PAPERCLIP_SB_GIT_COMMON is not a dir: $main_git" >&2; ok=false; }
+  $ok || exit 1
+  curl -sf "$api/api/health" >/dev/null || die "Paperclip is not running at $api (start paperclip-proxy)"
+  if [[ -n $name ]]; then
+    curl -sf -X POST "$api/api/companies" -H 'content-type: application/json' \
+      -d "$(jq -n --arg n "$name" '{name:$n}')" | jq -r '"created company \(.name) id=\(.id)  (export PAPERCLIP_COMPANY_ID=\(.id))"'
+  else
+    echo "companies: $(curl -sf "$api/api/companies" | jq -r '.[] | "\(.name)=\(.id)"' | tr '\n' ' ')"
+  fi
+  echo "ok"
+}
+
+case "${1:-}" in
+  bootstrap) shift; cmd_bootstrap "$@" ;;
+  create) shift; cmd_create "$@" ;;
+  import) shift; cmd_import "$@" ;;
+  *) echo "usage: paperclip-agent bootstrap [<company name>]
+       paperclip-agent create <name> --role coder|reviewer --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
+       paperclip-agent import <worktree>" >&2; exit 1 ;;
+esac

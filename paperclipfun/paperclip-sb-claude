@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# Run the claude CLI for a Paperclip agent inside `sb exec` (macOS seatbelt).
+# Set as the claude_local adapter's `command` with engine "cli".
+#
+# The agent can write only its cwd (the workspace Paperclip chose) and its
+# CLAUDE_CONFIG_DIR, read its own Paperclip instructions/runtime files, and
+# reach only the LLM proxy over HTTP(S) plus the Paperclip API on localhost.
+
+set -euo pipefail
+
+[[ -f "${PAPERCLIPFUN_ENV:-$HOME/.config/paperclipfun/env}" ]] && . "${PAPERCLIPFUN_ENV:-$HOME/.config/paperclipfun/env}"
+
+: "${CLAUDE_CONFIG_DIR:?paperclip-sb-claude: set CLAUDE_CONFIG_DIR in the agent env}"
+: "${PAPERCLIP_COMPANY_ID:?paperclip-sb-claude: PAPERCLIP_COMPANY_ID not set by Paperclip}"
+: "${PAPERCLIP_AGENT_ID:?paperclip-sb-claude: PAPERCLIP_AGENT_ID not set by Paperclip}"
+
+instance="${PAPERCLIP_HOME:-$HOME/.paperclip}/instances/${PAPERCLIP_INSTANCE_ID:-default}"
+company="$instance/companies/$PAPERCLIP_COMPANY_ID"
+llm_host="${PAPERCLIP_SB_LLM_HOST:?set PAPERCLIP_SB_LLM_HOST}"
+
+# Localhost ports the agent may dial directly: the Paperclip API(s).
+ports=()
+for url in "${PAPERCLIP_API_URL:-}" "${PAPERCLIP_RUNTIME_API_URL:-}"; do
+  [[ "$url" =~ ^https?://(localhost|127\.0\.0\.1)(:([0-9]+))? ]] || continue
+  ports+=("${BASH_REMATCH[3]:-80}")
+done
+[[ ${#ports[@]} -gt 0 ]] || ports=(3100)
+port_list="$(IFS=,; echo "${ports[*]}")"
+
+# Claude otherwise uses /tmp/claude-<uid>, which other Claude sessions share.
+export CLAUDE_CODE_TMPDIR="$CLAUDE_CONFIG_DIR/tmp"
+# zsh writes here-documents under $TMPPREFIX (default /tmp/zsh), not $TMPDIR.
+export TMPPREFIX="$CLAUDE_CODE_TMPDIR/zsh"
+mkdir -p "$CLAUDE_CODE_TMPDIR"
+
+# A persistent fake HOME so caches under ~ (zuul go-run binaries, etc.)
+# survive between runs. Pre-warm host-built tools by running them once from
+# the agent's cwd with HOME pointed here, e.g. HOME=$agent_home bin/shzr check.
+agent_home="$CLAUDE_CONFIG_DIR/home"
+mkdir -p "$agent_home"
+
+# macOS mktemp ignores TMPDIR for bare `mktemp`/`mktemp -d` and uses the
+# per-user /var/folders/.../T, which is outside the sandbox. Shim it to default
+# to $TMPDIR; explicit templates and -p still win.
+mkdir -p "$agent_home/bin"
+cat >"$agent_home/bin/mktemp" <<'SH'
+#!/bin/sh
+exec /usr/bin/mktemp -p "${TMPDIR:-/tmp}" "$@"
+SH
+chmod +x "$agent_home/bin/mktemp"
+export PATH="$agent_home/bin:$PATH"
+
+args=(--minimal-fs
+  --home "$agent_home"
+  --http-allow "$llm_host"
+  --localhost-allow "$port_list"
+  --allow-write "$CLAUDE_CONFIG_DIR")
+for dir in "$company/agents/$PAPERCLIP_AGENT_ID" "$company/claude-prompt-cache"; do
+  [[ -d "$dir" ]] && args+=(--allow-read "$dir")
+done
+# Paperclip creates the run's scratch dirs under the server's own TMPDIR,
+# outside anything else granted here; it deletes them after the run.
+for dir in "${PAPERCLIP_RUN_SCRATCH_DIR:-}" "${PAPERCLIP_TASK_SCRATCH_DIR:-}" "${PAPERCLIP_SCRATCH_DIR:-}"; do
+  [[ -n "$dir" && -d "$dir" ]] && args+=(--allow-write "$dir")
+done
+# Homebrew's bin/ entries are symlinks into Cellar/, which sb only reaches if
+# the whole prefix is readable. It holds installed software, no user data.
+[[ -d /opt/homebrew ]] && args+=(--allow-read /opt/homebrew)
+
+# Go: sb replaces HOME, so Go's defaults would point at an empty module cache
+# and an unreadable toolchain. Share the host module cache and toolchain
+# read-only, keep build cache and temp files per agent, and never download.
+if command -v go >/dev/null; then
+  goroot="$(go env GOROOT)"
+  gomodcache="$(go env GOMODCACHE)"
+  mkdir -p "$CLAUDE_CONFIG_DIR/go-cache" "$CLAUDE_CODE_TMPDIR/go"
+  args+=(--allow-read "$goroot")
+  [[ -d "$gomodcache" ]] && args+=(--allow-read "$gomodcache")
+  export GOMODCACHE="$gomodcache" GOCACHE="$CLAUDE_CONFIG_DIR/go-cache" \
+    GOTMPDIR="$CLAUDE_CODE_TMPDIR/go" GOPROXY=off GOTOOLCHAIN=local
+fi
+
+# Git, for a linked worktree whose branch is under refs/heads/agent/. The
+# shared repo is read-only except for this worktree's own admin dir and the
+# agent/ branch namespace (refs + reflogs). New objects go to a private store
+# in the admin dir; the shared store is only read, through
+# GIT_ALTERNATE_OBJECT_DIRECTORIES, because write access there would also let
+# the agent delete existing objects and pack indexes. The main repo must NOT
+# list the private store in its alternates: git trusts loose objects by file
+# name, so an object the agent stores under a forged id would be served as
+# genuine to every host git command for as long as the line exists. Host-side
+# review goes through `paperclip-agent import <worktree>`, which re-hashes
+# everything with index-pack --strict first. Hooks, config and every other
+# branch stay read-only, so the agent can't plant a hook or move a ref that
+# unsandboxed git would act on.
+#
+# Nothing here runs git in the worktree: its .git file and admin dir are
+# agent-writable, and host git following them would execute agent-chosen
+# config. Paths come from the trusted main repo, and HEAD is read as text.
+common="${PAPERCLIP_SB_GIT_COMMON:?set PAPERCLIP_SB_GIT_COMMON (the main repo .git dir)}"
+gitdir="$common/worktrees/$(basename "$PWD")"
+if [[ -f .git && -f "$gitdir/HEAD" ]]; then
+  branch="$(sed -n 's#^ref: refs/heads/##p' "$gitdir/HEAD")"
+  if [[ "$branch" == agent/* ]]; then
+    objdir="$gitdir/objects"
+    mkdir -p "$common/refs/heads/agent" "$common/logs/refs/heads/agent" \
+      "$objdir/pack" "$objdir/info"
+    args+=(--allow-read "$common"
+      --allow-write "$gitdir"
+      --allow-write "$common/refs/heads/agent"
+      --allow-write "$common/logs/refs/heads/agent")
+    # The private store applies only to git run against this worktree. Exporting
+    # GIT_OBJECT_DIRECTORY globally made throwaway repos the agent creates under
+    # $TMPDIR write their objects into the store too, so a `git` shim sets it
+    # only when the command targets the worktree (cwd or -C inside it, no
+    # explicit GIT_DIR).
+    cat >"$agent_home/bin/git" <<SH
+#!/bin/bash
+# Real git: first PATH entry other than this shim's dir that the sandbox can run.
+real_git=\$(PATH=\${PATH//$agent_home\/bin:/} type -P git)
+wt='$PWD'
+target=\$PWD
+args=("\$@")
+while [[ \${#args[@]} -ge 2 && \${args[0]} == -C ]]; do
+  case \${args[1]} in /*) target=\${args[1]} ;; *) target=\$target/\${args[1]} ;; esac
+  args=("\${args[@]:2}")
+done
+if [[ -z \${GIT_DIR:-} && ( \$target == "\$wt" || \$target == "\$wt"/* ) ]]; then
+  export GIT_OBJECT_DIRECTORY='$objdir' GIT_ALTERNATE_OBJECT_DIRECTORIES='$common/objects'
+fi
+exec "\$real_git" "\$@"
+SH
+    chmod +x "$agent_home/bin/git"
+    # HOME is replaced, so ~/.gitconfig is out of reach: supply identity, and
+    # keep git from spawning an fsmonitor daemon or auto-gc (which rewrites
+    # packs and packed-refs outside the granted paths).
+    name="$(cd / && git config --global user.name)" email="$(cd / && git config --global user.email)"
+    export GIT_AUTHOR_NAME="$name" GIT_AUTHOR_EMAIL="$email" \
+      GIT_COMMITTER_NAME="$name" GIT_COMMITTER_EMAIL="$email" \
+      GIT_CONFIG_COUNT=3 \
+      GIT_CONFIG_KEY_0=core.fsmonitor GIT_CONFIG_VALUE_0=false \
+      GIT_CONFIG_KEY_1=gc.auto GIT_CONFIG_VALUE_1=0 \
+      GIT_CONFIG_KEY_2=maintenance.auto GIT_CONFIG_VALUE_2=false
+  fi
+fi
+
+# Per-role extras, set in the agent's env config (e.g. a reviewer's
+# --allow-read on the worktree it reviews). Whitespace-separated sb exec flags.
+if [[ -n "${PAPERCLIP_SB_EXTRA_ARGS:-}" ]]; then
+  read -r -a extra <<<"$PAPERCLIP_SB_EXTRA_ARGS"
+  args+=("${extra[@]}")
+fi
+
+exec sb exec "${args[@]}" "${PAPERCLIP_SB_CLAUDE_BIN:-$HOME/.local/bin/claude}" "$@"
