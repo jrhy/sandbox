@@ -45,14 +45,24 @@ mkdir -p "$agent_home"
 mkdir -p "$agent_home/bin"
 cat >"$agent_home/bin/mktemp" <<'SH'
 #!/bin/sh
-# Only default the directory; an explicit template (any arg with a slash) or
-# -p/-t already says where to go, and -p with an absolute template misbehaves.
-for a in "$@"; do
-  case $a in /*|*/*|-p|-p*|-t|--tmpdir*) exec /usr/bin/mktemp "$@" ;; esac
+# macOS mktemp ignores $TMPDIR for bare templates and for -t (both use the
+# per-user temp dir, outside the sandbox). Rewrite those two forms onto $TMPDIR;
+# anything that already names a directory passes through untouched.
+dir="${TMPDIR:-/tmp}"
+set -- "$@"
+out=""; i=0; n=$#; seen_dir=
+while [ $i -lt $n ]; do
+  a=$1; shift; i=$((i+1))
+  case $a in
+    -t) p=$1; shift; i=$((i+1)); out="$out \"$dir/$p.XXXXXXXXXX\""; seen_dir=1 ;;
+    -p|--tmpdir=*|/*|*/*) out="$out \"$a\""; seen_dir=1 ;;
+    -p*) out="$out \"$a\""; seen_dir=1 ;;
+    *) out="$out \"$a\"" ;;
+  esac
 done
-exec /usr/bin/mktemp -p "${TMPDIR:-/tmp}" "$@"
-SH
-chmod +x "$agent_home/bin/mktemp"
+[ -n "$seen_dir" ] || out="-p \"$dir\" $out"
+eval exec /usr/bin/mktemp $out
+SHchmod +x "$agent_home/bin/mktemp"
 export PATH="$agent_home/bin:$PATH"
 
 args=(--minimal-fs
