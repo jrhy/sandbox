@@ -39,30 +39,10 @@ mkdir -p "$CLAUDE_CODE_TMPDIR"
 agent_home="$CLAUDE_CONFIG_DIR/home"
 mkdir -p "$agent_home"
 
-# macOS mktemp ignores TMPDIR for bare `mktemp`/`mktemp -d` and uses the
-# per-user /var/folders/.../T, which is outside the sandbox. Shim it to default
-# to $TMPDIR; explicit templates and -p still win.
+# macOS mktemp ignores $TMPDIR for bare templates and -t; see mktemp-shim.sh.
 mkdir -p "$agent_home/bin"
-cat >"$agent_home/bin/mktemp" <<'SH'
-#!/bin/sh
-# macOS mktemp ignores $TMPDIR for bare templates and for -t (both use the
-# per-user temp dir, outside the sandbox). Rewrite those two forms onto $TMPDIR;
-# anything that already names a directory passes through untouched.
-dir="${TMPDIR:-/tmp}"
-set -- "$@"
-out=""; i=0; n=$#; seen_dir=
-while [ $i -lt $n ]; do
-  a=$1; shift; i=$((i+1))
-  case $a in
-    -t) p=$1; shift; i=$((i+1)); out="$out \"$dir/$p.XXXXXXXXXX\""; seen_dir=1 ;;
-    -p|--tmpdir=*|/*|*/*) out="$out \"$a\""; seen_dir=1 ;;
-    -p*) out="$out \"$a\""; seen_dir=1 ;;
-    *) out="$out \"$a\"" ;;
-  esac
-done
-[ -n "$seen_dir" ] || out="-p \"$dir\" $out"
-eval exec /usr/bin/mktemp $out
-SHchmod +x "$agent_home/bin/mktemp"
+cp "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/mktemp-shim.sh" "$agent_home/bin/mktemp"
+chmod +x "$agent_home/bin/mktemp"
 export PATH="$agent_home/bin:$PATH"
 
 args=(--minimal-fs
