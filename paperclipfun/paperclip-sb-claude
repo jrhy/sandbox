@@ -45,6 +45,11 @@ mkdir -p "$agent_home"
 mkdir -p "$agent_home/bin"
 cat >"$agent_home/bin/mktemp" <<'SH'
 #!/bin/sh
+# Only default the directory; an explicit template (any arg with a slash) or
+# -p/-t already says where to go, and -p with an absolute template misbehaves.
+for a in "$@"; do
+  case $a in /*|*/*|-p|-p*|-t|--tmpdir*) exec /usr/bin/mktemp "$@" ;; esac
+done
 exec /usr/bin/mktemp -p "${TMPDIR:-/tmp}" "$@"
 SH
 chmod +x "$agent_home/bin/mktemp"
