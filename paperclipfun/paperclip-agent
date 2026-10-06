@@ -217,12 +217,60 @@ cmd_bind() {
   curl -sf "$api/api/agents/$id" | jq -r '"bound \(.name): role=\(.title) model=\(.adapterConfig.model) cwd=\(.adapterConfig.cwd)"'
 }
 
+# Read-only views for operators and other sessions.
+cmd_agents() {
+  local company; company=$(company_id)
+  curl -sf "$api/api/companies/$company/agents" \
+    | jq -r '.[] | [.name, .title, .status, (.adapterConfig.model // "-"), (.adapterConfig.cwd // "-")] | @tsv' | column -t -s $'\t'
+}
+cmd_issues() {
+  local company; company=$(company_id)
+  local agents; agents=$(curl -sf "$api/api/companies/$company/agents" | jq 'map({key:.id, value:.name}) | from_entries')
+  curl -sf "$api/api/companies/$company/issues" \
+    | jq -r --argjson a "$agents" 'sort_by(.identifier | ltrimstr("ZIP-") | tonumber) | .[] | [.identifier, .status, ($a[.assigneeAgentId // ""] // "-"), .title] | @tsv' | column -t -s $'\t'
+}
+
+# File an issue. Body comes from a file (or stdin with -), so other sessions can
+# write a proper outcome/context/constraints description without quoting pain.
+#   paperclip-agent file --title "..." --body-file issue.md [--assign <agent>] [--status backlog|todo]
+# Unassigned or backlog issues never wake an agent; assigned todo issues do.
+cmd_file() {
+  local title="" body_file="" assign="" status="backlog"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --title) title="$2"; shift 2 ;;
+      --body-file) body_file="$2"; shift 2 ;;
+      --assign) assign="$2"; shift 2 ;;
+      --status) status="$2"; shift 2 ;;
+      -*) die "unknown option $1" ;;
+      *) die "unexpected argument $1" ;;
+    esac
+  done
+  [[ -n $title && -n $body_file ]] || die "need --title and --body-file (use - for stdin)"
+  [[ $status == backlog || $status == todo ]] || die "--status must be backlog or todo"
+  local body; if [[ $body_file == - ]]; then body=$(cat); else body=$(cat "$body_file"); fi
+  local company assignee=null; company=$(company_id)
+  if [[ -n $assign ]]; then
+    assignee=$(curl -sf "$api/api/companies/$company/agents" | jq --arg n "$assign" '[.[] | select(.name==$n)] | if length==1 then .[0].id else empty end')
+    [[ -n $assignee ]] || die "no single agent named $assign (see: paperclip-agent agents)"
+    [[ $status == todo ]] || status=todo
+  fi
+  curl -sf -X POST "$api/api/companies/$company/issues" -H 'content-type: application/json' \
+    -d "$(jq -n --arg t "$title" --arg d "$body" --argjson a "$assignee" --arg s "$status" '{title:$t, description:$d, assigneeAgentId:$a, status:$s}')" \
+    | jq -r '"filed \(.identifier) \(.status)\(if .assigneeAgentId then " -> assigned" else " (unassigned; nothing will run)" end)"'
+}
+
 case "${1:-}" in
+  agents) shift; cmd_agents "$@" ;;
+  issues) shift; cmd_issues "$@" ;;
+  file) shift; cmd_file "$@" ;;
   bind) shift; cmd_bind "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
   create) shift; cmd_create "$@" ;;
   import) shift; cmd_import "$@" ;;
-  *) echo "usage: paperclip-agent bootstrap [<company name>]
+  *) echo "usage: paperclip-agent agents | issues
+       paperclip-agent file --title <t> --body-file <f|-> [--assign <agent>] [--status backlog|todo]
+       paperclip-agent bootstrap [<company name>]
        paperclip-agent create <name> --role coder|reviewer|verifier|simplifier --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
        paperclip-agent bind <name> --role coder|reviewer|verifier|simplifier (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>]
        paperclip-agent import <worktree>" >&2; exit 1 ;;
