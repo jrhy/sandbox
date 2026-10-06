@@ -14,7 +14,8 @@ service and the same at every tier.
   a few days can inflate on prod; sanity-check against a short window.
 - Loki: `logcli` with flags first and the query last, `--since 2h` for relative time (not
   `--from` with a relative string), `--limit`, `-o raw` for JSON lines. `|=` for a literal
-  substring; `|~` only for real alternation. `LOKI_ADDR` and `LOKI_ORG_ID` are set for you.
+  substring; `|~` only for real alternation. `LOKI_ORG_ID` and the proxy settings are set for
+  you; set `LOKI_ADDR` to the tier's host below.
 - Grafana read: the anonymous host for the tier; `GET /api/dashboards/uid/<uid>` returns
   provisioned dashboards as JSON. Provisioned dashboard sources live under
   `monitoring/grafana/dashboards/` in the checkout; the JSON there is the truth, Grafana is a
