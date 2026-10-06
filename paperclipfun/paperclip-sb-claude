@@ -166,6 +166,9 @@ if [[ -n "${PAPERCLIP_SB_TIERS:-}" ]]; then
   done
   args+=(--http-allow "${hosts%,}")
   export LOKI_ORG_ID="${LOKI_ORG_ID:-logs--vector-agent}"
+  # logcli ignores HTTP_PROXY unless asked; without this every Loki call fails
+  # DNS inside the sandbox, whose only network path is the allowlist proxy.
+  export LOKI_ENV_PROXY=true
 fi
 
 # Grafana dashboard writes, dev only. The cloudflared access token is read on
