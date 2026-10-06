@@ -104,24 +104,35 @@ if [[ -f .git && -f "$gitdir/HEAD" ]]; then
       --allow-write "$gitdir"
       --allow-write "$common/refs/heads/agent"
       --allow-write "$common/logs/refs/heads/agent")
-    # The private store applies only to git run against this worktree. Exporting
-    # GIT_OBJECT_DIRECTORY globally made throwaway repos the agent creates under
-    # $TMPDIR write their objects into the store too, so a `git` shim sets it
-    # only when the command targets the worktree (cwd or -C inside it, no
-    # explicit GIT_DIR).
+    # The private store applies only to git run against this worktree. The shim
+    # asks git which repository the command's target belongs to and applies the
+    # store only when that is this worktree (its common dir is the main repo's).
+    # init/clone create repos, so they never get it. A path-prefix test was tried
+    # first and misfired on throwaway repos created from the worktree's cwd.
     cat >"$agent_home/bin/git" <<SH
 #!/bin/bash
 # Real git: first PATH entry other than this shim's dir that the sandbox can run.
 real_git=\$(PATH=\${PATH//$agent_home\/bin:/} type -P git)
-wt='$PWD'
+common='$common'
 target=\$PWD
 args=("\$@")
-while [[ \${#args[@]} -ge 2 && \${args[0]} == -C ]]; do
-  case \${args[1]} in /*) target=\${args[1]} ;; *) target=\$target/\${args[1]} ;; esac
-  args=("\${args[@]:2}")
+skip=
+while [[ \${#args[@]} -ge 1 ]]; do
+  case \${args[0]} in
+    -C) [[ \${#args[@]} -ge 2 ]] || break
+        case \${args[1]} in /*) target=\${args[1]} ;; *) target=\$target/\${args[1]} ;; esac
+        args=("\${args[@]:2}") ;;
+    --git-dir|--git-dir=*|--work-tree|--work-tree=*) skip=1; break ;;
+    -*) args=("\${args[@]:1}") ;;
+    init|clone) skip=1; break ;;
+    *) break ;;
+  esac
 done
-if [[ -z \${GIT_DIR:-} && ( \$target == "\$wt" || \$target == "\$wt"/* ) ]]; then
-  export GIT_OBJECT_DIRECTORY='$objdir' GIT_ALTERNATE_OBJECT_DIRECTORIES='$common/objects'
+if [[ -z \${GIT_DIR:-} && -z \$skip && -d \$target ]]; then
+  tc=\$(cd "\$target" 2>/dev/null && "\$real_git" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+  if [[ -n \$tc && \$(cd "\$tc" 2>/dev/null && pwd -P) == \$(cd "\$common" && pwd -P) ]]; then
+    export GIT_OBJECT_DIRECTORY='$objdir' GIT_ALTERNATE_OBJECT_DIRECTORIES='$common/objects'
+  fi
 fi
 exec "\$real_git" "\$@"
 SH
