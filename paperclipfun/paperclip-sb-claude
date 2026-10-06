@@ -150,6 +150,43 @@ SH
   fi
 fi
 
+# Observability grants by tier. Thanos and Loki are read-only anonymous APIs;
+# Grafana read is anonymous through WARP. Loki prod can carry PII: the role's
+# instructions (team/observability.md) carry the aggregate-and-redact rule.
+# EU prod is never granted.
+if [[ -n "${PAPERCLIP_SB_TIERS:-}" ]]; then
+  hosts=""
+  IFS=, read -r -a tiers <<<"$PAPERCLIP_SB_TIERS"
+  for tier in "${tiers[@]}"; do
+    case "$tier" in
+      dev)  hosts+="thanos.d1-dev-uw2.zipaws.com,loki.d1-dev-uw2.zipaws.com,grafana.monitoring--grafana.d1-dev-uw2.zipaws.com," ;;
+      prod) hosts+="thanos.p1-prod-ue1.zipaws.com,loki.p1-prod-ue1.zipaws.com,grafana.monitoring--grafana.p1-prod-ue1.zipaws.com," ;;
+      *) echo "paperclip-sb-claude: unknown tier '$tier' in PAPERCLIP_SB_TIERS" >&2; exit 1 ;;
+    esac
+  done
+  args+=(--http-allow "${hosts%,}")
+  export LOKI_ORG_ID="${LOKI_ORG_ID:-logs--vector-agent}"
+fi
+
+# Grafana dashboard writes, dev only. The cloudflared access token is read on
+# the host and passed as an env value; the token file itself stays unreadable.
+# The token acts as the operator, so the role's instructions limit writes to
+# the personal preview dashboard; that limit is not enforceable here.
+if [[ "${PAPERCLIP_SB_GRAFANA_WRITE:-}" == dev ]]; then
+  tok=""
+  for f in "$HOME"/.cloudflared/*.d1.zr.org-*-token; do
+    [[ -f $f ]] || continue
+    exp=$(python3 -c 'import sys,json,base64;t=open(sys.argv[1]).read().strip().split(".");print(json.loads(base64.urlsafe_b64decode(t[1]+"=="))["exp"])' "$f" 2>/dev/null) || continue
+    (( exp > $(date +%s) + 600 )) && tok=$(<"$f")
+  done
+  if [[ -z $tok ]]; then
+    echo "paperclip-sb-claude: no valid cloudflared token for grafana.d1.zr.org; run: bin/cloudflared access login https://grafana.d1.zr.org" >&2
+    exit 1
+  fi
+  export GRAFANA_DEV_CF_TOKEN="$tok"
+  args+=(--http-allow grafana.d1.zr.org)
+fi
+
 # Per-role extras, set in the agent's env config (e.g. a reviewer's
 # --allow-read on the worktree it reviews). Whitespace-separated sb exec flags.
 if [[ -n "${PAPERCLIP_SB_EXTRA_ARGS:-}" ]]; then

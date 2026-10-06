@@ -59,7 +59,16 @@ setup_config_dir() {
 JSON
   # The main checkout is agent-readable (through the worktree's git) but never writable.
   sed -i '' "s#MAIN_REPO#$(dirname "$main_git")#" "$dir/settings.json"
+  prewarm_home "$dir"
 
+}
+
+# Tools that cache under $HOME get built on the host once, into the agent's
+# persistent fake HOME, because the sandbox has no network to build them in.
+prewarm_home() {
+  local dir="$1" repo; repo=$(dirname "$main_git")
+  ( cd "$repo" && HOME="$dir/home" bin/shzr check bin/worktree >/dev/null 2>&1 ) || true
+  ( cd "$repo" && HOME="$dir/home" bin/promql --help >/dev/null 2>&1 ) || true
 }
 
 # Role-specific binding shared by create and bind: cwd, extra sb grants, env.
@@ -73,19 +82,36 @@ role_binding() {
     reviewer|verifier|simplifier)
       [[ -d $review ]] || die "--review must be an existing worktree"
       BIND_CWD="$dir/workspace"; BIND_EXTRA="--allow-read $review --allow-read $main_git" ;;
-    *) die "role must be coder, reviewer, verifier or simplifier" ;;
+    observer)
+      # Read-only investigator: the main checkout for bin/promql, zuul and the
+      # skills docs; no worktree, no git write. Needs --tier to be useful.
+      BIND_CWD="$dir/workspace"; BIND_EXTRA="--allow-read $(dirname "$main_git")" ;;
+    *) die "role must be coder, reviewer, verifier, simplifier or observer" ;;
   esac
+}
+
+# One "## <title>" section of a markdown file, header excluded, up to the next "## ".
+obs_section() {
+  awk -v want="## $2" 'f && /^## /{exit} f{print} $0==want{f=1}' "$1"
 }
 
 # Body of the team package's AGENTS.md for a role, without the frontmatter.
 role_instructions() {
-  local f="$here/team/agents/$1/AGENTS.md"
+  local f="$here/team/agents/$1/AGENTS.md" tiers="${2:-}" gw="${3:-}"
   [[ -f $f ]] || die "no instructions for role $1 at $f"
   awk 'f==2{print} /^---$/{f++}' "$f" | sed '1{/^$/d;}'
+  if [[ -n $tiers ]]; then
+    local obs="$here/team/observability.md"
+    printf '\n## Observability (granted tiers: %s)\n' "$tiers"
+    obs_section "$obs" "Shared"
+    for t in ${tiers//,/ }; do obs_section "$obs" "Tier: $t"; done
+    [[ $gw == dev ]] && obs_section "$obs" "Grafana writes (dev)"
+  fi
+  return 0
 }
 
 cmd_create() {
-  local name="" role="" model="" cwd="" review="" budget=500
+  local name="" role="" model="" cwd="" review="" budget=500 tiers="" gw=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --role) role="$2"; shift 2 ;;
@@ -93,6 +119,8 @@ cmd_create() {
       --cwd) cwd="$2"; shift 2 ;;
       --review) review="$2"; shift 2 ;;
       --budget) budget="$2"; shift 2 ;;
+      --tier) tiers="$2"; shift 2 ;;
+      --grafana-write) gw="$2"; shift 2 ;;
       -*) die "unknown option $1" ;;
       *) name="$1"; shift ;;
     esac
@@ -106,9 +134,11 @@ cmd_create() {
   setup_config_dir "$dir" "$cwd"
 
   local env
-  env=$(jq -n --arg d "$dir" --arg x "$extra" '
+  env=$(jq -n --arg d "$dir" --arg x "$extra" --arg t "$tiers" --arg g "$gw" '
     {CLAUDE_CONFIG_DIR: {type:"plain", value:$d}}
-    + (if $x == "" then {} else {PAPERCLIP_SB_EXTRA_ARGS: {type:"plain", value:$x}} end)')
+    + (if $x == "" then {} else {PAPERCLIP_SB_EXTRA_ARGS: {type:"plain", value:$x}} end)
+    + (if $t == "" then {} else {PAPERCLIP_SB_TIERS: {type:"plain", value:$t}} end)
+    + (if $g == "" then {} else {PAPERCLIP_SB_GRAFANA_WRITE: {type:"plain", value:$g}} end)')
   local body company; company=$(company_id)
   body=$(jq -n --arg n "$name" --arg t "$role" --arg m "$model" --arg c "$cwd" --arg w "$wrapper" \
     --argjson b "$budget" --argjson e "$env" '{
@@ -117,7 +147,7 @@ cmd_create() {
   local created id
   created=$(curl -sf -X POST "$api/api/companies/$company/agents" -H 'content-type: application/json' -d "$body")
   id=$(jq -r .id <<<"$created")
-  write_role_instructions "$id" "$role" "$name"
+  write_role_instructions "$id" "$role" "$name" "$tiers" "$gw"
   jq -r '"created \(.name) id=\(.id) model=\(.adapterConfig.model) cwd=\(.adapterConfig.cwd)"' <<<"$created"
 }
 
@@ -125,10 +155,10 @@ cmd_create() {
 # The entry file is written with optimistic concurrency: read its current
 # revision id (null when there is none yet) and send it back.
 write_role_instructions() {
-  local id="$1" role="$2" name="$3" base
+  local id="$1" role="$2" name="$3" tiers="${4:-}" gw="${5:-}" base
   base=$(curl -sf "$api/api/agents/$id/instructions-bundle/file?path=AGENTS.md" | jq -c '.revision.id // null')
   curl -sf -X PUT "$api/api/agents/$id/instructions-bundle/file" -H 'content-type: application/json' \
-    -d "$(jq -n --arg c "$(role_instructions "$role")" --argjson b "${base:-null}" '{path:"AGENTS.md", content:$c, baseRevisionId:$b}')" >/dev/null \
+    -d "$(jq -n --arg c "$(role_instructions "$role" "$tiers" "$gw")" --argjson b "${base:-null}" '{path:"AGENTS.md", content:$c, baseRevisionId:$b}')" >/dev/null \
     || die "could not write instructions for $name"
 }
 
@@ -181,7 +211,7 @@ cmd_bootstrap() {
 # instructions become the role's AGENTS.md, and cwd/grants/env bind it to a
 # worktree. Use after `paperclipai company import team/` or to move an agent.
 cmd_bind() {
-  local name="" role="" model="" cwd="" review="" budget=""
+  local name="" role="" model="" cwd="" review="" budget="" tiers="" gw=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --role) role="$2"; shift 2 ;;
@@ -189,11 +219,13 @@ cmd_bind() {
       --cwd) cwd="$2"; shift 2 ;;
       --review) review="$2"; shift 2 ;;
       --budget) budget="$2"; shift 2 ;;
+      --tier) tiers="$2"; shift 2 ;;
+      --grafana-write) gw="$2"; shift 2 ;;
       -*) die "unknown option $1" ;;
       *) name="$1"; shift ;;
     esac
   done
-  [[ -n $name && -n $role ]] || die "need <name> --role coder|reviewer|verifier|simplifier (--cwd <wt> | --review <wt>)"
+  [[ -n $name && -n $role ]] || die "need <name> --role coder|reviewer|verifier|simplifier|observer (--cwd <wt> | --review <wt>)"
   local company id; company=$(company_id)
   id=$(curl -sf "$api/api/companies/$company/agents" | jq -r --arg n "$name" '.[] | select(.name==$n) | .id')
   [[ -n $id && $(wc -l <<<"$id") -eq 1 ]] || die "no single agent named $name"
@@ -203,9 +235,11 @@ cmd_bind() {
   setup_config_dir "$dir" "$BIND_CWD"
 
   local env patch
-  env=$(jq -n --arg d "$dir" --arg x "$BIND_EXTRA" '
+  env=$(jq -n --arg d "$dir" --arg x "$BIND_EXTRA" --arg t "$tiers" --arg g "$gw" '
     {CLAUDE_CONFIG_DIR: {type:"plain", value:$d}}
-    + (if $x == "" then {} else {PAPERCLIP_SB_EXTRA_ARGS: {type:"plain", value:$x}} end)')
+    + (if $x == "" then {} else {PAPERCLIP_SB_EXTRA_ARGS: {type:"plain", value:$x}} end)
+    + (if $t == "" then {} else {PAPERCLIP_SB_TIERS: {type:"plain", value:$t}} end)
+    + (if $g == "" then {} else {PAPERCLIP_SB_GRAFANA_WRITE: {type:"plain", value:$g}} end)')
   patch=$(curl -sf "$api/api/agents/$id" | jq --arg c "$BIND_CWD" --arg w "$wrapper" --arg m "$model" \
     --arg t "$role" --argjson e "$env" --arg b "$budget" '{
       title: $t,
@@ -213,7 +247,7 @@ cmd_bind() {
                       + (if $m == "" then {} else {model:$m} end))
     } + (if $b == "" then {} else {budgetMonthlyCents: ($b|tonumber)} end)')
   curl -sf -X PATCH "$api/api/agents/$id" -H 'content-type: application/json' -d "$patch" >/dev/null
-  write_role_instructions "$id" "$role" "$name"
+  write_role_instructions "$id" "$role" "$name" "$tiers" "$gw"
   curl -sf "$api/api/agents/$id" | jq -r '"bound \(.name): role=\(.title) model=\(.adapterConfig.model) cwd=\(.adapterConfig.cwd)"'
 }
 
@@ -271,7 +305,7 @@ case "${1:-}" in
   *) echo "usage: paperclip-agent agents | issues
        paperclip-agent file --title <t> --body-file <f|-> [--assign <agent>] [--status backlog|todo]
        paperclip-agent bootstrap [<company name>]
-       paperclip-agent create <name> --role coder|reviewer|verifier|simplifier --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
-       paperclip-agent bind <name> --role coder|reviewer|verifier|simplifier (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>]
+       paperclip-agent create <name> --role coder|reviewer|verifier|simplifier|observer --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
+       paperclip-agent bind <name> --role coder|reviewer|verifier|simplifier|observer (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>] [--tier dev[,prod]] [--grafana-write dev]
        paperclip-agent import <worktree>" >&2; exit 1 ;;
 esac

@@ -10,6 +10,7 @@ includes:
   - agents/reviewer/AGENTS.md
   - agents/verifier/AGENTS.md
   - agents/simplifier/AGENTS.md
+  - agents/observer/AGENTS.md
 defaultInstall: false
 tags:
   - engineering

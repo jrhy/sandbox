@@ -52,3 +52,15 @@ agents:
       canCreateAgents: false
       canCreateSkills: false
     budgetMonthlyCents: 1500
+  observer:
+    role: researcher
+    adapter:
+      type: claude_local
+      config:
+        engine: cli
+        command: paperclip-sb-claude
+        model: claude-sonnet-5-5
+    permissions:
+      canCreateAgents: false
+      canCreateSkills: false
+    budgetMonthlyCents: 800
