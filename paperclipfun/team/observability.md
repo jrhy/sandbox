@@ -19,7 +19,9 @@ service and the same at every tier.
 - Grafana read: the anonymous host for the tier; `GET /api/dashboards/uid/<uid>` returns
   provisioned dashboards as JSON. Provisioned dashboard sources live under
   `monitoring/grafana/dashboards/` in the checkout; the JSON there is the truth, Grafana is a
-  rendering of it.
+  rendering of it. Before committing a change to one, run `bin/dashy validate` from the repo
+  root (it rewrites the file to canonical form) and then `bin/dashy validate
+  --error-when-reformatted`, which is what CI runs; an unformatted file fails the PR.
 - Report numbers with the query that produced them and the time window. Re-run before
   quoting; do not carry a number from an earlier run.
 - Logs can contain customer and employee data. Prefer aggregates (`count_over_time`, `sum by`)

@@ -69,6 +69,7 @@ prewarm_home() {
   local dir="$1" repo; repo=$(dirname "$main_git")
   ( cd "$repo" && HOME="$dir/home" bin/shzr check bin/worktree >/dev/null 2>&1 ) || true
   ( cd "$repo" && HOME="$dir/home" bin/promql --help >/dev/null 2>&1 ) || true
+  ( cd "$repo" && HOME="$dir/home" bin/dashy --help >/dev/null 2>&1 ) || true
 }
 
 # Role-specific binding shared by create and bind: cwd, extra sb grants, env.
