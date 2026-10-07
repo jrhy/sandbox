@@ -197,4 +197,14 @@ if [[ -n "${PAPERCLIP_SB_EXTRA_ARGS:-}" ]]; then
   args+=("${extra[@]}")
 fi
 
-exec sb exec "${args[@]}" "${PAPERCLIP_SB_CLAUDE_BIN:-$HOME/.local/bin/claude}" "$@"
+# Run the agent, then (outside the sandbox, as the operator) copy any objects it
+# wrote into the main repo through a strict import. Without this, an agent/
+# branch's tip exists only in the worktree's private store until someone runs
+# `paperclip-agent import`, and host git that walks all refs (fetch, gc, fsck)
+# trips over the missing object.
+sb exec "${args[@]}" "${PAPERCLIP_SB_CLAUDE_BIN:-$HOME/.local/bin/claude}" "$@"
+rc=$?
+if [[ -n "${objdir:-}" && -d "$objdir" ]]; then
+  "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/paperclip-agent" import "$PWD" >/dev/null 2>&1 || true
+fi
+exit $rc
