@@ -9,8 +9,9 @@ import (
 const maxRecent = 50
 
 type recentEntry struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Upstream string `json:"upstream"`
 }
 
 // recentList is the most-recently-viewed stack behind the Ctrl-Tab switcher.
@@ -31,11 +32,11 @@ func loadRecent(path string) *recentList {
 }
 
 // touch moves id to the front, updating its title.
-func (r *recentList) touch(id, title string) {
+func (r *recentList) touch(id, title, upstream string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([]recentEntry, 0, len(r.entries)+1)
-	out = append(out, recentEntry{id, title})
+	out = append(out, recentEntry{id, title, upstream})
 	for _, e := range r.entries {
 		if e.ID != id {
 			out = append(out, e)

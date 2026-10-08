@@ -24,11 +24,11 @@ body { margin:0; font: 15px/1.5 -apple-system, system-ui, sans-serif; color:var(
 a { color:var(--link); text-decoration:none } a:hover { text-decoration:underline }
 header { display:flex; gap:12px; align-items:center; padding:8px 20px; border-bottom:1px solid var(--line); background:var(--panel) }
 header form { margin-left:auto } header input { padding:4px 8px; font:inherit; width:22em }
-#state { font-size:12px; color:var(--muted) } #state.updated { color:var(--ok); font-weight:600 }
+#state { font-size:12px; color:var(--muted) } header .upstream { font-size:12px; margin-left:8px } #state.updated { color:var(--ok); font-weight:600 }
 main { display:grid; grid-template-columns: minmax(0,1fr) 300px; gap:28px; padding:20px; max-width:1300px }
 @media (max-width: 900px) { main { grid-template-columns: 1fr } }
 h1 { font-size:22px; margin:0 0 4px } h2 { font-size:14px; text-transform:uppercase; color:var(--muted); margin:28px 0 8px; letter-spacing:.04em }
-.key { color:var(--muted); font-weight:normal }
+.key { color:var(--muted); font-weight:normal } a.key:hover { color:var(--link) }
 .badge { display:inline-block; padding:1px 8px; border-radius:3px; font-size:12px; font-weight:600; text-transform:uppercase }
 .badge.new{background:var(--new)} .badge.indeterminate{background:var(--ind)} .badge.done{background:var(--done)} .badge.closed{background:var(--closed)}
 .md, .body { overflow-wrap:anywhere } .md img, .body img { max-width:100%; height:auto }
@@ -65,6 +65,7 @@ var errorTmpl = template.Must(template.New("error").Parse(`<!doctype html><title
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta charset="utf-8">
 <title>{{.Title}}</title><style>` + css + `</style></head><body>
 <header><a href="/"><b>gojira</b></a> <span id="state">{{if .Stale}}cached {{.Age}} ago · refreshing…{{else}}fresh{{end}}</span>
+<a class="upstream" href="{{.Upstream}}" target="_blank" title="o">open upstream ↗</a>
 <form action="/"><input name="q" placeholder="352, GOLD-352, #117792, or a URL"></form></header>
 <main id="main">{{.Body}}</main>
 <div id="switcher"><ul id="switcher-list"></ul></div>
@@ -89,6 +90,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); move(1); }
       else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); move(-1); }
       else if (e.key === 'Enter') { e.preventDefault(); go(); }
+      else if (e.key === 'o') { e.preventDefault(); const it = items[sel]; close(); if (it) window.open(it.upstream, '_blank'); }
       else if (e.key === 'Escape') { e.preventDefault(); close(); }
       return;
     }
@@ -117,6 +119,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
   window.addEventListener('pagehide', closeStream);
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'o') { window.open({{.Upstream}}, '_blank'); return; }
     if (e.key === 'r') { state.textContent = 'refreshing…'; listen(); fetch('/refresh/' + id + '?force=1'); }
     if (e.key === '/') { e.preventDefault(); const q = document.querySelector('input[name=q]'); q.focus(); q.select(); }
   });
@@ -125,7 +128,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
 
 var issueBodyTmpl = template.Must(template.New("issue").Parse(`{{with .Issue}}
 <article>
-  <h1><span class="key">{{.Key}}</span> {{.Summary}}</h1>
+  <h1><a class="key" href="{{$.JiraBase}}/browse/{{.Key}}" target="_blank">{{.Key}}</a> {{.Summary}}</h1>
   <div><span class="badge {{.StatusCat}}">{{.Status}}</span> &nbsp; {{.Type}}{{if .Priority}} · {{.Priority}}{{end}}</div>
   <h2>Description</h2>
   <div class="md">{{if .Description}}{{.Description}}{{else}}<i>none</i>{{end}}</div>
@@ -150,7 +153,7 @@ var issueBodyTmpl = template.Must(template.New("issue").Parse(`{{with .Issue}}
 
 var prBodyTmpl = template.Must(template.New("pr").Parse(`{{with .PR}}
 <article>
-  <h1><span class="key">{{.Owner}}/{{.Repo}} #{{.Number}}</span> {{.Title}}</h1>
+  <h1><a class="key" href="{{.URL}}" target="_blank">{{.Owner}}/{{.Repo}} #{{.Number}}</a> {{.Title}}</h1>
   <div><span class="badge {{.StateClass}}">{{.State}}</span> &nbsp; <b>{{.Author}}</b> wants to merge <code>{{.Head}}</code> into <code>{{.Base}}</code>
     · <span class="add">+{{.Additions}}</span> <span class="del">−{{.Deletions}}</span>{{if .Review}} · review: {{.Review}}{{end}}</div>
   <h2>Description</h2>

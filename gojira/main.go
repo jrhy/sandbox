@@ -218,12 +218,20 @@ func (s *server) page(w http.ResponseWriter, r *http.Request, id string) {
 
 func (s *server) renderPage(w http.ResponseWriter, id string, ci *cached, stale bool) {
 	body, title := s.body(id, ci)
-	s.recent.touch(id, title)
+	s.recent.touch(id, title, s.upstreamURL(id))
 	go s.prewarm(id, body)
 	render(w, pageTmpl, map[string]any{
-		"ID": id, "Title": title, "Body": body,
+		"ID": id, "Title": title, "Body": body, "Upstream": s.upstreamURL(id),
 		"Age": time.Since(ci.FetchedAt).Round(time.Second), "Stale": stale,
 	})
+}
+
+// upstreamURL is where the resource lives on the real site.
+func (s *server) upstreamURL(id string) string {
+	if m := prIDRe.FindStringSubmatch(id); m != nil {
+		return "https://github.com/" + m[1] + "/" + m[2] + "/pull/" + m[3]
+	}
+	return s.jira.base + "/browse/" + id
 }
 
 // body renders the swappable part of the page for either resource kind.

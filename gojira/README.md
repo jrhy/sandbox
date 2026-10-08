@@ -17,9 +17,11 @@ Jira descriptions and comments link to the local PR page.
 The page loads from a local file cache, opens a Server-Sent Events stream, and
 the server refetches the issue from the Jira REST API. If the content changed,
 the page body is swapped in place and the header says "updated just now";
-otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch. Backtick opens a
-switcher over your recently viewed issues and PRs, most recent first: `j`/`k`
-or arrows move, Enter goes, Esc closes. The stack is server-side
+otherwise it says "up to date". Keys: `/` focuses the search box, `r` forces a refetch, `o` opens the page on
+Jira or GitHub in a new tab (the header link and the key in the title do the
+same). Backtick opens a switcher over your recently viewed issues and PRs,
+most recent first: `j`/`k` or arrows move, Enter goes, `o` opens the selected
+item upstream, Esc closes. The stack is server-side
 (`recent.json` in the cache dir), so it survives restarts, and only pages you
 view count, not prefetches. Ctrl-Tab drives the same switcher alt-tab style
 (hold Ctrl, Tab to cycle, release to go), but browsers reserve Ctrl-Tab for
