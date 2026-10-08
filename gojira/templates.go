@@ -65,7 +65,7 @@ var errorTmpl = template.Must(template.New("error").Parse(`<!doctype html><title
 var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><head><meta charset="utf-8">
 <title>{{.Title}}</title><style>` + css + `</style></head><body>
 <header><a href="/"><b>gojira</b></a> <span id="state">{{if .Stale}}cached {{.Age}} ago · refreshing…{{else}}fresh{{end}}</span>
-<a class="upstream" href="{{.Upstream}}" target="_blank" title="o">open upstream ↗</a>
+<a class="upstream" href="{{.Upstream}}" title="o">open upstream ↗</a>
 <form action="/"><input name="q" placeholder="352, GOLD-352, #117792, or a URL"></form></header>
 <main id="main">{{.Body}}</main>
 <div id="switcher"><ul id="switcher-list"></ul></div>
@@ -90,7 +90,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
       if (e.key === 'ArrowDown' || e.key === 'j') { e.preventDefault(); move(1); }
       else if (e.key === 'ArrowUp' || e.key === 'k') { e.preventDefault(); move(-1); }
       else if (e.key === 'Enter') { e.preventDefault(); go(); }
-      else if (e.key === 'o') { e.preventDefault(); const it = items[sel]; close(); if (it) window.open(it.upstream, '_blank'); }
+      else if (e.key === 'o') { e.preventDefault(); const it = items[sel]; close(); if (it) location.href = it.upstream; }
       else if (e.key === 'Escape') { e.preventDefault(); close(); }
       return;
     }
@@ -119,7 +119,7 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
   window.addEventListener('pagehide', closeStream);
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === 'o') { window.open({{.Upstream}}, '_blank'); return; }
+    if (e.key === 'o') { location.href = {{.Upstream}}; return; }
     if (e.key === 'r') { state.textContent = 'refreshing…'; listen(); fetch('/refresh/' + id + '?force=1'); }
     if (e.key === '/') { e.preventDefault(); const q = document.querySelector('input[name=q]'); q.focus(); q.select(); }
   });
@@ -128,11 +128,11 @@ var pageTmpl = template.Must(template.New("page").Parse(`<!doctype html><html><h
 
 var issueBodyTmpl = template.Must(template.New("issue").Parse(`{{with .Issue}}
 <article>
-  <h1><a class="key" href="{{$.JiraBase}}/browse/{{.Key}}" target="_blank">{{.Key}}</a> {{.Summary}}</h1>
+  <h1><a class="key" href="{{$.JiraBase}}/browse/{{.Key}}">{{.Key}}</a> {{.Summary}}</h1>
   <div><span class="badge {{.StatusCat}}">{{.Status}}</span> &nbsp; {{.Type}}{{if .Priority}} · {{.Priority}}{{end}}</div>
   <h2>Description</h2>
   <div class="md">{{if .Description}}{{.Description}}{{else}}<i>none</i>{{end}}</div>
-  {{if .Attachments}}<h2>Attachments</h2><ul class="links">{{range .Attachments}}<li><a href="{{.Local}}" target="_blank">{{.Name}}</a> <span class="st">{{.Size}}</span></li>{{end}}</ul>{{end}}
+  {{if .Attachments}}<h2>Attachments</h2><ul class="links">{{range .Attachments}}<li><a href="{{.Local}}">{{.Name}}</a> <span class="st">{{.Size}}</span></li>{{end}}</ul>{{end}}
   {{if .Subtasks}}<h2>Subtasks</h2><ul class="links">{{range .Subtasks}}<li><a href="/{{.Key}}">{{.Key}}</a> {{.Summary}} <span class="st">{{.Status}}</span></li>{{end}}</ul>{{end}}
   {{if .Links}}<h2>Linked issues</h2><ul class="links">{{range .Links}}<li><span class="st">{{.Relation}}</span> <a href="/{{.Target.Key}}">{{.Target.Key}}</a> {{.Target.Summary}} <span class="st">{{.Target.Status}}</span></li>{{end}}</ul>{{end}}
   <h2>Comments ({{len .Comments}})</h2>
@@ -147,13 +147,13 @@ var issueBodyTmpl = template.Must(template.New("issue").Parse(`{{with .Issue}}
   {{range .Extra}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}
   <dt>Created</dt><dd>{{.Created}}</dd>
   <dt>Updated</dt><dd>{{.Updated}}</dd>
-  <dt>Cached</dt><dd>{{$.FetchedAt.Format "2006-01-02 15:04:05"}} <a href="{{$.JiraBase}}/browse/{{.Key}}" target="_blank">open in Jira ↗</a></dd>
+  <dt>Cached</dt><dd>{{$.FetchedAt.Format "2006-01-02 15:04:05"}} <a href="{{$.JiraBase}}/browse/{{.Key}}">open in Jira ↗</a></dd>
 </dl></aside>
 {{end}}`))
 
 var prBodyTmpl = template.Must(template.New("pr").Parse(`{{with .PR}}
 <article>
-  <h1><a class="key" href="{{.URL}}" target="_blank">{{.Owner}}/{{.Repo}} #{{.Number}}</a> {{.Title}}</h1>
+  <h1><a class="key" href="{{.URL}}">{{.Owner}}/{{.Repo}} #{{.Number}}</a> {{.Title}}</h1>
   <div><span class="badge {{.StateClass}}">{{.State}}</span> &nbsp; <b>{{.Author}}</b> wants to merge <code>{{.Head}}</code> into <code>{{.Base}}</code>
     · <span class="add">+{{.Additions}}</span> <span class="del">−{{.Deletions}}</span>{{if .Review}} · review: {{.Review}}{{end}}</div>
   <h2>Description</h2>
@@ -163,7 +163,7 @@ var prBodyTmpl = template.Must(template.New("pr").Parse(`{{with .PR}}
     <div class="comment {{.Kind}}"><div class="meta"><b>{{.Author}}</b>
       {{if eq .Kind "review"}}<span class="state {{.State}}">{{.State}}</span>{{end}}
       {{if eq .Kind "thread"}}<span class="path">{{.Path}}{{if .Line}}:{{.Line}}{{end}}</span> {{if .State}}<span class="state {{.State}}">{{.State}}</span>{{end}}{{end}}
-      · <a href="{{.URL}}" target="_blank">{{.WhenText}}</a></div>
+      · <a href="{{.URL}}">{{.WhenText}}</a></div>
       <div class="body">{{.Body}}</div>
       {{range .Replies}}<div class="reply"><div class="meta"><b>{{.Author}}</b> · {{.WhenText}}</div><div class="body">{{.Body}}</div></div>{{end}}
     </div>
@@ -176,9 +176,9 @@ var prBodyTmpl = template.Must(template.New("pr").Parse(`{{with .PR}}
   {{if .Assignees}}<dt>Assignees</dt><dd>{{range .Assignees}}{{.}}<br>{{end}}</dd>{{end}}
   {{if .Labels}}<dt>Labels</dt><dd>{{range .Labels}}<span class="label">{{.Name}}</span>{{end}}</dd>{{end}}
   {{if .Checks}}<dt>Checks <span class="{{if eq .CheckState "SUCCESS"}}ok{{else if eq .CheckState "FAILURE"}}bad{{end}}">{{.CheckState}}</span></dt>
-    <dd><ul class="links">{{range .Checks}}<li><span class="{{if eq .State "success"}}ok{{else if eq .State "failure"}}bad{{end}}">●</span> <a href="{{.URL}}" target="_blank">{{.Name}}</a> <span class="st">{{.State}}</span></li>{{end}}</ul></dd>{{end}}
+    <dd><ul class="links">{{range .Checks}}<li><span class="{{if eq .State "success"}}ok{{else if eq .State "failure"}}bad{{end}}">●</span> <a href="{{.URL}}">{{.Name}}</a> <span class="st">{{.State}}</span></li>{{end}}</ul></dd>{{end}}
   <dt>Created</dt><dd>{{.Created}}</dd>
   <dt>Updated</dt><dd>{{.Updated}}</dd>
-  <dt>Cached</dt><dd>{{$.FetchedAt.Format "2006-01-02 15:04:05"}} <a href="{{.URL}}" target="_blank">open on GitHub ↗</a></dd>
+  <dt>Cached</dt><dd>{{$.FetchedAt.Format "2006-01-02 15:04:05"}} <a href="{{.URL}}">open on GitHub ↗</a></dd>
 </dl></aside>
 {{end}}`))
