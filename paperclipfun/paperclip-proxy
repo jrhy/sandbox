@@ -49,5 +49,8 @@ if [[ ! -s "$jwt_file" ]]; then
 fi
 export PAPERCLIP_AGENT_JWT_SECRET="$(<"$jwt_file")"
 
+# Pick up anything a killed run left only in a worktree's private object store.
+"$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/paperclip-agent" import-all || true
+
 cd "$app"
 exec pnpm "${@:-dev}"

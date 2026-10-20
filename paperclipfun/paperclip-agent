@@ -295,7 +295,28 @@ cmd_file() {
     | jq -r '"filed \(.identifier) \(.status)\(if .assigneeAgentId then " -> assigned" else " (unassigned; nothing will run)" end)"'
 }
 
+# Import every agent worktree's private store. Run at paperclip-proxy startup:
+# a run killed mid-flight (sleep, SIGKILL) skips its post-run import, leaving an
+# agent/ branch tip that only the private store can resolve until the next run.
+cmd_import_all() {
+  local admin wt gitdir n=0
+  for admin in "$main_git"/worktrees/*/; do
+    admin="${admin%/}"
+    [[ -d $admin/objects ]] || continue
+    gitdir=$(cat "$admin/gitdir" 2>/dev/null) || continue
+    wt="${gitdir%/.git}"
+    [[ -d $wt ]] || continue
+    cmd_import "$wt" | sed 's/^/  /'
+    n=$((n+1))
+  done
+  echo "import-all: $n worktree store(s) checked"
+  # Any agent/ tip still unresolvable is a real problem; say so loudly.
+  GIT_DIR="$main_git" git for-each-ref --format='%(refname:short) %(objectname)' refs/heads/agent/ \
+    | while read -r b sha; do GIT_DIR="$main_git" git cat-file -e "$sha" 2>/dev/null || echo "WARNING: $b -> $sha is unresolvable from the main store" >&2; done
+}
+
 case "${1:-}" in
+  import-all) shift; cmd_import_all "$@" ;;
   agents) shift; cmd_agents "$@" ;;
   issues) shift; cmd_issues "$@" ;;
   file) shift; cmd_file "$@" ;;
@@ -308,5 +329,5 @@ case "${1:-}" in
        paperclip-agent bootstrap [<company name>]
        paperclip-agent create <name> --role coder|reviewer|verifier|simplifier|observer --model <id> (--cwd <wt> | --review <wt>) [--budget <cents>]
        paperclip-agent bind <name> --role coder|reviewer|verifier|simplifier|observer (--cwd <wt> | --review <wt>) [--model <id>] [--budget <cents>] [--tier dev[,prod]] [--grafana-write dev]
-       paperclip-agent import <worktree>" >&2; exit 1 ;;
+       paperclip-agent import <worktree> | import-all" >&2; exit 1 ;;
 esac
