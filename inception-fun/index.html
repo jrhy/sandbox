@@ -1,0 +1,593 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mercury-3 · Diffusion Visualizer</title>
+<style>
+  :root {
+    --bg: #0b0f17;
+    --panel: #111827;
+    --panel2: #16213a;
+    --border: #24304a;
+    --text: #e6edf7;
+    --muted: #8b9bb4;
+    --accent: #22d3ee;
+    --accent2: #a78bfa;
+    --ok: #34d399;
+    --err: #f87171;
+    --changed: rgba(167, 139, 250, 0.35);
+    --mono: "SFMono-Regular", ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 600px at 70% -10%, #1a2440 0%, var(--bg) 55%);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    padding: 18px 26px 10px;
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+  }
+  header h1 { font-size: 18px; margin: 0; letter-spacing: 0.2px; }
+  header h1 .mercury { color: var(--accent); }
+  header .sub { color: var(--muted); font-size: 12.5px; }
+  .badge {
+    font-size: 10.5px; letter-spacing: 0.6px; text-transform: uppercase;
+    padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted); background: var(--panel);
+  }
+  .badge.live { color: var(--ok); border-color: rgba(52,211,153,.4); }
+  .badge.sim { color: var(--accent2); border-color: rgba(167,139,250,.4); }
+  main { display: grid; grid-template-columns: 340px 1fr; gap: 20px; padding: 20px 26px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.8px; color: var(--muted); margin: 0 0 12px; }
+
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; }
+  .tabs button {
+    flex: 1; padding: 8px 6px; font-size: 12.5px; cursor: pointer;
+    background: var(--panel2); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 9px; transition: all .15s;
+  }
+  .tabs button.active { background: var(--accent); color: #04141a; border-color: var(--accent); font-weight: 600; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  label.field { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 5px; }
+  input[type=text], input[type=password], input[type=number], textarea, select {
+    width: 100%; background: #0d1526; border: 1px solid var(--border); color: var(--text);
+    border-radius: 9px; padding: 9px 11px; font-size: 13px; outline: none;
+  }
+  input:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  input[type=password] { font-family: var(--mono); letter-spacing: 1px; }
+  textarea { resize: vertical; min-height: 70px; font-family: var(--mono); font-size: 12px; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  button.action {
+    width: 100%; margin-top: 14px; padding: 11px; font-size: 13.5px; font-weight: 600;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: #04141a; border: 0; border-radius: 10px; cursor: pointer; transition: transform .1s, filter .15s;
+  }
+  button.action:hover { filter: brightness(1.1); }
+  button.action:active { transform: scale(.985); }
+  button.action:disabled { filter: grayscale(.7) brightness(.75); cursor: not-allowed; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 10px; line-height: 1.55; }
+  .hint code { font-family: var(--mono); font-size: 10.5px; background: var(--panel2); padding: 1px 5px; border-radius: 4px; }
+
+  #status { margin-top: 12px; font-size: 12.5px; font-family: var(--mono); min-height: 20px; color: var(--muted); }
+  #status.err { color: var(--err); }
+  #status.ok { color: var(--ok); }
+
+  .stage { display: flex; flex-direction: column; min-height: 520px; }
+  .stage-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 10px; flex-wrap: wrap; }
+  .stage-meta .model { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  #textbox {
+    flex: 1;
+    background: #0d1526; border: 1px solid var(--border); border-radius: 14px;
+    padding: 26px 28px; font-family: var(--mono); font-size: 17px; line-height: 1.75;
+    white-space: pre-wrap; overflow-wrap: break-word; min-height: 220px;
+    box-shadow: inset 0 0 40px rgba(34,211,238,.03);
+  }
+  #textbox .placeholder { color: #3b4a68; }
+  #textbox .changed { background: var(--changed); border-radius: 3px; box-shadow: 0 0 0 2px rgba(167,139,250,.18); }
+  #textbox .dim { color: #55627e; }
+
+  .converge { height: 6px; background: var(--panel2); border-radius: 999px; margin: 14px 2px 4px; overflow: hidden; }
+  .converge > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 999px; transition: width .25s; }
+
+  .scrub { display: flex; align-items: center; gap: 14px; margin-top: 16px; }
+  .scrub input[type=range] { flex: 1; accent-color: var(--accent); height: 26px; cursor: pointer; }
+  .scrub .counter { font-family: var(--mono); font-size: 13px; color: var(--muted); white-space: nowrap; min-width: 74px; text-align: right; }
+
+  .transport { display: flex; align-items: center; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .transport button {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 14px; border-radius: 9px; font-size: 13px; cursor: pointer; transition: border-color .15s;
+  }
+  .transport button:hover { border-color: var(--accent); }
+  .transport button:disabled { opacity: .4; cursor: not-allowed; }
+  .transport select { width: auto; padding: 7px 10px; font-size: 12.5px; }
+  .transport label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+
+  details.help { margin-top: 14px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); padding-top: 10px; }
+  details.help summary { cursor: pointer; color: var(--accent); }
+  details.help pre { background: #0d1526; border: 1px solid var(--border); border-radius: 8px; padding: 10px; font-size: 11px; overflow-x: auto; font-family: var(--mono); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span class="mercury">Mercury-3</span> Diffusion Visualizer</h1>
+  <span class="sub">watch denoising steps refine text into the final answer</span>
+  <span class="badge sim" id="modeBadge">demo / simulated</span>
+  <div id="fatal" style="display:none;flex-basis:100%;margin-top:8px;background:#3a1218;border:1px solid #f87171;color:#fecaca;border-radius:8px;padding:8px 12px;font-family:var(--mono);font-size:12px;"></div>
+</header>
+
+<main>
+  <!-- ============ LEFT: controls ============ -->
+  <div class="panel">
+    <div class="tabs">
+      <button data-tab="tab-live" id="tabBtnLive">Live API</button>
+      <button data-tab="tab-demo" class="active" id="tabBtnDemo">Demo</button>
+      <button data-tab="tab-rec" id="tabBtnRec">Recording</button>
+    </div>
+
+    <!-- Live API tab -->
+    <div class="tab" id="tab-live">
+      <label class="field">Inception API key</label>
+      <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+      <label class="field">API base URL (blank = official, or point at a local proxy)</label>
+      <input type="text" id="apiBase" placeholder="https://api.inceptionlabs.ai">
+      <label class="field">Prompt</label>
+      <textarea id="prompt" rows="3">Write a short haiku about diffusion models.</textarea>
+      <label class="field">Max completion tokens</label>
+      <input type="number" id="maxTokens" value="300" min="16" step="16">
+      <div class="hint">Playback speed is controlled below the stage — it only affects how fast frames are <i>shown</i>, not how many the API sends.</div>
+      <button class="action" id="runBtn">▶ Run diffusion stream</button>
+      <button class="action" id="stopBtn" style="display:none;background:linear-gradient(135deg,#f87171,#fb923c);">■ Stop</button>
+      <div id="status">Waiting for key…</div>
+      <div class="hint">Sends <code>stream:true</code> + <code>diffusing:true</code> to <code>/v1/chat/completions</code>. Each SSE chunk should carry the <b>full text</b> at that denoising step — so the number of frames you get is set by the API's denoising schedule, not by the app. If the server only emits a few snapshots, turn on <b>Smoothness</b> below the stage to interpolate extra sub-frames for finer time-travel.</div>
+      <details class="help">
+        <summary>Browser blocked by CORS?</summary>
+        <p>If the fetch fails with a CORS error, run a tiny local proxy and enter its URL above:</p>
+        <pre>npx local-cors-proxy --proxyUrl https://api.inceptionlabs.ai --port 8080</pre>
+        <p>…then set API base URL to <code>http://localhost:8080</code> (the key still goes in the field above; a simple proxy forwards the Authorization header).</p>
+      </details>
+    </div>
+
+    <!-- Demo tab -->
+    <div class="tab active" id="tab-demo">
+      <p class="hint" style="margin-top:0">Simulated snapshots showing the diffusion effect — a full answer that gets progressively denoised, step by step. When you have a real key, switch to <b>Live API</b>.</p>
+      <button class="action" id="demoBtn">▶ Play simulated diffusion</button>
+      <div class="hint">The slider below lets you <b>time-travel</b>: scrub backward and forward through the denoising steps.</div>
+    </div>
+
+    <!-- Recording tab -->
+    <div class="tab" id="tab-rec">
+      <label class="field">Load a recording of diffusion snapshots (.json)</label>
+      <input type="file" id="recFile" accept=".json,application/json">
+      <label class="field">…or paste JSON (array of strings)</label>
+      <textarea id="recPaste" rows="5" placeholder='["frame one", "frame two", ...]'></textarea>
+      <button class="action" id="recBtn">Apply recording</button>
+      <div class="hint">Acceptable shapes: <code>["text",…]</code>, <code>[{"text":"…"},…]</code>, or <code>[{"content":"…"},…]</code>.</div>
+    </div>
+  </div>
+
+  <!-- ============ RIGHT: stage ============ -->
+  <div class="panel stage">
+    <div class="stage-meta">
+      <span class="model" id="modelLabel">—</span>
+      <span class="model" id="stepLabel">step — / —</span>
+    </div>
+    <div id="textbox"><span class="placeholder">Run a mode on the left to see diffusion snapshots here. Use the slider to time-travel through the denoising steps.</span></div>
+    <div class="converge"><div id="convBar"></div></div>
+    <div class="scrub">
+      <input type="range" id="slider" min="0" max="0" value="0" disabled>
+      <span class="counter" id="counter">0 / 0</span>
+    </div>
+    <div class="transport">
+      <button id="playBtn" disabled>▶ Play</button>
+      <button id="prevBtn" disabled>← prev</button>
+      <button id="nextBtn" disabled>next →</button>
+      <select id="speed" disabled title="Playback speed — only affects how fast frames are shown">
+        <option value="90">fast</option>
+        <option value="200" selected>normal</option>
+        <option value="450">slow</option>
+        <option value="900">very slow</option>
+      </select>
+      <label class="field" style="margin:0">Smoothness</label>
+      <select id="smooth" title="Interpolate extra sub-frames between the real denoising snapshots — gives you more slider positions / time-travel steps">
+        <option value="1" selected>off · real frames</option>
+        <option value="4">4×</option>
+        <option value="8">8×</option>
+        <option value="16">16×</option>
+      </select>
+      <label><input type="checkbox" id="loopChk"> loop</label>
+      <span style="flex:1"></span>
+      <button id="dlBtn" disabled title="Download the captured real frames as JSON">⬇ save</button>
+      <span class="counter" id="charLabel" style="min-width:auto"></span>
+    </div>
+  </div>
+</main>
+
+<script>
+"use strict";
+
+/* ---------- small utils ---------- */
+const $ = (id) => document.getElementById(id);
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function normalizeFrames(frames) {
+  const out = [];
+  for (const f of frames) {
+    if (typeof f === "string") out.push(f);
+    else if (f && typeof f.text === "string") out.push(f.text);
+    else if (f && typeof f.content === "string") out.push(f.content);
+  }
+  // dedupe consecutive identical frames (final stabilization)
+  const dedup = [];
+  for (const t of out) { if (t !== dedup[dedup.length - 1]) dedup.push(t); }
+  return dedup;
+}
+const TOKEN_RE = /[\w'\u2019-]+|[^\w\s]|\s+/g;
+function diffHtml(prevText, curText) {
+  // highlight tokens present in current text that weren't in the previous frame
+  const prevSet = new Set();
+  if (prevText) for (const t of prevText.match(TOKEN_RE) || []) prevSet.add(t.toLowerCase());
+  let html = "";
+  for (const tok of curText.match(TOKEN_RE) || []) {
+    if (/\s/.test(tok)) { html += escapeHtml(tok); continue; }
+    if (!prevSet.has(tok.toLowerCase())) html += '<span class="changed">' + escapeHtml(tok) + "</span>";
+    else html += escapeHtml(tok);
+  }
+  return html;
+}
+function changedPercent(prevText, curText) {
+  if (!prevText) return 100;
+  const prevSet = new Set((prevText.match(TOKEN_RE) || []).map(t => t.toLowerCase()));
+  let changed = 0, total = 0;
+  for (const tok of curText.match(TOKEN_RE) || []) {
+    if (/\s/.test(tok)) continue;
+    total++;
+    if (!prevSet.has(tok.toLowerCase())) changed++;
+  }
+  return total ? Math.round(100 * changed / total) : 0;
+}
+
+/* ---------- state ---------- */
+const state = {
+  base: [],        // real denoising snapshots (as received from the API)
+  display: [],     // frames actually shown: real snapshots + optional interpolated sub-frames
+  current: -1,
+  playing: false,
+  timer: null,
+};
+
+/* ---------- interpolation ---------- */
+// Deterministic char-level dissolve between two snapshots.
+// Produces k sub-frames; each position flips from A to B exactly once, staggered by
+// (index mod k), so changes spread across the text like denoising.
+function interpolate(a, b, k) {
+  const len = Math.max(a.length, b.length);
+  const A = a.padEnd(len, " ");
+  const B = b.padEnd(len, " ");
+  const out = [];
+  for (let t = 1; t <= k; t++) {
+    let s = "";
+    for (let i = 0; i < len; i++) {
+      if (A[i] === B[i]) { s += A[i]; continue; }
+      s += (i % k) < t ? B[i] : A[i];
+    }
+    out.push(s);
+  }
+  return out;
+}
+
+function buildDisplay() {
+  const base = state.base;
+  const k = parseInt($("smooth").value, 10) || 1;
+  if (!base.length) { state.display = []; return; }
+  if (k <= 1) { state.display = base.slice(); return; }
+  const disp = [];
+  for (let i = 0; i < base.length - 1; i++) disp.push(...interpolate(base[i], base[i + 1], k));
+  disp.push(base[base.length - 1]);
+  state.display = disp;
+}
+
+/* ---------- render ---------- */
+function render() {
+  const n = state.display.length;
+  const i = state.current;
+  const slider = $("slider"), counter = $("counter"), playBtn = $("playBtn");
+  const prevBtn = $("prevBtn"), nextBtn = $("nextBtn"), speed = $("speed");
+
+  slider.max = Math.max(0, n - 1);
+  slider.disabled = n === 0;
+  slider.value = i;
+  $("stepLabel").textContent = n ? `step ${i + 1} / ${n}` : "step — / —";
+  counter.textContent = n ? `${i + 1} / ${n}` : "0 / 0";
+  playBtn.disabled = n === 0;
+  prevBtn.disabled = n === 0 || i <= 0;
+  nextBtn.disabled = n === 0 || i >= n - 1;
+  speed.disabled = n === 0;
+  $("smooth").disabled = n === 0;
+  $("dlBtn").disabled = state.base.length === 0;
+
+  if (n === 0) {
+    $("textbox").innerHTML = '<span class="placeholder">No frames yet. Run a mode on the left.</span>';
+    $("convBar").style.width = "0%";
+    const cl = $("charLabel"); if (cl) cl.textContent = "";
+    return;
+  }
+  const cur = state.display[i];
+  const prev = i > 0 ? state.display[i - 1] : null;
+  $("textbox").innerHTML = diffHtml(prev, cur);
+  $("convBar").style.width = (100 - changedPercent(prev, cur)) + "%";
+  const synth = state.display.length - state.base.length;
+  const cl = $("charLabel");
+  if (cl) cl.textContent = `${cur.length} chars` + (synth > 0 ? ` · ${synth} interpolated` : "");
+}
+
+function setFrames(frames, { autoplay = false } = {}) {
+  stop();
+  state.base = frames.slice();
+  buildDisplay();
+  state.current = state.display.length - 1;   // start at final answer
+  render();
+  if (autoplay && state.display.length > 1) {
+    state.current = 0;
+    play();
+  }
+}
+
+function play() {
+  if (state.display.length < 2) return;
+  // restart from the beginning if we're parked at the end (and not looping)
+  if (state.current >= state.display.length - 1 && !$("loopChk").checked) state.current = 0;
+  state.playing = true;
+  $("playBtn").textContent = "❚❚ Pause";
+  startTimer();
+}
+function startTimer() {
+  clearInterval(state.timer);
+  const ms = Math.max(30, parseInt($("speed").value, 10) || 200);
+  state.timer = setInterval(() => {
+    if (state.current >= state.display.length - 1) {
+      if ($("loopChk").checked) state.current = 0;
+      else { pause(); return; }
+    }
+    state.current++;
+    render();
+  }, ms);
+}
+function pause() {
+  state.playing = false;
+  clearInterval(state.timer);
+  state.timer = null;
+  $("playBtn").textContent = "▶ Play";
+}
+function stop() {
+  pause();
+  state.base = [];
+  state.display = [];
+  state.current = -1;
+  render();
+}
+
+/* ---------- controls ---------- */
+$("playBtn").addEventListener("click", () => state.playing ? pause() : play());
+$("prevBtn").addEventListener("click", () => { if (state.current > 0) { state.current--; render(); } });
+$("nextBtn").addEventListener("click", () => { if (state.current < state.display.length - 1) { state.current++; render(); } });
+$("slider").addEventListener("input", (e) => {
+  state.current = parseInt(e.target.value, 10);
+  render();
+});
+$("slider").addEventListener("pointerdown", () => pause());
+$("speed").addEventListener("change", () => { if (state.playing) startTimer(); });
+$("smooth").addEventListener("change", () => {
+  buildDisplay();
+  if (state.playing) { state.current = 0; startTimer(); }  // restart visibly through the smoother timeline
+  else { state.current = state.display.length - 1; }          // pause point: final answer
+  render();
+});
+$("dlBtn").addEventListener("click", () => {
+  const blob = new Blob([JSON.stringify(state.base, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "mercury-diffusion-recording.json";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.key === "ArrowLeft") { if (state.current > 0) { state.current--; render(); } }
+  else if (e.key === "ArrowRight") { if (state.current < state.display.length - 1) { state.current++; render(); } }
+});
+
+window.addEventListener("error", (e) => {
+  const f = $("fatal");
+  if (f) { f.style.display = "block"; f.textContent = "Runtime error: " + (e.message || e.error); }
+});
+
+/* ---------- tabs ---------- */
+const tabButtons = {};
+for (const btn of document.querySelectorAll(".tabs button")) {
+  tabButtons[btn.dataset.tab] = btn;
+  btn.addEventListener("click", () => {
+    for (const tab of document.querySelectorAll(".tab")) tab.classList.remove("active");
+    for (const b of Object.values(tabButtons)) b.classList.remove("active");
+    $(btn.dataset.tab).classList.add("active");
+    btn.classList.add("active");
+  });
+}
+const badge = $("modeBadge");
+function setMode(mode) {
+  badge.textContent = mode === "live" ? "live · API" : "demo / simulated";
+  badge.className = "badge " + (mode === "live" ? "live" : "sim");
+}
+
+/* ---------- demo mode ---------- */
+const DEMO = [
+  "████████ ███ ██████ ██████  \n█████ █████ █████ ███████—  \n█████ ██ █████",
+  "Noise ███ ██ ███,  \nReverse ███ █████ █████—  \nImages █",
+  "Noise fades █ ███,  \nReverse steps reveal the hidden—  \nImages are",
+  "Noise fades into form,  \nReverse steps reveal the hidden—  \nImages are",
+  "Noise fades into form,  \nReverse steps reveal the hidden—  \nImages are drawn",
+  "Noise fades into form,  \nReverse steps reveal the hidden—  \nImages are drawn from dreams.",
+];
+$("demoBtn").addEventListener("click", () => {
+  setMode("sim");
+  $("modelLabel").textContent = "simulated · mercury-3 diffusion steps";
+  setFrames(normalizeFrames(DEMO), { autoplay: true });
+});
+
+/* ---------- recording mode ---------- */
+function applyRecording(frames) {
+  const arr = JSON.parse(frames);
+  if (!Array.isArray(arr)) throw new Error("expected a JSON array");
+  const norm = normalizeFrames(arr);
+  if (!norm.length) throw new Error("no usable text frames found");
+  setMode("sim");
+  $("modelLabel").textContent = "recording · mercury-3 diffusion steps";
+  setFrames(norm, { autoplay: true });
+}
+$("recBtn").addEventListener("click", () => {
+  const v = $("recPaste").value.trim();
+  if (!v) { $("status").textContent = "Paste some JSON first."; $("status").className = "err"; return; }
+  try { applyRecording(v); $("status").textContent = ""; $("status").className = ""; }
+  catch (err) { $("status").textContent = "Parse error: " + err.message; $("status").className = "err"; }
+});
+$("recFile").addEventListener("change", (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    try { applyRecording(r.result); $("status").textContent = ""; $("status").className = ""; }
+    catch (err) { $("status").textContent = "File error: " + err.message; $("status").className = "err"; }
+  };
+  r.readAsText(f);
+});
+
+/* ---------- live API mode ---------- */
+async function runLive() {
+  const key = $("apiKey").value.trim();
+  const base = ($("apiBase").value.trim() || "https://api.inceptionlabs.ai").replace(/\/+$/, "");
+  const prompt = $("prompt").value.trim();
+  const maxTokens = parseInt($("maxTokens").value, 10) || 300;
+  const status = $("status");
+
+  if (!key) { status.textContent = "Enter your Inception API key."; status.className = "err"; return; }
+  if (!prompt) { status.textContent = "Enter a prompt."; status.className = "err"; return; }
+
+  stop();
+  setMode("live");
+  status.className = "";
+  status.textContent = "Connecting…";
+  $("runBtn").style.display = "none";
+  $("stopBtn").style.display = "block";
+
+  const frames = [];
+  const pushFrame = (t) => {
+    if (!t) return;
+    if (t !== frames[frames.length - 1]) {
+      frames.push(t);
+      state.base = frames.slice();
+      buildDisplay();
+      // jump to the just-arrived frame unless we're playing through them
+      if (!state.playing) { state.current = state.display.length - 1; render(); }
+    }
+  };
+
+  // start auto-play as frames arrive: watch it denoise live
+  let autoplay = false;
+  const ensureAutoplay = () => {
+    if (!autoplay && frames.length > 1) { autoplay = true; state.current = 0; play(); }
+  };
+
+  try {
+    const res = await fetch(base + "/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + key,
+      },
+      body: JSON.stringify({
+        model: "mercury-3",
+        messages: [{ role: "user", content: prompt }],
+        max_completion_tokens: maxTokens,
+        stream: true,
+        diffusing: true,
+      }),
+    });
+
+    if (!res.ok) {
+      let msg = "HTTP " + res.status;
+      try { const j = await res.json(); msg += (j.error && j.error.message) ? ": " + j.error.message : ": " + JSON.stringify(j); }
+      catch (_) { msg += ": " + (await res.text()).slice(0, 300); }
+      throw new Error(msg);
+    }
+    if (!res.body) throw new Error("No response body (stream unsupported by proxy?)");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let fin = false;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith("data: ")) continue;
+        const payload = trimmed.slice(6).trim();
+        if (payload === "[DONE]") { fin = true; continue; }
+        let data;
+        try { data = JSON.parse(payload); } catch (_) { continue; }
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+        for (const choice of data.choices || []) {
+          const delta = choice.delta || {};
+          if (typeof delta.content === "string" && delta.content !== "") {
+            pushFrame(delta.content);
+            ensureAutoplay();
+            status.textContent = `captured ${frames.length} frame${frames.length > 1 ? "s" : ""}…`;
+          }
+        }
+      }
+    }
+    fin = fin || true;
+    pause();
+    status.className = "ok";
+    status.textContent = frames.length
+      ? `Done — captured ${frames.length} denoising frames. Scrub the slider to time-travel.`
+      : "Stream ended with no content frames.";
+    $("modelLabel").textContent = "live · mercury-3 (diffusing)";
+  } catch (err) {
+    stop();
+    status.className = "err";
+    status.textContent = "Error: " + err.message + " — if this is a CORS error, use the proxy trick in Help.";
+  } finally {
+    $("runBtn").style.display = "block";
+    $("stopBtn").style.display = "none";
+  }
+}
+$("runBtn").addEventListener("click", runLive);
+$("stopBtn").addEventListener("click", () => { stop(); $("status").textContent = "Stopped."; $("status").className = ""; });
+
+/* ---------- init ---------- */
+render();
+</script>
+</body>
+</html>
