@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -586,6 +587,33 @@ func TestExecShort_AllowPathRulesFollowUsersDeny(t *testing.T) {
 	allow := strings.Index(profile, `(allow file-read* (subpath "/Users/x/ro"))`)
 	if deny < 0 || allow < 0 || allow < deny {
 		t.Fatalf("allow rule must come after the /Users deny rules (deny=%d allow=%d):\n%s", deny, allow, profile)
+	}
+}
+
+func TestExecShort_WriteMktempShim(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	shimDir, err := writeMktempShim(dir)
+	if err != nil {
+		t.Fatalf("writeMktempShim: %v", err)
+	}
+	shimPath := filepath.Join(shimDir, "mktemp")
+	info, err := os.Stat(shimPath)
+	if err != nil {
+		t.Fatalf("stat shim: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("shim not executable: %v", info.Mode())
+	}
+	b, err := os.ReadFile(shimPath)
+	if err != nil {
+		t.Fatalf("read shim: %v", err)
+	}
+	if !bytes.Contains(b, []byte("/usr/bin/mktemp")) {
+		t.Fatalf("shim missing real mktemp path")
+	}
+	if !bytes.Contains(b, []byte("-p \"${TMPDIR:-/tmp}\"")) {
+		t.Fatalf("shim missing -p injection")
 	}
 }
 

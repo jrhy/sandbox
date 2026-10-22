@@ -49,7 +49,7 @@ func init() {
     --allow-read       allow reading an existing file or directory tree (repeatable)
     --allow-write      allow reading and writing an existing file or directory tree (repeatable)
     --home             use an existing directory as HOME (read-write) instead of a throwaway temp dir`,
-		"Run a command under a macOS sandbox profile",
+		"Run a command under a macOS sandbox profile (mktemp shim included)",
 		func(a []string) int {
 			opts, cmdArgs, err := parseSandboxExecArgs(a)
 			if err != nil {
@@ -266,6 +266,17 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 		}
 	}
 
+	// Install an mktemp wrapper at the front of PATH. macOS's
+	// /usr/bin/mktemp ignores $TMPDIR and instead uses
+	// confstr(_CS_DARWIN_USER_TEMP_DIR), which points into the host per-user
+	// temp dir (/var/folders/...) — not granted by the sandbox profile. The
+	// shim routes default invocations into the sandbox-private $TMPDIR.
+	shimDir, err := writeMktempShim(tmpDir)
+	if err != nil {
+		return exitError, fmt.Errorf("mktemp shim: %w", err)
+	}
+	pathEnv = shimDir + ":" + pathEnv
+
 	if len(opts.HTTPAllowHosts) > 0 {
 		proxy, err := startHTTPAllowlistProxy(opts.HTTPAllowHosts)
 		if err != nil {
@@ -302,6 +313,7 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 		"TMPDIR": tmpDir,
 		"TMP":    tmpDir,
 		"TEMP":   tmpDir,
+		"PATH":   pathEnv,
 	}, envOverride)
 
 	err = cmd.Run()
@@ -313,6 +325,73 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 		return exitErr.ProcessState.ExitCode(), nil
 	}
 	return exitError, err
+}
+
+// mktempShim is installed into a sandbox's tmp dir and prepended to PATH.
+// macOS's /usr/bin/mktemp ignores $TMPDIR and instead uses
+// confstr(_CS_DARWIN_USER_TEMP_DIR), which yields the host per-user temp dir
+// (/var/folders/...) — not granted by the sandbox profile, so unshimmed
+// mktemp fails with EPERM. The wrapper injects `-p "${TMPDIR:-/tmp}"` for
+// calls that specify neither an explicit -p directory nor a literal template,
+// matching the documented BSD behavior; everything else is passed through.
+const mktempShim = `#!/bin/sh
+# mktemp shim: macOS's /usr/bin/mktemp ignores $TMPDIR and uses
+# confstr(_CS_DARWIN_USER_TEMP_DIR) instead, which points at the host
+# per-user temp dir (/var/folders/...). Inside sb exec sandboxes, that
+# directory is not granted, so mktemp fails with "Operation not permitted".
+#
+# This shim injects -p "${TMPDIR:-/tmp}" whenever the caller did not
+# request an explicit directory (-p) or supply a literal template, mirroring
+# the documented BSD behavior ("directory taken from $TMPDIR if set, else
+# /tmp"). Explicit -p and template invocations pass through untouched.
+
+have_p=0
+has_template=0
+skip_next_p=0
+skip_next_t=0
+
+for a in "$@"; do
+    if [ "$skip_next_p" -eq 1 ]; then
+        skip_next_p=0
+        continue
+    fi
+    if [ "$skip_next_t" -eq 1 ]; then
+        skip_next_t=0
+        continue
+    fi
+    case "$a" in
+        -p)      have_p=1; skip_next_p=1 ;;
+        -p=*)    have_p=1 ;;
+        -t)      skip_next_t=1 ;;
+        -t=*)    ;;
+        -d|-q|-u) ;;
+        -*)      ;;
+        *)       has_template=1 ;;
+    esac
+done
+
+if [ "$have_p" -eq 0 ] && [ "$has_template" -eq 0 ]; then
+    exec /usr/bin/mktemp -p "${TMPDIR:-/tmp}" "$@"
+fi
+
+exec /usr/bin/mktemp "$@"
+`
+
+// writeMktempShim installs the mktemp shim under tmpDir and returns the
+// shim directory, ready to be prepended to the sandboxed PATH.
+func writeMktempShim(tmpDir string) (string, error) {
+	shimDir := filepath.Join(tmpDir, "shims")
+	if err := os.MkdirAll(shimDir, 0755); err != nil {
+		return "", err
+	}
+	shimPath := filepath.Join(shimDir, "mktemp")
+	if err := os.WriteFile(shimPath, []byte(mktempShim), 0755); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(shimPath, 0755); err != nil {
+		return "", err
+	}
+	return shimDir, nil
 }
 
 func buildSandboxProfile(baseDir, baseDirReal, userHome, tmpDir, pathEnv string) (string, error) {
