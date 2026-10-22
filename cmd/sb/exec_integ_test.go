@@ -993,25 +993,31 @@ func TestExecLong_MktempShimRedirectsToTMPDIR(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
 	for _, opts := range []sandboxProfileOptions{{}, {MinimalFS: true}, {NoUser: true}} {
-		baseDir := userTempDir(t)
-		var out bytes.Buffer
-		script := `
+		for _, env := range []map[string]string{nil, {"PATH": "/usr/bin:/bin"}} {
+			baseDir := userTempDir(t)
+			var out bytes.Buffer
+			script := `
 shim=$(command -v mktemp)
 case "$shim" in
   "$TMPDIR/shims/mktemp") ;;
   *) echo "mktemp resolved to unexpected path: $shim"; exit 1 ;;
 esac
-f=$(mktemp)
+check_mktemp() {
+f=$(mktemp "$@") || exit 1
 case "$f" in
   "$TMPDIR"/*) ;;
   *) echo "mktemp created outside TMPDIR: $f"; exit 1 ;;
 esac
 [ -e "$f" ] || { echo "mktemp did not create: $f"; exit 1; }
-rm -f "$f"
+rm -rf "$f"
+}
+check_mktemp
+check_mktemp -dt review
 `
-		code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", script}, nil, opts, bytes.NewReader(nil), &out, &out)
-		if err != nil || code != 0 {
-			t.Errorf("opts=%+v: mktemp shim failed: code=%d err=%v out=%s", opts, code, err, out.String())
+			code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", script}, env, opts, bytes.NewReader(nil), &out, &out)
+			if err != nil || code != 0 {
+				t.Errorf("opts=%+v env=%v: mktemp shim failed: code=%d err=%v out=%s", opts, env, code, err, out.String())
+			}
 		}
 	}
 }
@@ -1023,13 +1029,13 @@ func TestExecLong_MktempShimPreservesExplicitArgs(t *testing.T) {
 	var out bytes.Buffer
 	script := `
 # Template only: must land in cwd, not $TMPDIR.
-f=$(mktemp localtest.XXXXXX) || exit 1
+f=$(mktemp -- -localtest.XXXXXX) || exit 1
 case "$f" in
-  localtest.*) ;;
+  -localtest.*) ;;
   *) echo "template file landed wrong: $f"; exit 1 ;;
 esac
 [ -e "$f" ] || { echo "template file missing"; exit 1; }
-rm -f "$f"
+rm -f -- "$f"
 
 # Explicit -p: must be honored as-is.
 d=$(mktemp -d explicitp.XXXXXX) || exit 1

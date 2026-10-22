@@ -9,13 +9,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 )
 
-// Short tests validate parsing/profile construction only and should be safe for `go test -short`.
+// Short tests exercise parsing, profile construction, and local helpers without sandbox-exec.
 func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -614,6 +615,68 @@ func TestExecShort_WriteMktempShim(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte("-p \"${TMPDIR:-/tmp}\"")) {
 		t.Fatalf("shim missing -p injection")
+	}
+}
+
+func TestExecShort_MktempShimArgs(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name   string
+		args   []string
+		prefix string
+		inTemp bool
+		isDir  bool
+	}{
+		{name: "default", inTemp: true, prefix: "tmp."},
+		{name: "directory", args: []string{"-d"}, inTemp: true, prefix: "tmp.", isDir: true},
+		{name: "prefix", args: []string{"-t", "review"}, inTemp: true, prefix: "review."},
+		{name: "grouped prefix", args: []string{"-dt", "review"}, inTemp: true, prefix: "review.", isDir: true},
+		{name: "grouped quiet prefix", args: []string{"-qt", "review"}, inTemp: true, prefix: "review."},
+		{name: "attached prefix", args: []string{"-dtreview"}, inTemp: true, prefix: "review.", isDir: true},
+		{name: "long directory", args: []string{"--directory"}, inTemp: true, prefix: "tmp.", isDir: true},
+		{name: "empty option terminator", args: []string{"--"}, inTemp: true, prefix: "tmp."},
+		{name: "template", args: []string{"review.XXXXXX"}, prefix: "review."},
+		{name: "template after terminator", args: []string{"--", "-review.XXXXXX"}, prefix: "-review."},
+		{name: "grouped explicit directory", args: []string{"-qp", ".", "review.XXXXXX"}, prefix: "./review."},
+		{name: "attached explicit directory", args: []string{"-p.", "review.XXXXXX"}, prefix: "./review."},
+		{name: "long explicit directory", args: []string{"--tmpdir=.", "review.XXXXXX"}, prefix: "./review."},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cwd := t.TempDir()
+			tmpDir := t.TempDir()
+			shimDir, err := writeMktempShim(tmpDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(filepath.Join(shimDir, "mktemp"), tt.args...)
+			cmd.Dir = cwd
+			cmd.Env = mergeEnv(os.Environ(), map[string]string{"TMPDIR": tmpDir})
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("mktemp %q: %v: %s", tt.args, err, out)
+			}
+			got := strings.TrimSpace(string(out))
+			prefix := tt.prefix
+			if tt.inTemp {
+				prefix = filepath.Join(tmpDir, prefix)
+			}
+			if !strings.HasPrefix(got, prefix) {
+				t.Fatalf("mktemp %q returned %q; want prefix %q", tt.args, got, prefix)
+			}
+			created := got
+			if !filepath.IsAbs(created) {
+				created = filepath.Join(cwd, created)
+			}
+			info, err := os.Stat(created)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if info.IsDir() != tt.isDir {
+				t.Fatalf("IsDir() = %v; want %v", info.IsDir(), tt.isDir)
+			}
+		})
 	}
 }
 

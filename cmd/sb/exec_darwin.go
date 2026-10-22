@@ -266,10 +266,10 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 		}
 	}
 
-	// Install an mktemp wrapper at the front of PATH. macOS's
-	// /usr/bin/mktemp ignores $TMPDIR and instead uses
+	// Install an mktemp wrapper at the front of PATH. On macOS,
+	// default /usr/bin/mktemp invocations prefer
 	// confstr(_CS_DARWIN_USER_TEMP_DIR), which points into the host per-user
-	// temp dir (/var/folders/...) — not granted by the sandbox profile. The
+	// temp dir (/var/folders/...) — not writable under the sandbox profile. The
 	// shim routes default invocations into the sandbox-private $TMPDIR.
 	shimDir, err := writeMktempShim(tmpDir)
 	if err != nil {
@@ -308,13 +308,14 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
+	// PATH already includes the caller override plus the shim. Apply it last
+	// so command lookup and the PATH-derived sandbox rules use the same value.
 	cmd.Env = mergeEnv(os.Environ(), map[string]string{
 		"HOME":   homeDir,
 		"TMPDIR": tmpDir,
 		"TMP":    tmpDir,
 		"TEMP":   tmpDir,
-		"PATH":   pathEnv,
-	}, envOverride)
+	}, envOverride, map[string]string{"PATH": pathEnv})
 
 	err = cmd.Run()
 	if err == nil {
@@ -327,54 +328,50 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 	return exitError, err
 }
 
-// mktempShim is installed into a sandbox's tmp dir and prepended to PATH.
-// macOS's /usr/bin/mktemp ignores $TMPDIR and instead uses
-// confstr(_CS_DARWIN_USER_TEMP_DIR), which yields the host per-user temp dir
-// (/var/folders/...) — not granted by the sandbox profile, so unshimmed
-// mktemp fails with EPERM. The wrapper injects `-p "${TMPDIR:-/tmp}"` for
-// calls that specify neither an explicit -p directory nor a literal template,
-// matching the documented BSD behavior; everything else is passed through.
+// mktempShim redirects default invocations to the sandbox-private TMPDIR.
+// macOS prefers confstr(_CS_DARWIN_USER_TEMP_DIR) unless -p is supplied;
+// that host directory is not writable under the sandbox profile. Explicit
+// directories and literal templates are passed through to /usr/bin/mktemp.
 const mktempShim = `#!/bin/sh
-# mktemp shim: macOS's /usr/bin/mktemp ignores $TMPDIR and uses
-# confstr(_CS_DARWIN_USER_TEMP_DIR) instead, which points at the host
-# per-user temp dir (/var/folders/...). Inside sb exec sandboxes, that
-# directory is not granted, so mktemp fails with "Operation not permitted".
-#
-# This shim injects -p "${TMPDIR:-/tmp}" whenever the caller did not
-# request an explicit directory (-p) or supply a literal template, mirroring
-# the documented BSD behavior ("directory taken from $TMPDIR if set, else
-# /tmp"). Explicit -p and template invocations pass through untouched.
-
-have_p=0
-has_template=0
-skip_next_p=0
-skip_next_t=0
+# Inspect options without changing the original arguments. As in BSD getopt,
+# p and t consume the rest of their option word, or the following argument.
+# The first operand (including anything after --) is a literal template.
+skip_next=0
+end_options=0
 
 for a in "$@"; do
-    if [ "$skip_next_p" -eq 1 ]; then
-        skip_next_p=0
+    if [ "$skip_next" -eq 1 ]; then
+        skip_next=0
         continue
     fi
-    if [ "$skip_next_t" -eq 1 ]; then
-        skip_next_t=0
-        continue
+    if [ "$end_options" -eq 1 ]; then
+        exec /usr/bin/mktemp "$@"
     fi
     case "$a" in
-        -p)      have_p=1; skip_next_p=1 ;;
-        -p=*)    have_p=1 ;;
-        -t)      skip_next_t=1 ;;
-        -t=*)    ;;
-        -d|-q|-u) ;;
-        -*)      ;;
-        *)       has_template=1 ;;
+        --) end_options=1 ;;
+        --directory|--quiet|--dry-run) ;;
+        --*) exec /usr/bin/mktemp "$@" ;;
+        -?*)
+            options=${a#-}
+            while [ -n "$options" ]; do
+                case "$options" in
+                    [dqu]*) options=${options#?} ;;
+                    p*) exec /usr/bin/mktemp "$@" ;;
+                    t*)
+                        if [ "$options" = t ]; then
+                            skip_next=1
+                        fi
+                        break
+                        ;;
+                    *) exec /usr/bin/mktemp "$@" ;;
+                esac
+            done
+            ;;
+        *) exec /usr/bin/mktemp "$@" ;;
     esac
 done
 
-if [ "$have_p" -eq 0 ] && [ "$has_template" -eq 0 ]; then
-    exec /usr/bin/mktemp -p "${TMPDIR:-/tmp}" "$@"
-fi
-
-exec /usr/bin/mktemp "$@"
+exec /usr/bin/mktemp -p "${TMPDIR:-/tmp}" "$@"
 `
 
 // writeMktempShim installs the mktemp shim under tmpDir and returns the
