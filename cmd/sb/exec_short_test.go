@@ -582,18 +582,18 @@ func TestExecShort_IsForbiddenProxyIP(t *testing.T) {
 		// Forbidden: link-local (incl. cloud metadata at 169.254.169.254)
 		{"ipv4 link-local", "169.254.169.254", true},
 		{"ipv6 link-local", "fe80::1", true},
-		// Forbidden: multicast
+		// Forbidden: multicast (not a valid TCP target)
 		{"ipv4 multicast", "224.0.0.1", true},
 		{"ipv6 multicast", "ff02::1", true},
-		// Forbidden: RFC1918 private and IPv6 ULA
-		{"rfc1918 10/8", "10.1.2.3", true},
-		{"rfc1918 172.16/12 low", "172.16.0.1", true},
-		{"rfc1918 172.16/12 high", "172.31.255.255", true},
-		{"rfc1918 192.168/16", "192.168.1.1", true},
-		{"ipv6 ula", "fd00::1", true},
-		// Forbidden: CGNAT 100.64/10
-		{"cgnat low", "100.64.0.1", true},
-		{"cgnat high", "100.127.255.255", true},
+		// Allowed: RFC1918 private and IPv6 ULA (subnet-reachable)
+		{"rfc1918 10/8", "10.1.2.3", false},
+		{"rfc1918 172.16/12 low", "172.16.0.1", false},
+		{"rfc1918 172.16/12 high", "172.31.255.255", false},
+		{"rfc1918 192.168/16", "192.168.1.1", false},
+		{"ipv6 ula", "fd00::1", false},
+		// Allowed: CGNAT 100.64/10 (e.g. Tailscale tailnet)
+		{"cgnat low", "100.64.0.1", false},
+		{"cgnat high", "100.127.255.255", false},
 		// Allowed: public unicast
 		{"public ipv4", "1.2.3.4", false},
 		{"public ipv4 2", "8.8.8.8", false},

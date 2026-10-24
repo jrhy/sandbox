@@ -45,7 +45,8 @@ func init() {
 		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
     --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
     --network          allow network access
-    --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob
+    --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob;
+                       loopback, link-local, and multicast targets are never dialed
     --localhost-allow  allow direct TCP connections only to selected localhost ports
     --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed
     --allow-read       allow reading an existing file or directory tree (repeatable)
@@ -478,27 +479,24 @@ func buildTmpDirRules(tmpDir string) string {
 }
 
 // isForbiddenProxyIP reports whether ip is an address the sandboxed process
-// must not reach through the HTTP allowlist proxy: loopback, unspecified,
-// link-local (incl. cloud metadata at 169.254.169.254), multicast, RFC1918
-// private ranges, IPv6 unique-local, and carrier-grade NAT space. This closes
-// the DNS-rebinding hole where an allowlisted hostname resolves to 127.0.0.1
-// (or another sensitive address) and the proxy — running outside the sandbox
-// — dials it on the sandbox's behalf.
+// must never reach through the HTTP allowlist proxy, regardless of the
+// allowlist: loopback, unspecified (a loopback alias on most stacks),
+// link-local unicast (incl. the cloud metadata service at 169.254.169.254),
+// and multicast (not a valid TCP target).
+//
+// Everything else is dialable — including RFC1918/ULA private ranges,
+// CGNAT space (e.g. Tailscale), and the host's own subnet addresses — on
+// the theory that the allowlist already trusts the destination name's DNS,
+// and such addresses are on networks the host itself participates in.
+// Note the consequence: host services bound to 0.0.0.0 are reachable via
+// the host's LAN address; the loopback block protects services bound to
+// 127.0.0.1/::1 specifically. See isForbiddenProxyIP's test table for the
+// boundary cases.
 func isForbiddenProxyIP(ip net.IP) bool {
 	return ip.IsLoopback() ||
 		ip.IsUnspecified() ||
 		ip.IsLinkLocalUnicast() ||
-		ip.IsLinkLocalMulticast() ||
-		ip.IsMulticast() ||
-		ip.IsPrivate() ||
-		isCGNATIP(ip)
-}
-
-// isCGNATIP reports whether ip is in 100.64.0.0/10 (RFC 6598 carrier-grade
-// NAT); net.IP.IsPrivate does not cover this range.
-func isCGNATIP(ip net.IP) bool {
-	ip4 := ip.To4()
-	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
+		ip.IsMulticast()
 }
 
 // forbiddenProxyAddrError reports a dial target whose resolved address is
