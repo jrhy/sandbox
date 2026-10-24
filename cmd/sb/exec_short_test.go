@@ -3,17 +3,22 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Short tests exercise parsing, profile construction, and local helpers without sandbox-exec.
@@ -557,6 +562,179 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestExecShort_IsForbiddenProxyIP(t *testing.T) {
+	t.Parallel()
+	testCases := []struct {
+		name string
+		ip   string
+		want bool
+	}{
+		// Forbidden: loopback
+		{"ipv4 loopback", "127.0.0.1", true},
+		{"ipv4 loopback range", "127.8.8.8", true},
+		{"ipv6 loopback", "::1", true},
+		{"ipv4-mapped ipv6 loopback", "::ffff:127.0.0.1", true},
+		// Forbidden: unspecified
+		{"ipv4 unspecified", "0.0.0.0", true},
+		{"ipv6 unspecified", "::", true},
+		// Forbidden: link-local (incl. cloud metadata at 169.254.169.254)
+		{"ipv4 link-local", "169.254.169.254", true},
+		{"ipv6 link-local", "fe80::1", true},
+		// Forbidden: multicast
+		{"ipv4 multicast", "224.0.0.1", true},
+		{"ipv6 multicast", "ff02::1", true},
+		// Forbidden: RFC1918 private and IPv6 ULA
+		{"rfc1918 10/8", "10.1.2.3", true},
+		{"rfc1918 172.16/12 low", "172.16.0.1", true},
+		{"rfc1918 172.16/12 high", "172.31.255.255", true},
+		{"rfc1918 192.168/16", "192.168.1.1", true},
+		{"ipv6 ula", "fd00::1", true},
+		// Forbidden: CGNAT 100.64/10
+		{"cgnat low", "100.64.0.1", true},
+		{"cgnat high", "100.127.255.255", true},
+		// Allowed: public unicast
+		{"public ipv4", "1.2.3.4", false},
+		{"public ipv4 2", "8.8.8.8", false},
+		{"public ipv4 outside 172.16/12", "172.32.0.1", false},
+		{"public ipv4 outside cgnat", "100.128.0.1", false},
+		{"public ipv6", "2606:4700::1111", false},
+	}
+	for _, tc := range testCases {
+		ip := net.ParseIP(tc.ip)
+		if ip == nil {
+			t.Fatalf("test bug: %q is not a valid IP", tc.ip)
+		}
+		if got := isForbiddenProxyIP(ip); got != tc.want {
+			t.Errorf("isForbiddenProxyIP(%s) = %v, want %v", tc.ip, got, tc.want)
+		}
+	}
+}
+
+// Regression test: the proxy must not tunnel to loopback services even when
+// the requested hostname matches the allowlist and DNS (or a literal) points
+// at 127.0.0.1.
+func TestExecShort_HTTPAllowProxyBlocksLoopbackDial(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("local service reached"))
+	}))
+	defer ts.Close()
+
+	proxy, err := startHTTPAllowlistProxy([]string{"*"})
+	if err != nil {
+		t.Fatalf("startHTTPAllowlistProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	proxyURL, err := url.Parse(proxy.url)
+	if err != nil {
+		t.Fatalf("parse proxy url: %v", err)
+	}
+	client := &http.Client{
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+	resp, err := client.Get(ts.URL)
+	if err != nil {
+		t.Fatalf("GET via proxy: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET to loopback via proxy: status=%d want 403, body=%q", resp.StatusCode, body)
+	}
+}
+
+// Regression test: CONNECT tunneling must not reach loopback services via a
+// hostname (e.g. rebindable DNS) that resolves to 127.0.0.1.
+func TestExecShort_HTTPAllowProxyBlocksLoopbackConnect(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("local service reached"))
+	}))
+	defer ts.Close()
+
+	proxy, err := startHTTPAllowlistProxy([]string{"*"})
+	if err != nil {
+		t.Fatalf("startHTTPAllowlistProxy: %v", err)
+	}
+	defer proxy.Close()
+
+	conn, err := net.Dial("tcp", strings.TrimPrefix(proxy.url, "http://"))
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	// Use the hostname "localhost" (not a literal) so the dial exercises DNS
+	// resolution; localhost resolves to 127.0.0.1 and must still be blocked.
+	port := ts.Listener.Addr().(*net.TCPAddr).Port
+	target := net.JoinHostPort("localhost", strconv.Itoa(port))
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("CONNECT to loopback via proxy: status=%d want 403", resp.StatusCode)
+	}
+}
+
+// Pins the CONNECT tunnel machinery (hijack, bidirectional copy) end to end
+// with a dialer unconstrained by the forbidden-address policy, since the real
+// policy correctly refuses loopback dials and these servers are loopback.
+func TestExecShort_HTTPAllowProxyTunnelsConnect(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("tunnel ok"))
+	}))
+	defer ts.Close()
+	target := strings.TrimPrefix(ts.URL, "http://")
+
+	proxy := &allowlistHTTPProxy{
+		patterns: []string{"*"},
+		dialer:   &net.Dialer{Timeout: 5 * time.Second},
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer ln.Close()
+	go http.Serve(ln, proxy)
+
+	conn, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	defer conn.Close()
+	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
+	if _, err := conn.Write([]byte(req)); err != nil {
+		t.Fatalf("write CONNECT: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT through proxy: status=%d want 200", resp.StatusCode)
+	}
+
+	getReq := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", target)
+	if _, err := conn.Write([]byte(getReq)); err != nil {
+		t.Fatalf("write GET through tunnel: %v", err)
+	}
+	body, err := io.ReadAll(conn)
+	if err != nil {
+		t.Fatalf("read tunnel response: %v", err)
+	}
+	if !bytes.Contains(body, []byte("tunnel ok")) {
+		t.Fatalf("tunnel did not carry the response: %q", body)
+	}
 }
 
 func TestExecShort_BuildAllowPathRules(t *testing.T) {

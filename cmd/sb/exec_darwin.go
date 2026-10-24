@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -475,6 +477,81 @@ func buildTmpDirRules(tmpDir string) string {
 	return buf.String()
 }
 
+// isForbiddenProxyIP reports whether ip is an address the sandboxed process
+// must not reach through the HTTP allowlist proxy: loopback, unspecified,
+// link-local (incl. cloud metadata at 169.254.169.254), multicast, RFC1918
+// private ranges, IPv6 unique-local, and carrier-grade NAT space. This closes
+// the DNS-rebinding hole where an allowlisted hostname resolves to 127.0.0.1
+// (or another sensitive address) and the proxy — running outside the sandbox
+// — dials it on the sandbox's behalf.
+func isForbiddenProxyIP(ip net.IP) bool {
+	return ip.IsLoopback() ||
+		ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() ||
+		ip.IsPrivate() ||
+		isCGNATIP(ip)
+}
+
+// isCGNATIP reports whether ip is in 100.64.0.0/10 (RFC 6598 carrier-grade
+// NAT); net.IP.IsPrivate does not cover this range.
+func isCGNATIP(ip net.IP) bool {
+	ip4 := ip.To4()
+	return ip4 != nil && ip4[0] == 100 && ip4[1] >= 64 && ip4[1] <= 127
+}
+
+// forbiddenProxyAddrError reports a dial target whose resolved address is
+// forbidden. It maps to 403 Forbidden rather than 502 Bad Gateway.
+type forbiddenProxyAddrError struct {
+	host string
+	addr string
+}
+
+func (e *forbiddenProxyAddrError) Error() string {
+	return fmt.Sprintf("%s resolves to forbidden address %s", e.host, e.addr)
+}
+
+// proxyDialHostKey carries the pre-resolution hostname through DialContext
+// into ControlContext so rejection messages can name the requested host.
+type proxyDialHostKey struct{}
+
+// buildProxyDialer returns a dialer whose ControlContext validates the
+// resolved address before connect(2) runs, so every candidate address
+// (including Happy Eyeballs alternates) is checked with no TOCTOU gap.
+func buildProxyDialer() *net.Dialer {
+	return &net.Dialer{
+		Timeout: 10 * time.Second,
+		ControlContext: func(ctx context.Context, network, address string, _ syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				return fmt.Errorf("proxy dial: invalid address %q", address)
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				return fmt.Errorf("proxy dial: address %q is not an IP", host)
+			}
+			if isForbiddenProxyIP(ip) {
+				name, _ := ctx.Value(proxyDialHostKey{}).(string)
+				if name == "" {
+					name = host
+				}
+				return &forbiddenProxyAddrError{host: name, addr: ip.String()}
+			}
+			return nil
+		},
+	}
+}
+
+// dialProxyContext dials addr (host:port, possibly still a hostname) with the
+// forbidden-address check applied to the resolved address.
+func (p *allowlistHTTPProxy) dialProxyContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		ctx = context.WithValue(ctx, proxyDialHostKey{}, host)
+	}
+	return p.dialer.DialContext(ctx, network, addr)
+}
+
 // buildNoUserPathRules discovers package manager roots from PATH entries
 // (e.g., /opt/homebrew/bin → /opt/homebrew) and grants read-only access.
 // Entries under /Users are skipped entirely. Entries already covered by
@@ -729,6 +806,7 @@ type sandboxHTTPProxy struct {
 type allowlistHTTPProxy struct {
 	patterns  []string
 	transport http.RoundTripper
+	dialer    *net.Dialer
 }
 
 func parseHTTPAllowPatterns(raw string) ([]string, error) {
@@ -793,11 +871,14 @@ func startHTTPAllowlistProxy(patterns []string) (*sandboxHTTPProxy, error) {
 		_ = listener.Close()
 		return nil, fmt.Errorf("unexpected listener address %T", listener.Addr())
 	}
+	dialer := buildProxyDialer()
 	handler := &allowlistHTTPProxy{
 		patterns: patterns,
 		transport: &http.Transport{
-			Proxy: nil,
+			Proxy:       nil,
+			DialContext: dialer.DialContext,
 		},
+		dialer: dialer,
 	}
 	server := &http.Server{
 		Handler:           handler,
@@ -863,6 +944,11 @@ func (p *allowlistHTTPProxy) ServeHTTP(w http.ResponseWriter, req *http.Request)
 
 	resp, err := p.transport.RoundTrip(upstream)
 	if err != nil {
+		var forbidden *forbiddenProxyAddrError
+		if errors.As(err, &forbidden) {
+			http.Error(w, "blocked by --http-allow: "+err.Error(), http.StatusForbidden)
+			return
+		}
 		http.Error(w, "proxy upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}
@@ -884,8 +970,15 @@ func (p *allowlistHTTPProxy) handleConnect(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	upstream, err := net.DialTimeout("tcp", targetAddr, 10*time.Second)
+	ctx, cancel := context.WithTimeout(req.Context(), 10*time.Second)
+	defer cancel()
+	upstream, err := p.dialProxyContext(ctx, "tcp", targetAddr)
 	if err != nil {
+		var forbidden *forbiddenProxyAddrError
+		if errors.As(err, &forbidden) {
+			http.Error(w, "blocked by --http-allow: "+err.Error(), http.StatusForbidden)
+			return
+		}
 		http.Error(w, "proxy upstream error: "+err.Error(), http.StatusBadGateway)
 		return
 	}

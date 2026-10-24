@@ -470,13 +470,12 @@ func TestExecLong_HTTPAllowAllowsHTTPToAllowedHost(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
-	server := httptest.NewServer(httpTestHandler("allowed over http"))
-	defer server.Close()
 
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse server URL: %v", err)
-	}
+	// The proxy must attempt the upstream dial for an allowlisted host rather
+	// than rejecting with 403. Upstreams must not be loopback (the proxy
+	// refuses loopback/private dials even for allowlisted names), so use the
+	// reserved example.invalid name: the dial fails to resolve, which surfaces
+	// as a 502 upstream error — proof the allowlist accepted the host.
 	python := findPython(t)
 	var stdout, stderr bytes.Buffer
 	code, err := runSandboxExecWithOptions(
@@ -485,15 +484,17 @@ func TestExecLong_HTTPAllowAllowsHTTPToAllowedHost(t *testing.T) {
 			python,
 			"-S",
 			"-c",
-			`import os, sys, urllib.request
+			`import os, sys, urllib.request, urllib.error
 proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']})
 opener = urllib.request.build_opener(proxy)
-with opener.open(sys.argv[1], timeout=5) as resp:
-    sys.stdout.write(resp.read().decode())`,
-			server.URL,
+try:
+    opener.open('http://example.invalid/allowed', timeout=5)
+    sys.stdout.write('unexpected-success')
+except urllib.error.HTTPError as e:
+    sys.stdout.write('%d %s' % (e.code, e.read().decode()))`,
 		},
 		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
-		sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
 		bytes.NewReader(nil),
 		&stdout, &stderr,
 	)
@@ -501,8 +502,11 @@ with opener.open(sys.argv[1], timeout=5) as resp:
 	if err != nil || code != 0 {
 		t.Fatalf("--http-allow http fetch failed: code=%d err=%v out=%s", code, err, out)
 	}
-	if !strings.Contains(stdout.String(), "allowed over http") {
-		t.Fatalf("unexpected output: %q", stdout.String())
+	if !strings.Contains(out, "502") || !strings.Contains(out, "proxy upstream error") {
+		t.Fatalf("expected upstream dial error for allowlisted host, got: %s", out)
+	}
+	if strings.Contains(out, "blocked by --http-allow") || strings.Contains(out, "forbidden address") {
+		t.Fatalf("allowlisted host must not be policy-blocked: %s", out)
 	}
 }
 
@@ -575,13 +579,10 @@ func TestExecLong_HTTPAllowAllowsHTTPSConnect(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
-	server := httptest.NewTLSServer(httpTestHandler("allowed over https"))
-	defer server.Close()
 
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse server URL: %v", err)
-	}
+	// The proxy must accept the CONNECT for an allowlisted host and attempt
+	// the upstream dial (which fails for the reserved example.invalid name,
+	// surfacing as 502) rather than rejecting the host with 403.
 	python := findPython(t)
 	var stdout, stderr bytes.Buffer
 	code, err := runSandboxExecWithOptions(
@@ -590,16 +591,17 @@ func TestExecLong_HTTPAllowAllowsHTTPSConnect(t *testing.T) {
 			python,
 			"-S",
 			"-c",
-			`import os, sys, ssl, urllib.request
-proxy = urllib.request.ProxyHandler({'https': os.environ['HTTPS_PROXY']})
-https = urllib.request.HTTPSHandler(context=ssl._create_unverified_context())
-opener = urllib.request.build_opener(proxy, https)
-with opener.open(sys.argv[1], timeout=5) as resp:
-    sys.stdout.write(resp.read().decode())`,
-			server.URL,
+			`import os, sys, socket
+proxy = os.environ['HTTPS_PROXY'].split('//')[1]
+conn = socket.create_connection((proxy.split(':')[0], int(proxy.split(':')[1])), timeout=5)
+conn.sendall(b'CONNECT example.invalid:443 HTTP/1.1\r\nHost: example.invalid:443\r\n\r\n')
+resp = b''
+while b'\r\n' not in resp:
+    resp += conn.recv(1024)
+sys.stdout.write(resp.split(b'\r\n')[0].decode())`,
 		},
 		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
-		sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
 		bytes.NewReader(nil),
 		&stdout, &stderr,
 	)
@@ -607,8 +609,8 @@ with opener.open(sys.argv[1], timeout=5) as resp:
 	if err != nil || code != 0 {
 		t.Fatalf("--http-allow https CONNECT failed: code=%d err=%v out=%s", code, err, out)
 	}
-	if !strings.Contains(stdout.String(), "allowed over https") {
-		t.Fatalf("unexpected output: %q", stdout.String())
+	if !strings.Contains(out, "502") {
+		t.Fatalf("expected upstream dial error for allowlisted CONNECT, got: %s", out)
 	}
 }
 
@@ -660,13 +662,6 @@ func TestExecLong_HTTPAllowOriginFormUsesReqHostFallback(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
-	server := httptest.NewServer(httpTestHandler("origin form ok"))
-	defer server.Close()
-
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse server URL: %v", err)
-	}
 	python := findPython(t)
 	var stdout, stderr bytes.Buffer
 	code, err := runSandboxExecWithOptions(
@@ -677,18 +672,21 @@ func TestExecLong_HTTPAllowOriginFormUsesReqHostFallback(t *testing.T) {
 			"-c",
 			`import os, sys, urllib.parse, http.client
 proxy = urllib.parse.urlparse(os.environ['HTTP_PROXY'])
-target = urllib.parse.urlparse(sys.argv[1])
-path = target.path or '/'
-if target.query:
-    path += '?' + target.query
+# Origin-form requests carry no host in the request target; the proxy must
+# fall back to the Host header for the allowlist decision.
 conn = http.client.HTTPConnection(proxy.hostname, proxy.port, timeout=5)
-conn.request('GET', path, headers={'Host': target.netloc})
-resp = conn.getresponse()
-sys.stdout.write(resp.read().decode())`,
-			server.URL + "/origin-form?x=1",
+conn.request('GET', '/origin-form?x=1', headers={'Host': 'example.invalid'})
+r1 = conn.getresponse()
+r1.read()
+conn.close()
+conn = http.client.HTTPConnection(proxy.hostname, proxy.port, timeout=5)
+conn.request('GET', '/origin-form?x=1', headers={'Host': 'blocked.invalid'})
+r2 = conn.getresponse()
+r2.read()
+sys.stdout.write('allowed-host:%d blocked-host:%d' % (r1.status, r2.status))`,
 		},
 		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
-		sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
 		bytes.NewReader(nil),
 		&stdout, &stderr,
 	)
@@ -696,8 +694,13 @@ sys.stdout.write(resp.read().decode())`,
 	if err != nil || code != 0 {
 		t.Fatalf("--http-allow origin-form request failed: code=%d err=%v out=%s", code, err, out)
 	}
-	if !strings.Contains(stdout.String(), "origin form ok") {
-		t.Fatalf("unexpected output: %q", stdout.String())
+	// Allowlisted Host header: the proxy dialed (and failed to resolve) the
+	// reserved name — 502, not 403. Unlisted Host header: 403.
+	if !strings.Contains(out, "allowed-host:502") {
+		t.Fatalf("Host header fallback failed: allowlisted origin-form request was not dialed: %s", out)
+	}
+	if !strings.Contains(out, "blocked-host:403") {
+		t.Fatalf("Host header fallback failed: unlisted origin-form request was not blocked: %s", out)
 	}
 }
 
@@ -716,8 +719,14 @@ func TestExecLong_HTTPAllowMixedAllowlistAllowsTwoHostsAndBlocksOne(t *testing.T
 	}
 	port := u.Port()
 	localhostURL := "http://localhost:" + port + "/via-localhost"
-	blockedURL := "http://example.invalid:" + port + "/blocked"
+	loopbackURL := "http://127.0.0.1:" + port + "/via-loopback"
+	allowedURL := "http://example.invalid/allowed"
+	blockedURL := "http://blocked.invalid/blocked"
 
+	// Even when loopback names are explicitly allowlisted, the proxy must
+	// refuse to dial them (DNS-rebinding defense): allowlisted loopback yields
+	// 403 "resolves to forbidden address", an allowlisted unresolvable name
+	// yields the 502 upstream dial error, and an unlisted host yields 403.
 	python := findPython(t)
 	var stdout, stderr bytes.Buffer
 	code, err := runSandboxExecWithOptions(
@@ -729,23 +738,19 @@ func TestExecLong_HTTPAllowMixedAllowlistAllowsTwoHostsAndBlocksOne(t *testing.T
 			`import os, sys, urllib.request, urllib.error
 proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']})
 opener = urllib.request.build_opener(proxy)
-allowed = []
-for url in sys.argv[1:3]:
-    with opener.open(url, timeout=5) as resp:
-        allowed.append(resp.read().decode().strip())
-print("allowed:" + "|".join(allowed))
-try:
-    opener.open(sys.argv[3], timeout=5)
-    print("blocked:unexpected-success")
-    sys.exit(99)
-except urllib.error.HTTPError as e:
-    print(f"blocked:{e.code}")`,
-			server.URL,
+for url in sys.argv[1:]:
+    try:
+        opener.open(url, timeout=5)
+        print("unexpected-success:" + url)
+    except urllib.error.HTTPError as e:
+        print(url + ":%d %s" % (e.code, e.read().decode().strip()))`,
 			localhostURL,
+			loopbackURL,
+			allowedURL,
 			blockedURL,
 		},
 		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
-		sandboxProfileOptions{HTTPAllowHosts: []string{"127.0.0.1", "localhost"}},
+		sandboxProfileOptions{HTTPAllowHosts: []string{"127.0.0.1", "localhost", "example.invalid"}},
 		bytes.NewReader(nil),
 		&stdout, &stderr,
 	)
@@ -753,14 +758,22 @@ except urllib.error.HTTPError as e:
 	if err != nil {
 		t.Fatalf("--http-allow mixed allowlist failed unexpectedly: %v", err)
 	}
-	if code == 99 {
-		t.Fatalf("--http-allow mixed allowlist unexpectedly allowed blocked host: %s", out)
+	if code == 0 && strings.Contains(out, "unexpected-success") {
+		t.Fatalf("--http-allow unexpectedly allowed a fetch: %s", out)
 	}
-	if !strings.Contains(out, "allowed:127.0.0.1:"+port+"|localhost:"+port) {
-		t.Fatalf("expected both allowed hosts in output, got: %s", out)
+	for _, url := range []string{localhostURL, loopbackURL} {
+		if !strings.Contains(out, url+":403") {
+			t.Fatalf("allowlisted loopback %s must still be blocked, got: %s", url, out)
+		}
 	}
-	if !strings.Contains(out, "blocked:403") {
-		t.Fatalf("expected blocked host to return 403, got: %s", out)
+	if !strings.Contains(out, "resolves to forbidden address 127.0.0.1") {
+		t.Fatalf("loopback block must cite the forbidden resolved address, got: %s", out)
+	}
+	if !strings.Contains(out, allowedURL+":502 proxy upstream error") {
+		t.Fatalf("allowlisted unresolvable host must yield upstream dial error, got: %s", out)
+	}
+	if !strings.Contains(out, blockedURL+":403 blocked by --http-allow") {
+		t.Fatalf("unlisted host must yield explicit block, got: %s", out)
 	}
 }
 
