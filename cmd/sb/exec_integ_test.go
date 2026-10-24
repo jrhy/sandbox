@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Long tests execute commands under sandbox-exec and are skipped by `go test -short`.
@@ -466,47 +467,79 @@ with urllib.request.urlopen(sys.argv[1], timeout=5) as resp:
 	}
 }
 
-func TestExecLong_HTTPAllowAllowsHTTPToAllowedHost(t *testing.T) {
+// subnetTestServer uses only this machine. Some hosts cannot connect back to
+// their own LAN addresses, so verify the fixture outside the sandbox first.
+func subnetTestServer(t *testing.T, tls bool) *httptest.Server {
+	t.Helper()
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err != nil || ip.To4() == nil || isForbiddenProxyIP(ip) {
+			continue
+		}
+		listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			continue
+		}
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintf(w, "upstream:%s%s", r.Host, r.URL.RequestURI())
+		}))
+		server.Listener.Close()
+		server.Listener = listener
+		if tls {
+			server.StartTLS()
+		} else {
+			server.Start()
+		}
+		client := server.Client()
+		client.Timeout = time.Second
+		response, err := client.Get(server.URL)
+		if err != nil {
+			server.Close()
+			continue
+		}
+		response.Body.Close()
+		t.Cleanup(server.Close)
+		return server
+	}
+	t.Skip("no usable local subnet address: unsandboxed fixture cannot bind or connect")
+	return nil
+}
+
+func TestExecLong_HTTPAllowForwardsToSubnet(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
-	baseDir := userTempDir(t)
-
-	// The proxy must attempt the upstream dial for an allowlisted host rather
-	// than rejecting with 403. Upstreams must not be loopback (the proxy
-	// refuses loopback/private dials even for allowlisted names), so use the
-	// reserved example.invalid name: the dial fails to resolve, which surfaces
-	// as a 502 upstream error — proof the allowlist accepted the host.
-	python := findPython(t)
-	var stdout, stderr bytes.Buffer
-	code, err := runSandboxExecWithOptions(
-		baseDir,
-		[]string{
-			python,
-			"-S",
-			"-c",
-			`import os, sys, urllib.request, urllib.error
-proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY']})
-opener = urllib.request.build_opener(proxy)
-try:
-    opener.open('http://example.invalid/allowed', timeout=5)
-    sys.stdout.write('unexpected-success')
-except urllib.error.HTTPError as e:
-    sys.stdout.write('%d %s' % (e.code, e.read().decode()))`,
-		},
-		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
-		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
-		bytes.NewReader(nil),
-		&stdout, &stderr,
-	)
-	out := stdout.String() + stderr.String()
-	if err != nil || code != 0 {
-		t.Fatalf("--http-allow http fetch failed: code=%d err=%v out=%s", code, err, out)
-	}
-	if !strings.Contains(out, "502") || !strings.Contains(out, "proxy upstream error") {
-		t.Fatalf("expected upstream dial error for allowlisted host, got: %s", out)
-	}
-	if strings.Contains(out, "blocked by --http-allow") || strings.Contains(out, "forbidden address") {
-		t.Fatalf("allowlisted host must not be policy-blocked: %s", out)
+	for _, scheme := range []string{"http", "https"} {
+		t.Run(scheme, func(t *testing.T) {
+			t.Parallel()
+			server := subnetTestServer(t, scheme == "https")
+			u, err := url.Parse(server.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var stdout, stderr bytes.Buffer
+			code, err := runSandboxExecWithOptions(userTempDir(t), []string{
+				findPython(t), "-S", "-c",
+				`import os, sys, ssl, urllib.request
+proxy = urllib.request.ProxyHandler({'http': os.environ['HTTP_PROXY'], 'https': os.environ['HTTPS_PROXY']})
+https = urllib.request.HTTPSHandler(context=ssl._create_unverified_context())
+opener = urllib.request.build_opener(proxy, https)
+with opener.open(sys.argv[1], timeout=5) as resp:
+    sys.stdout.write(resp.read().decode())`,
+				server.URL + "/forwarded?x=1",
+			}, map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
+				sandboxProfileOptions{HTTPAllowHosts: []string{u.Hostname()}},
+				bytes.NewReader(nil), &stdout, &stderr)
+			if err != nil || code != 0 {
+				t.Fatalf("subnet %s fetch: code=%d err=%v out=%s", scheme, code, err, stdout.String()+stderr.String())
+			}
+			if got, want := stdout.String(), "upstream:"+u.Host+"/forwarded?x=1"; got != want {
+				t.Fatalf("body=%q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -572,45 +605,6 @@ func TestExecLong_HTTPAllowStillBlocksRawNetwork(t *testing.T) {
 	}
 	if code == 0 {
 		t.Fatalf("raw network unexpectedly succeeded with --http-allow")
-	}
-}
-
-func TestExecLong_HTTPAllowAllowsHTTPSConnect(t *testing.T) {
-	requireLongTest(t)
-	t.Parallel()
-	baseDir := userTempDir(t)
-
-	// The proxy must accept the CONNECT for an allowlisted host and attempt
-	// the upstream dial (which fails for the reserved example.invalid name,
-	// surfacing as 502) rather than rejecting the host with 403.
-	python := findPython(t)
-	var stdout, stderr bytes.Buffer
-	code, err := runSandboxExecWithOptions(
-		baseDir,
-		[]string{
-			python,
-			"-S",
-			"-c",
-			`import os, sys, socket
-proxy = os.environ['HTTPS_PROXY'].split('//')[1]
-conn = socket.create_connection((proxy.split(':')[0], int(proxy.split(':')[1])), timeout=5)
-conn.sendall(b'CONNECT example.invalid:443 HTTP/1.1\r\nHost: example.invalid:443\r\n\r\n')
-resp = b''
-while b'\r\n' not in resp:
-    resp += conn.recv(1024)
-sys.stdout.write(resp.split(b'\r\n')[0].decode())`,
-		},
-		map[string]string{"PYTHONDONTWRITEBYTECODE": "1"},
-		sandboxProfileOptions{HTTPAllowHosts: []string{"example.invalid"}},
-		bytes.NewReader(nil),
-		&stdout, &stderr,
-	)
-	out := stdout.String() + stderr.String()
-	if err != nil || code != 0 {
-		t.Fatalf("--http-allow https CONNECT failed: code=%d err=%v out=%s", code, err, out)
-	}
-	if !strings.Contains(out, "502") {
-		t.Fatalf("expected upstream dial error for allowlisted CONNECT, got: %s", out)
 	}
 }
 
@@ -704,7 +698,7 @@ sys.stdout.write('allowed-host:%d blocked-host:%d' % (r1.status, r2.status))`,
 	}
 }
 
-func TestExecLong_HTTPAllowMixedAllowlistAllowsTwoHostsAndBlocksOne(t *testing.T) {
+func TestExecLong_HTTPAllowDistinguishesHostAndAddressDenials(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()
 	baseDir := userTempDir(t)
@@ -725,7 +719,7 @@ func TestExecLong_HTTPAllowMixedAllowlistAllowsTwoHostsAndBlocksOne(t *testing.T
 
 	// Even when loopback names are explicitly allowlisted, the proxy must
 	// refuse to dial them (DNS-rebinding defense): allowlisted loopback yields
-	// 403 "resolves to forbidden address", an allowlisted unresolvable name
+	// 403 "forbidden address", an allowlisted unresolvable name
 	// yields the 502 upstream dial error, and an unlisted host yields 403.
 	python := findPython(t)
 	var stdout, stderr bytes.Buffer
@@ -758,7 +752,7 @@ for url in sys.argv[1:]:
 	if err != nil {
 		t.Fatalf("--http-allow mixed allowlist failed unexpectedly: %v", err)
 	}
-	if code == 0 && strings.Contains(out, "unexpected-success") {
+	if code != 0 || strings.Contains(out, "unexpected-success") {
 		t.Fatalf("--http-allow unexpectedly allowed a fetch: %s", out)
 	}
 	for _, url := range []string{localhostURL, loopbackURL} {
@@ -766,7 +760,7 @@ for url in sys.argv[1:]:
 			t.Fatalf("allowlisted loopback %s must still be blocked, got: %s", url, out)
 		}
 	}
-	if !strings.Contains(out, "resolves to forbidden address 127.0.0.1") {
+	if !strings.Contains(out, "forbidden address 127.0.0.1") {
 		t.Fatalf("loopback block must cite the forbidden resolved address, got: %s", out)
 	}
 	if !strings.Contains(out, allowedURL+":502 proxy upstream error") {
@@ -1098,5 +1092,51 @@ func TestExecLong_NoUserRejectsHomeUnderUsers(t *testing.T) {
 	_, err := runSandboxExecWithOptions(baseDir, []string{"/usr/bin/true"}, nil, sandboxProfileOptions{NoUser: true, HomeDir: baseDir}, bytes.NewReader(nil), &out, &out)
 	if err == nil || !strings.Contains(err.Error(), "--no-user cannot be combined with --home") {
 		t.Fatalf("expected --no-user/--home conflict, got %v", err)
+	}
+}
+
+func TestExecLong_ProfileWithLongPATH(t *testing.T) {
+	requireLongTest(t)
+	t.Parallel()
+	root := userTempDir(t)
+	cwd := filepath.Join(root, `work.dir "quoted"\backslash`)
+	tools := filepath.Join(root, "tools")
+	sibling := tools + "-other"
+	for _, dir := range []string{cwd, tools, sibling} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "marker"), []byte("readable"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := []string{"/usr/bin", "/bin", tools}
+	for i := range 80 {
+		paths = append(paths, filepath.Join(root, fmt.Sprintf("toolchain-%03d/bin", i)))
+	}
+	env := map[string]string{"PATH": strings.Join(paths, ":")}
+	for _, tc := range []struct {
+		name, dir string
+		allowed   bool
+	}{
+		{"cwd", cwd, true},
+		{"path entry", tools, true},
+		{"path sibling", sibling, false},
+		{"cwd firmlink", "/System/Volumes/Data" + cwd, true},
+		{"sibling firmlink", "/System/Volumes/Data" + sibling, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			code, out, err := runSandboxExecTest(cwd, []string{"/bin/cat", filepath.Join(tc.dir, "marker")}, env)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.allowed {
+				if code != 0 || out != "readable" {
+					t.Fatalf("allowed read: code=%d out=%s", code, out)
+				}
+			} else if code == 0 || !strings.Contains(out, "Operation not permitted") {
+				t.Fatalf("expected filesystem denial: code=%d out=%s", code, out)
+			}
+		})
 	}
 }

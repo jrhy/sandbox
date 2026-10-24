@@ -4,7 +4,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +14,6 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -428,7 +426,8 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	} else {
 		pathRules := buildPathRules(userHome, pathEnv)
 		parentRules := buildParentRules(baseDir)
-		userDenyRules := buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv)
+		allowedPaths := append(append([]string{}, opts.AllowRead...), opts.AllowWrite...)
+		userDenyRules := buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv, allowedPaths)
 
 		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDir)))
 		buf.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", quoteProfile(baseDirReal)))
@@ -440,7 +439,7 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 		buf.WriteString(userDenyRules)
 	}
 
-	// Last, so these allows take precedence over the /Users deny rules above.
+	// These explicit paths are also excluded from the /Users deny rules above.
 	buf.WriteString(buildAllowPathRules(opts.AllowRead, opts.AllowWrite))
 
 	if opts.MinimalFS {
@@ -484,14 +483,9 @@ func buildTmpDirRules(tmpDir string) string {
 // link-local unicast (incl. the cloud metadata service at 169.254.169.254),
 // and multicast (not a valid TCP target).
 //
-// Everything else is dialable — including RFC1918/ULA private ranges,
-// CGNAT space (e.g. Tailscale), and the host's own subnet addresses — on
-// the theory that the allowlist already trusts the destination name's DNS,
-// and such addresses are on networks the host itself participates in.
-// Note the consequence: host services bound to 0.0.0.0 are reachable via
-// the host's LAN address; the loopback block protects services bound to
-// 127.0.0.1/::1 specifically. See isForbiddenProxyIP's test table for the
-// boundary cases.
+// RFC1918/ULA and CGNAT destinations are allowed when their hostname matches
+// the allowlist, including routed private networks and Tailscale. This also
+// permits host services listening on the host's LAN address.
 func isForbiddenProxyIP(ip net.IP) bool {
 	return ip.IsLoopback() ||
 		ip.IsUnspecified() ||
@@ -502,25 +496,20 @@ func isForbiddenProxyIP(ip net.IP) bool {
 // forbiddenProxyAddrError reports a dial target whose resolved address is
 // forbidden. It maps to 403 Forbidden rather than 502 Bad Gateway.
 type forbiddenProxyAddrError struct {
-	host string
 	addr string
 }
 
 func (e *forbiddenProxyAddrError) Error() string {
-	return fmt.Sprintf("%s resolves to forbidden address %s", e.host, e.addr)
+	return fmt.Sprintf("forbidden address %s", e.addr)
 }
 
-// proxyDialHostKey carries the pre-resolution hostname through DialContext
-// into ControlContext so rejection messages can name the requested host.
-type proxyDialHostKey struct{}
-
-// buildProxyDialer returns a dialer whose ControlContext validates the
+// buildProxyDialer returns a dialer whose Control validates the
 // resolved address before connect(2) runs, so every candidate address
 // (including Happy Eyeballs alternates) is checked with no TOCTOU gap.
 func buildProxyDialer() *net.Dialer {
 	return &net.Dialer{
 		Timeout: 10 * time.Second,
-		ControlContext: func(ctx context.Context, network, address string, _ syscall.RawConn) error {
+		Control: func(network, address string, _ syscall.RawConn) error {
 			host, _, err := net.SplitHostPort(address)
 			if err != nil {
 				return fmt.Errorf("proxy dial: invalid address %q", address)
@@ -530,24 +519,11 @@ func buildProxyDialer() *net.Dialer {
 				return fmt.Errorf("proxy dial: address %q is not an IP", host)
 			}
 			if isForbiddenProxyIP(ip) {
-				name, _ := ctx.Value(proxyDialHostKey{}).(string)
-				if name == "" {
-					name = host
-				}
-				return &forbiddenProxyAddrError{host: name, addr: ip.String()}
+				return &forbiddenProxyAddrError{addr: ip.String()}
 			}
 			return nil
 		},
 	}
-}
-
-// dialProxyContext dials addr (host:port, possibly still a hostname) with the
-// forbidden-address check applied to the resolved address.
-func (p *allowlistHTTPProxy) dialProxyContext(ctx context.Context, network, addr string) (net.Conn, error) {
-	if host, _, err := net.SplitHostPort(addr); err == nil {
-		ctx = context.WithValue(ctx, proxyDialHostKey{}, host)
-	}
-	return p.dialer.DialContext(ctx, network, addr)
 }
 
 // buildNoUserPathRules discovers package manager roots from PATH entries
@@ -657,42 +633,42 @@ func buildParentRules(baseDir string) string {
 	return buf.String()
 }
 
-func buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv string) string {
-	prefixes := []string{}
-	addPrefix := func(p string) {
+func buildUserDenyRules(baseDir, baseDirReal, userHome, pathEnv string, allowedPaths []string) string {
+	var exceptions []string
+	seen := map[string]bool{}
+	addPath := func(p string) {
 		p = filepath.Clean(p)
-		if !strings.HasPrefix(p, "/Users/") {
+		if strings.HasPrefix(p, "/System/Volumes/Data/Users") {
+			p = strings.TrimPrefix(p, "/System/Volumes/Data")
+		}
+		if (p != "/Users" && !strings.HasPrefix(p, "/Users/")) || seen[p] {
 			return
 		}
-		if userHome != "" && p == userHome {
-			return
+		seen[p] = true
+		for _, alias := range []string{p, "/System/Volumes/Data" + p} {
+			exceptions = append(exceptions, fmt.Sprintf("(subpath %s)", quoteProfile(alias)))
 		}
-		rel := strings.TrimPrefix(p, "/Users/")
-		if rel == "" {
-			return
+	}
+	implicitPaths := append([]string{baseDir, baseDirReal}, strings.Split(pathEnv, ":")...)
+	for _, p := range implicitPaths {
+		p = filepath.Clean(p)
+		if p != userHome && strings.HasPrefix(p, "/Users/") {
+			addPath(p)
 		}
-		prefixes = append(prefixes, regexp.QuoteMeta(rel))
+	}
+	for _, p := range allowedPaths {
+		addPath(p)
 	}
 
-	addPrefix(baseDir)
-	addPrefix(baseDirReal)
-	for _, p := range strings.Split(pathEnv, ":") {
-		addPrefix(p)
+	// sandbox-exec rejects string literals of 1024 bytes or more. Express
+	// exceptions as path filters instead of one regex containing all of PATH.
+	filter := `(require-any (subpath "/Users") (subpath "/System/Volumes/Data/Users"))`
+	if len(exceptions) > 0 {
+		filter = "(require-all " + filter + " (require-not (require-any " + strings.Join(exceptions, " ") + ")))"
 	}
-
-	if len(prefixes) == 0 {
-		prefixes = []string{"__none__"}
-	}
-	allowGroup := strings.Join(prefixes, "|")
-
-	return fmt.Sprintf("(allow file-read-metadata (subpath \"/Users\"))\n"+
-		"(allow file-read-metadata (subpath \"/System/Volumes/Data/Users\"))\n"+
-		"(deny file-read-data (regex #\"^/Users/(?!(%s)(/|$)).*\"))\n"+
-		"(deny file-read-data (regex #\"^/System/Volumes/Data/Users/(?!(%s)(/|$)).*\"))\n"+
-		"(deny file-map-executable (regex #\"^/Users/(?!(%s)(/|$)).*\"))\n"+
-		"(deny file-map-executable (regex #\"^/System/Volumes/Data/Users/(?!(%s)(/|$)).*\"))\n",
-		allowGroup, allowGroup, allowGroup, allowGroup,
-	)
+	return "(allow file-read-metadata (subpath \"/Users\"))\n" +
+		"(allow file-read-metadata (subpath \"/System/Volumes/Data/Users\"))\n" +
+		fmt.Sprintf("(deny file-read-data %s)\n(deny file-map-executable %s)\n", filter, filter)
 }
 
 // resolveAllowPaths makes each path absolute relative to baseDir and returns
@@ -753,7 +729,7 @@ func buildAllowPathRules(readPaths, writePaths []string) string {
 }
 
 func quoteProfile(p string) string {
-	return "\"" + strings.ReplaceAll(p, "\"", "\\\"") + "\""
+	return "\"" + strings.NewReplacer("\\", "\\\\", "\"", "\\\"").Replace(p) + "\""
 }
 
 func buildNetworkRules(opts sandboxProfileOptions) string {
@@ -968,9 +944,7 @@ func (p *allowlistHTTPProxy) handleConnect(w http.ResponseWriter, req *http.Requ
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(req.Context(), 10*time.Second)
-	defer cancel()
-	upstream, err := p.dialProxyContext(ctx, "tcp", targetAddr)
+	upstream, err := p.dialer.DialContext(req.Context(), "tcp", targetAddr)
 	if err != nil {
 		var forbidden *forbiddenProxyAddrError
 		if errors.As(err, &forbidden) {

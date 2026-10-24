@@ -18,7 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 )
 
 // Short tests exercise parsing, profile construction, and local helpers without sandbox-exec.
@@ -684,59 +683,6 @@ func TestExecShort_HTTPAllowProxyBlocksLoopbackConnect(t *testing.T) {
 	}
 }
 
-// Pins the CONNECT tunnel machinery (hijack, bidirectional copy) end to end
-// with a dialer unconstrained by the forbidden-address policy, since the real
-// policy correctly refuses loopback dials and these servers are loopback.
-func TestExecShort_HTTPAllowProxyTunnelsConnect(t *testing.T) {
-	t.Parallel()
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("tunnel ok"))
-	}))
-	defer ts.Close()
-	target := strings.TrimPrefix(ts.URL, "http://")
-
-	proxy := &allowlistHTTPProxy{
-		patterns: []string{"*"},
-		dialer:   &net.Dialer{Timeout: 5 * time.Second},
-	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("listen: %v", err)
-	}
-	defer ln.Close()
-	go http.Serve(ln, proxy)
-
-	conn, err := net.Dial("tcp", ln.Addr().String())
-	if err != nil {
-		t.Fatalf("dial proxy: %v", err)
-	}
-	defer conn.Close()
-	req := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", target, target)
-	if _, err := conn.Write([]byte(req)); err != nil {
-		t.Fatalf("write CONNECT: %v", err)
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
-	if err != nil {
-		t.Fatalf("read CONNECT response: %v", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("CONNECT through proxy: status=%d want 200", resp.StatusCode)
-	}
-
-	getReq := fmt.Sprintf("GET / HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", target)
-	if _, err := conn.Write([]byte(getReq)); err != nil {
-		t.Fatalf("write GET through tunnel: %v", err)
-	}
-	body, err := io.ReadAll(conn)
-	if err != nil {
-		t.Fatalf("read tunnel response: %v", err)
-	}
-	if !bytes.Contains(body, []byte("tunnel ok")) {
-		t.Fatalf("tunnel did not carry the response: %q", body)
-	}
-}
-
 func TestExecShort_BuildAllowPathRules(t *testing.T) {
 	t.Parallel()
 	got := buildAllowPathRules([]string{"/Users/x/ro"}, []string{"/Users/x/rw"})
@@ -762,7 +708,7 @@ func TestExecShort_AllowPathRulesFollowUsersDeny(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deny := strings.Index(profile, "(deny file-read-data (regex")
+	deny := strings.Index(profile, "(deny file-read-data (require-all")
 	allow := strings.Index(profile, `(allow file-read* (subpath "/Users/x/ro"))`)
 	if deny < 0 || allow < 0 || allow < deny {
 		t.Fatalf("allow rule must come after the /Users deny rules (deny=%d allow=%d):\n%s", deny, allow, profile)
