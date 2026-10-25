@@ -1,0 +1,11 @@
+companion/data/
+companion/breeze-tts/
+companion/breeze-tts-2/
+__pycache__/
+.venv/
+.models/
+.runtime/
+dist/
+.openai/
+.ruff_cache/
+.DS_Store
