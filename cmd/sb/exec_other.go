@@ -9,9 +9,10 @@ import (
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
+		`[--minimal-fs] [--network] [--gpu] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
     --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
     --network          allow network access
+    --gpu              allow Apple Silicon Metal GPU/IOSurface access and Metal shader caches
     --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob
     --localhost-allow  allow direct TCP connections only to selected localhost ports
     --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed

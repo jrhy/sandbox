@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -22,11 +23,14 @@ import (
 
 type sandboxProfileOptions struct {
 	AllowNetwork        bool
+	AllowGPU            bool
 	MinimalFS           bool
 	NoUser              bool
 	HTTPAllowHosts      []string
 	LocalhostAllowPorts []int
 	LocalhostProxyPort  int
+	// GPUCacheDir is discovered before sandboxing when AllowGPU is enabled.
+	GPUCacheDir string
 	// AllowRead and AllowWrite are paths opened up beyond the mode's defaults.
 	// Write implies read. Paths are resolved against cwd at run time.
 	AllowRead  []string
@@ -40,9 +44,10 @@ const localhostNoProxyValue = "localhost,127.0.0.1,::1"
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
+		`[--minimal-fs] [--network] [--gpu] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
     --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
     --network          allow network access
+    --gpu              allow Apple Silicon Metal GPU/IOSurface access and Metal shader caches
     --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob;
                        loopback, link-local, and multicast targets are never dialed
     --localhost-allow  allow direct TCP connections only to selected localhost ports
@@ -153,6 +158,8 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			opts.MinimalFS = true
 		case "--network":
 			opts.AllowNetwork = true
+		case "--gpu":
+			opts.AllowGPU = true
 		case "--no-user":
 			opts.NoUser = true
 		case "--http-allow":
@@ -257,6 +264,12 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 			if isUsersPath(p) {
 				return exitError, fmt.Errorf("--no-user cannot be combined with an allowed path under /Users: %s", p)
 			}
+		}
+	}
+	if opts.AllowGPU {
+		opts.GPUCacheDir, err = metalCacheDir()
+		if err != nil {
+			return exitError, fmt.Errorf("--gpu: %w", err)
 		}
 	}
 
@@ -403,6 +416,23 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	buf.WriteString("(allow process*)\n")
 	buf.WriteString("(allow sysctl-read)\n")
 	buf.WriteString("(allow mach-lookup)\n\n")
+	if opts.AllowGPU {
+		// Apple's intelligenceplatformd and GPU task profiles allow these
+		// clients. AGX opens the Apple Silicon GPU; IOSurface is also required
+		// for Metal shared events. Verified with MLX import and GPU evaluation.
+		buf.WriteString("(allow iokit-open\n" +
+			"    (iokit-user-client-class \"AGXDeviceUserClient\")\n" +
+			"    (iokit-user-client-class \"IOSurfaceRootUserClient\"))\n\n")
+		if opts.GPUCacheDir != "" {
+			// Metal's compiler helper writes here even with HOME/TMPDIR changed.
+			// Its read-write extensions must be restricted to these same caches.
+			for _, name := range []string{"com.apple.metal", "com.apple.metalfe", "com.apple.gpuarchiver"} {
+				cachePath := quoteProfile(filepath.Join(opts.GPUCacheDir, name))
+				fmt.Fprintf(buf, "(allow file-read* file-write* (subpath %s))\n", cachePath)
+				fmt.Fprintf(buf, "(allow file-issue-extension (require-all (extension-class \"com.apple.app-sandbox.read-write\") (subpath %s)))\n", cachePath)
+			}
+		}
+	}
 
 	buf.WriteString(buildNetworkRules(opts))
 	buf.WriteString("\n")
@@ -458,6 +488,27 @@ func buildSandboxProfileWithOptions(baseDir, baseDirReal, userHome, tmpDir, path
 	}
 
 	return buf.String(), nil
+}
+
+// metalCacheDir uses Darwin's cache location, not ~/Library/Caches. Metal's
+// compiler uses confstr(_CS_DARWIN_USER_CACHE_DIR), exposed by getconf.
+func metalCacheDir() (string, error) {
+	timeoutSeconds := 5
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/usr/bin/getconf", "DARWIN_USER_CACHE_DIR").Output()
+	if err != nil {
+		return "", fmt.Errorf("get Metal cache directory: %w", err)
+	}
+	dir := filepath.Clean(strings.TrimSpace(string(output)))
+	if !filepath.IsAbs(dir) || dir == "/" {
+		return "", fmt.Errorf("invalid Metal cache directory %q", dir)
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("resolve Metal cache directory: %w", err)
+	}
+	return real, nil
 }
 
 // buildTmpDirRules grants read/write on the temp dir under both its given and

@@ -32,6 +32,32 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONNOUSERSITE=1 ./sandbox-wrap.sh \
 sandbox-wrap.sh <command> [args...]
 ```
 
+## Apple Silicon GPU access with `sb exec`
+
+`sb exec --gpu` enables Metal for workloads such as MLX. For example, from an
+exported Breeze voice directory, with `BREEZE_REPO`, `BREEZE_MODEL`, and
+`BREEZE_PYTHON` configured:
+
+```sh
+sb exec --gpu \
+  --allow-read ~/.local \
+  --allow-read ~/sandbox/breezefun \
+  "$BREEZE_PYTHON" speak.py "Hello from the GPU." --output speech.wav
+```
+
+GPU access is off by default. The flag allows the `AGXDeviceUserClient` and
+`IOSurfaceRootUserClient` IOKit clients. Metal also needs read/write access to
+`com.apple.metal`, `com.apple.metalfe`, and `com.apple.gpuarchiver` under the
+Darwin user cache directory (`getconf DARWIN_USER_CACHE_DIR`). The flag grants
+that access and lets the Metal compiler helper receive read/write sandbox
+extensions for those three cache trees. Other filesystem and network restrictions
+still apply. The shader cache is shared with host Metal workloads and persists
+between sandbox runs, even though the default sandbox `HOME` is temporary.
+
+Validation includes a native Metal integration test that compiles a fresh shader,
+creates a shared event, and checks GPU computation; the same probe fails without
+the flag. Full MLX Breeze synthesis was also tested on an M2 Pro.
+
 ## Test
 
 ```sh

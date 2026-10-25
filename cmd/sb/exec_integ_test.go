@@ -4,13 +4,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,6 +21,99 @@ import (
 )
 
 // Long tests execute commands under sandbox-exec and are skipped by `go test -short`.
+func TestExecLong_GPU(t *testing.T) {
+	requireLongTest(t)
+	if runtime.GOARCH != "arm64" {
+		t.Skip("GPU allowances target Apple Silicon")
+	}
+	clang, err := exec.LookPath("clang")
+	if err != nil {
+		t.Skip("clang not available for Metal probe")
+	}
+	baseDir := userTempDir(t)
+	sourcePath := filepath.Join(baseDir, "metal.m")
+	binaryPath := filepath.Join(baseDir, "metal")
+	// A device-only probe misses the IOSurface allowance needed for shared
+	// events. Compile a fresh shader as well, so the test covers the compiler
+	// helper's cache access without depending on MLX or model downloads.
+	source := `#import <Foundation/Foundation.h>
+#import <Metal/Metal.h>
+#include <unistd.h>
+int main(void) {
+    @autoreleasepool {
+        id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+        if (!device) return 77;
+        id<MTLSharedEvent> event = [device newSharedEvent];
+        id<MTLCommandQueue> queue = [device newCommandQueue];
+        if (!event || !queue) return 2;
+        // A unique name prevents an earlier run's shader cache masking denials.
+        NSString *name = [NSString stringWithFormat:@"sb_gpu_%d", getpid()];
+        NSString *shader = [NSString stringWithFormat:
+            @"#include <metal_stdlib>\nusing namespace metal;\n"
+             "kernel void %@(device uint *v [[buffer(0)]], uint i [[thread_position_in_grid]]) { v[i] = 42; }", name];
+        NSError *error = nil;
+        id<MTLLibrary> library = [device newLibraryWithSource:shader options:nil error:&error];
+        if (!library) { fprintf(stderr, "%s\n", error.description.UTF8String); return 7; }
+        id<MTLFunction> function = [library newFunctionWithName:name];
+        if (!function) return 8;
+        id<MTLComputePipelineState> pipeline = [device newComputePipelineStateWithFunction:function error:&error];
+        if (!pipeline) { fprintf(stderr, "%s\n", error.description.UTF8String); return 9; }
+        id<MTLBuffer> buffer = [device newBufferWithLength:16 options:MTLResourceStorageModeShared];
+        if (!buffer) return 3;
+        id<MTLCommandBuffer> command = [queue commandBuffer];
+        id<MTLComputeCommandEncoder> compute = [command computeCommandEncoder];
+        if (!command || !compute) return 4;
+        [compute setComputePipelineState:pipeline];
+        [compute setBuffer:buffer offset:0 atIndex:0];
+        [compute dispatchThreads:MTLSizeMake(4, 1, 1) threadsPerThreadgroup:MTLSizeMake(4, 1, 1)];
+        [compute endEncoding];
+        [command commit];
+        [command waitUntilCompleted];
+        if (command.error) return 5;
+        unsigned int *data = buffer.contents;
+        for (int i = 0; i < 4; i++) if (data[i] != 42) return 6;
+        puts("GPU compute succeeded");
+    }
+    return 0;
+}
+`
+	if err := os.WriteFile(sourcePath, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	compileTimeoutSeconds := 60
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(compileTimeoutSeconds)*time.Second)
+	defer cancel()
+	compile := exec.CommandContext(ctx, clang, "-fobjc-arc", "-framework", "Foundation", "-framework", "Metal", sourcePath, "-o", binaryPath)
+	if out, err := compile.CombinedOutput(); err != nil {
+		t.Fatalf("compile Metal probe: %v\n%s", err, out)
+	}
+	probeTimeoutSeconds := 15
+	probeCtx, probeCancel := context.WithTimeout(context.Background(), time.Duration(probeTimeoutSeconds)*time.Second)
+	defer probeCancel()
+	if out, err := exec.CommandContext(probeCtx, binaryPath).CombinedOutput(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 77 {
+			t.Skip("no Metal GPU in this session")
+		}
+		t.Fatalf("unsandboxed Metal probe: %v\n%s", err, out)
+	}
+	for _, allowGPU := range []bool{false, true} {
+		t.Run(fmt.Sprintf("gpu=%t", allowGPU), func(t *testing.T) {
+			var output bytes.Buffer
+			code, err := runSandboxExecWithOptions(baseDir, []string{binaryPath}, nil,
+				sandboxProfileOptions{AllowGPU: allowGPU}, bytes.NewReader(nil), &output, &output)
+			if err != nil {
+				t.Fatalf("sandbox probe: %v", err)
+			}
+			if allowGPU && (code != 0 || !strings.Contains(output.String(), "GPU compute succeeded")) {
+				t.Fatalf("GPU-enabled probe failed: code=%d output=%s", code, output.String())
+			}
+			if !allowGPU && code == 0 {
+				t.Fatal("GPU access unexpectedly allowed by default")
+			}
+		})
+	}
+}
+
 func TestExecLong_PythonExample(t *testing.T) {
 	requireLongTest(t)
 	t.Parallel()

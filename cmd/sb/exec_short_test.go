@@ -31,6 +31,12 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 		wantErr  string
 	}{
 		{
+			name:     "gpu",
+			args:     []string{"--gpu", "/bin/echo", "hi"},
+			wantOpts: sandboxProfileOptions{AllowGPU: true},
+			wantCmd:  []string{"/bin/echo", "hi"},
+		},
+		{
 			name:     "minimal-fs and network",
 			args:     []string{"--minimal-fs", "--network", "/bin/echo", "hi"},
 			wantOpts: sandboxProfileOptions{AllowNetwork: true, MinimalFS: true},
@@ -181,6 +187,35 @@ func TestExecShort_BuildSandboxProfileWithOptions(t *testing.T) {
 		mustContain    []string
 		mustNotContain []string
 	}{
+		{
+			name: "gpu grants only selected Metal user clients",
+			opts: sandboxProfileOptions{AllowGPU: true},
+			mustContain: []string{
+				"(iokit-user-client-class \"AGXDeviceUserClient\")",
+				"(iokit-user-client-class \"IOSurfaceRootUserClient\")",
+			},
+			mustNotContain: []string{"(allow iokit-open)", "(allow network*)"},
+		},
+		{
+			name:           "gpu disabled by default",
+			mustNotContain: []string{"iokit-open", "AGXDeviceUserClient", "IOSurfaceRootUserClient"},
+		},
+		{
+			name: "gpu allows only Metal cache trees and their compiler extensions",
+			opts: sandboxProfileOptions{AllowGPU: true, GPUCacheDir: "/private/var/folders/test/C"},
+			mustContain: []string{
+				`(allow file-read* file-write* (subpath "/private/var/folders/test/C/com.apple.metal"))`,
+				`(allow file-read* file-write* (subpath "/private/var/folders/test/C/com.apple.metalfe"))`,
+				`(allow file-read* file-write* (subpath "/private/var/folders/test/C/com.apple.gpuarchiver"))`,
+				`(allow file-issue-extension (require-all (extension-class "com.apple.app-sandbox.read-write") (subpath "/private/var/folders/test/C/com.apple.metalfe")))`,
+			},
+			mustNotContain: []string{`(subpath "/private/var/folders/test/C")`, "(allow file-issue-extension)", "(allow network*)"},
+		},
+		{
+			name:           "gpu cache grants require explicit GPU opt-in",
+			opts:           sandboxProfileOptions{GPUCacheDir: "/private/var/folders/test/C"},
+			mustNotContain: []string{"com.apple.metal", "com.apple.gpuarchiver", "file-issue-extension"},
+		},
 		{
 			name:        "minimal-fs includes runtime probes",
 			opts:        sandboxProfileOptions{MinimalFS: true},
