@@ -9,3 +9,4 @@ dist/
 .openai/
 .ruff_cache/
 .DS_Store
+reads/

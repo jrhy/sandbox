@@ -57,6 +57,103 @@ To recreate Python dependencies, use `uv venv --python 3.12 companion/.venv`
 and `uv pip sync --python companion/.venv/bin/python requirements-macos.lock`.
 Download the checkpoints with `companion/.venv/bin/python companion/download-models.py`.
 
+## Louder streaming reads and a resident stdin reader
+
+From an unzipped voice-export directory (containing `voice.json` and
+`reference.wav`), run the local reader:
+
+```sh
+"$HOME/sandbox/breezefun/companion/.venv/bin/python" \
+  "$HOME/sandbox/breezefun/companion/read.py" \
+  --stdin --gain-db 12 --seed 42
+```
+
+It loads Breeze once, then synthesizes each nonblank stdin line in order. One
+speaker-output worker plays a shared FIFO while the main thread generates
+audio. Once a line's synthesis finishes, the next available line starts without
+waiting for that audio to finish playing. Speech stays in order and voices do
+not overlap. Short utterances start playing without waiting for another line.
+Ctrl-D drains all queued speech before exit; Ctrl-C discards pending playback
+after the current short device write. Each utterance has
+fresh generation state and its seed is reset independently. The model weights
+stay loaded, but the reference prompt is still encoded for each request.
+
+The same reader works inside the sandbox:
+
+```sh
+sb exec --gpu --allow-read ~/.local --allow-read ~/sandbox/breezefun \
+  "$BREEZE_PYTHON" ~/sandbox/breezefun/companion/read.py \
+  --stdin --gain-db 12 --seed 42
+```
+
+For one read, replace `--stdin` with quoted text. `--voice-dir DIR` selects a
+different export, `--model DIR` overrides `BREEZE_MODEL` or the project-local
+checkpoint, and `--no-play` generates files without opening a speaker device.
+The companion server does not need to be running.
+
+`--buffer-seconds 5` caps the queue at five seconds of audio, including the
+block currently being submitted to the device. When full, synthesis waits for
+playback to make room. This bounds memory for long pipelines while allowing
+synthesis to work ahead. Increase it to allow a larger backlog. This is a
+queue limit, not an initial playback delay. A later line cannot start before
+the current line's synthesis finishes, and gaps remain possible if generation
+is slower than speech. The model is used only on the main thread; the output
+worker handles NumPy audio and PortAudio, without touching MLX or its RNG.
+
+Gain is applied to both playback and saved audio. +12 dB is about four times the
+sample amplitude. A soft limiter begins at 0.85 and bounds peaks at 0.98; it
+does not normalize each chunk, so chunk boundaries do not change the gain.
+`--gain-db 0` disables the boost; the accepted range is -60 to +24 dB. Your
+system speaker volume remains in control of the device output level.
+
+Every read saves `reads/<id>.wav` and `reads/<id>.json`, or files under
+`--output-dir DIR`. The WAV preserves the exact read. Its JSON receipt records
+the text, actual seed, temperature, top-p/top-k, repetition penalty, token limit,
+instruction, CFG scale, chunk interval, gain and limiter settings, original
+reference transcript and audio hash, model fingerprints/revision, runtime
+versions, runner hash, timings, and output hash. Failed generation leaves an
+error receipt and stdin mode continues with the next line, preserving speech
+already queued. Device failures are surfaced to the main thread on enqueue or
+drain. Diagnostics go to stderr; stdout emits a JSON completion summary for
+each successful synthesis/save. `playback: "queued"` means the audio was
+submitted for ordered playback, not that it has finished speaking. The process
+waits for final device buffers before normal exit. Queue backpressure is
+included in the logged generation wall time.
+The default `reads/` directory is ignored by Git.
+
+Replay a saved read's generation settings:
+
+```sh
+"$BREEZE_PYTHON" ~/sandbox/breezefun/companion/read.py \
+  --replay reads/READ_ID.json
+```
+
+Replay verifies the reference and checkpoint identity before generation. Use
+`--voice-dir` and `--model` to relocate the same inputs on another machine.
+It warns if runtime versions differ. Model fingerprints reuse current Hugging
+Face download checksums; local or modified weights without current metadata
+are hashed at startup. Tokenizer/configuration files are also fingerprinted.
+
+With `--seed 42`, the same seed is reset for every line. Omit `--seed` for a new
+random seed on each read; that actual seed is always saved for replay. The
+default `--temperature 0.9` samples; `--temperature 0` uses greedy selection.
+Other controls are `--top-p`, `--top-k`, `--repetition-penalty`, `--max-tokens`,
+`--instruction`, `--cfg-scale`, and `--streaming-interval` (seconds of audio per
+chunk, default 0.5). Instructions default CFG scale to 4; otherwise it is 1.5.
+
+Same-seed reads were verified to produce byte-identical WAVs on this M2 Pro
+after an intervening read, and replay was tested in a fresh process. This is
+not a guarantee across different GPU hardware, OS/runtime versions, model
+weights, or reference inputs. Keep the saved WAV when the exact delivery matters.
+The browser companion and existing exported `speak.py` keep their original
+behavior; these options belong to the separate local `read.py` runner.
+
+Playback scheduling is covered by event-gated tests for generation overlapping
+a preceding audio write, FIFO ordering, bounded backlog (including in-flight
+samples), short utterances, EOF drain, cancellation, and device failures. Two
+hundred repeated scheduling/cancellation checks passed without leftover worker
+threads. A live sandboxed run verified queued playback and same-seed WAV identity.
+
 ## Reference clips by speaker
 
 In the local studio, upload/import audio or open one of the **Previous recordings**.
