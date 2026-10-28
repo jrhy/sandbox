@@ -22,13 +22,14 @@ import (
 )
 
 type sandboxProfileOptions struct {
-	AllowNetwork        bool
-	AllowGPU            bool
-	MinimalFS           bool
-	NoUser              bool
-	HTTPAllowHosts      []string
-	LocalhostAllowPorts []int
-	LocalhostProxyPort  int
+	AllowNetwork         bool
+	AllowGPU             bool
+	MinimalFS            bool
+	NoUser               bool
+	HTTPAllowHosts       []string
+	LocalhostAllowPorts  []int
+	LocalhostListenPorts []int
+	LocalhostProxyPort   int
 	// GPUCacheDir is discovered before sandboxing when AllowGPU is enabled.
 	GPUCacheDir string
 	// AllowRead and AllowWrite are paths opened up beyond the mode's defaults.
@@ -44,13 +45,14 @@ const localhostNoProxyValue = "localhost,127.0.0.1,::1"
 
 func init() {
 	funcs["exec"] = subcommand{
-		`[--minimal-fs] [--network] [--gpu] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
+		`[--minimal-fs] [--network] [--gpu] [--no-user] [--http-allow host-glob[,host-glob...]] [--localhost-allow port[,port...]] [--localhost-listen-allow port[,port...]] [--allow-read path]... [--allow-write path]... [--home dir] <command> [args...]
     --minimal-fs       restrict access to cwd plus temp dirs, with minimal system/runtime reads (tuned for Go)
     --network          allow network access
     --gpu              allow Apple Silicon Metal GPU/IOSurface access and Metal shader caches
     --http-allow       allow HTTP(S) only through a localhost proxy, filtered by hostname glob;
                        loopback, link-local, and multicast targets are never dialed
     --localhost-allow  allow direct TCP connections only to selected localhost ports
+    --localhost-listen-allow allow binding and accepting connections on selected localhost TCP ports
     --no-user          deny ALL access under /Users; no cwd access; PATH entries under /Users are removed
     --allow-read       allow reading an existing file or directory tree (repeatable)
     --allow-write      allow reading and writing an existing file or directory tree (repeatable)
@@ -110,6 +112,15 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 				return sandboxProfileOptions{}, nil, err
 			}
 			opts.LocalhostAllowPorts = append(opts.LocalhostAllowPorts, ports...)
+			remaining = remaining[1:]
+			continue
+		}
+		if strings.HasPrefix(a, "--localhost-listen-allow=") {
+			ports, err := parseLocalhostAllowPorts(strings.TrimPrefix(a, "--localhost-listen-allow="))
+			if err != nil {
+				return sandboxProfileOptions{}, nil, err
+			}
+			opts.LocalhostListenPorts = append(opts.LocalhostListenPorts, ports...)
 			remaining = remaining[1:]
 			continue
 		}
@@ -182,13 +193,23 @@ func parseSandboxExecArgs(args []string) (sandboxProfileOptions, []string, error
 			}
 			opts.LocalhostAllowPorts = append(opts.LocalhostAllowPorts, ports...)
 			remaining = remaining[1:]
+		case "--localhost-listen-allow":
+			if len(remaining) < 2 {
+				return sandboxProfileOptions{}, nil, errors.New("missing value for --localhost-listen-allow")
+			}
+			ports, err := parseLocalhostAllowPorts(remaining[1])
+			if err != nil {
+				return sandboxProfileOptions{}, nil, err
+			}
+			opts.LocalhostListenPorts = append(opts.LocalhostListenPorts, ports...)
+			remaining = remaining[1:]
 		default:
 			return sandboxProfileOptions{}, nil, fmt.Errorf("unknown option %q", a)
 		}
 		remaining = remaining[1:]
 	}
-	if opts.AllowNetwork && (len(opts.HTTPAllowHosts) > 0 || len(opts.LocalhostAllowPorts) > 0) {
-		return sandboxProfileOptions{}, nil, errors.New("--network cannot be combined with --http-allow or --localhost-allow")
+	if opts.AllowNetwork && (len(opts.HTTPAllowHosts) > 0 || len(opts.LocalhostAllowPorts) > 0 || len(opts.LocalhostListenPorts) > 0) {
+		return sandboxProfileOptions{}, nil, errors.New("--network cannot be combined with --http-allow, --localhost-allow, or --localhost-listen-allow")
 	}
 	return opts, remaining, nil
 }
@@ -794,6 +815,11 @@ func buildNetworkRules(opts sandboxProfileOptions) string {
 	}
 	for _, port := range opts.LocalhostAllowPorts {
 		buf.WriteString(localhostTCPAllowRule(port))
+	}
+	for _, port := range opts.LocalhostListenPorts {
+		address := net.JoinHostPort("localhost", strconv.Itoa(port))
+		fmt.Fprintf(&buf, "(allow network-bind (local ip %s))\n", quoteProfile(address))
+		fmt.Fprintf(&buf, "(allow network-inbound (local ip %s))\n", quoteProfile(address))
 	}
 	return buf.String()
 }

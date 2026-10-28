@@ -58,6 +58,14 @@ Validation includes a native Metal integration test that compiles a fresh shader
 creates a shared event, and checks GPU computation; the same probe fails without
 the flag. Full MLX Breeze synthesis was also tested on an M2 Pro.
 
+For sandboxed local HTTP servers, `--localhost-listen-allow PORT` permits
+binding and accepting connections on that localhost port. Pair it with
+`--localhost-allow PORT` when the process also needs to connect to a local
+service on that port. Bind the server explicitly to `127.0.0.1` or `::1`:
+macOS also permits wildcard binding under this rule, although accepting
+non-loopback connections remains denied. These rules do not grant general
+network access.
+
 ## Test
 
 ```sh

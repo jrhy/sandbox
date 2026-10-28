@@ -1236,3 +1236,141 @@ func TestExecLong_ProfileWithLongPATH(t *testing.T) {
 		})
 	}
 }
+
+func TestExecLong_LocalhostListenAllow(t *testing.T) {
+	requireLongTest(t)
+	python := findPython(t)
+	baseDir := userTempDir(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		host    string
+		opts    sandboxProfileOptions
+		allowed bool
+	}{
+		{"selected loopback port", "127.0.0.1", sandboxProfileOptions{LocalhostListenPorts: []int{port}}, true},
+		{"no listener permission", "127.0.0.1", sandboxProfileOptions{}, false},
+		{"different port permission", "127.0.0.1", sandboxProfileOptions{LocalhostListenPorts: []int{1}}, false},
+		// macOS permits wildcard binding; network-inbound still limits accepted connections.
+		{"wildcard address", "0.0.0.0", sandboxProfileOptions{LocalhostListenPorts: []int{port}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `import socket, sys
+s = socket.socket()
+try:
+    s.bind((sys.argv[1], int(sys.argv[2])))
+    s.listen(1)
+except PermissionError:
+    sys.exit(0 if sys.argv[3] == "false" else 1)
+s.close()
+sys.exit(0 if sys.argv[3] == "true" else 1)
+`
+			var stdout, stderr bytes.Buffer
+			code, err := runSandboxExecWithOptions(baseDir,
+				[]string{python, "-c", script, tc.host, strconv.Itoa(port), strconv.FormatBool(tc.allowed)},
+				nil, tc.opts, bytes.NewReader(nil), &stdout, &stderr)
+			if err != nil || code != 0 {
+				t.Fatalf("listener policy: code=%d err=%v stdout=%s stderr=%s", code, err, stdout.String(), stderr.String())
+			}
+		})
+	}
+}
+
+func TestExecLong_LocalhostListenAllowAcceptsOnlyLoopback(t *testing.T) {
+	requireLongTest(t)
+	python := findPython(t)
+	baseDir := userTempDir(t)
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var externalIP string
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err == nil && ip.To4() != nil && !ip.IsLoopback() {
+			externalIP = ip.String()
+			break
+		}
+	}
+	if externalIP == "" {
+		t.Skip("no non-loopback IPv4 interface available")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	readyPath := filepath.Join(baseDir, "listener-ready")
+	script := `import socket, sys
+s = socket.socket()
+s.settimeout(5)
+s.bind(("0.0.0.0", int(sys.argv[1])))
+s.listen(5)
+open(sys.argv[2], "w").close()
+c, _ = s.accept()
+c.settimeout(5)
+data = c.recv(64)
+c.close()
+s.close()
+sys.exit(0 if data == b"loopback" else 1)
+`
+	done := make(chan error, 1)
+	go func() {
+		var stdout, stderr bytes.Buffer
+		code, err := runSandboxExecWithOptions(baseDir,
+			[]string{python, "-c", script, strconv.Itoa(port), readyPath}, nil,
+			sandboxProfileOptions{LocalhostListenPorts: []int{port}},
+			bytes.NewReader(nil), &stdout, &stderr)
+		if err != nil || code != 0 {
+			done <- fmt.Errorf("code=%d err=%v stdout=%s stderr=%s", code, err, stdout.String(), stderr.String())
+			return
+		}
+		done <- nil
+	}()
+	const startupTimeout = 5 * time.Second
+	deadline := time.Now().Add(startupTimeout)
+	for {
+		if _, err := os.Stat(readyPath); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("server exited before readiness: %v", err)
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listener startup timed out: %v", <-done)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	const connectTimeout = time.Second
+	if conn, err := net.DialTimeout("tcp4", net.JoinHostPort(externalIP, strconv.Itoa(port)), connectTimeout); err == nil {
+		_, writeErr := conn.Write([]byte("external"))
+		closeErr := conn.Close()
+		if writeErr != nil || closeErr != nil {
+			t.Logf("non-loopback connection interrupted: write=%v close=%v", writeErr, closeErr)
+		}
+	}
+	conn, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), connectTimeout)
+	if err != nil {
+		t.Fatalf("loopback dial: %v (server: %v)", err, <-done)
+	}
+	_, writeErr := conn.Write([]byte("loopback"))
+	closeErr := conn.Close()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if writeErr != nil || closeErr != nil {
+		t.Fatalf("loopback exchange: write=%v close=%v", writeErr, closeErr)
+	}
+}

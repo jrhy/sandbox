@@ -61,6 +61,22 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 			wantCmd:  []string{"/bin/echo"},
 		},
 		{
+			name:     "localhost listen allows repeated port lists and both forms",
+			args:     []string{"--localhost-listen-allow", "5432,6379", "--localhost-listen-allow=8080", "/bin/echo"},
+			wantOpts: sandboxProfileOptions{LocalhostListenPorts: []int{5432, 6379, 8080}},
+			wantCmd:  []string{"/bin/echo"},
+		},
+		{
+			name:    "localhost listen missing value",
+			args:    []string{"--localhost-listen-allow"},
+			wantErr: "missing value for --localhost-listen-allow",
+		},
+		{
+			name:    "localhost listen invalid port",
+			args:    []string{"--localhost-listen-allow=65536", "/bin/echo"},
+			wantErr: "must be between 1 and 65535",
+		},
+		{
 			name: "localhost allow with http allow",
 			args: []string{"--http-allow", "*.example.com", "--localhost-allow", "5432", "/bin/echo"},
 			wantOpts: sandboxProfileOptions{
@@ -109,6 +125,11 @@ func TestExecShort_ParseSandboxExecArgs(t *testing.T) {
 		{
 			name:    "network and localhost allow conflict",
 			args:    []string{"--network", "--localhost-allow", "5432", "/bin/echo"},
+			wantErr: "cannot be combined",
+		},
+		{
+			name:    "network and localhost listen conflict",
+			args:    []string{"--network", "--localhost-listen-allow", "5432", "/bin/echo"},
 			wantErr: "cannot be combined",
 		},
 		{
@@ -246,6 +267,15 @@ func TestExecShort_BuildSandboxProfileWithOptions(t *testing.T) {
 				"(allow network-outbound (remote tcp \"localhost:43123\"))",
 			},
 			mustNotContain: []string{"(allow network*)"},
+		},
+		{
+			name: "localhost listen permits only selected inbound port",
+			opts: sandboxProfileOptions{LocalhostListenPorts: []int{43123}},
+			mustContain: []string{
+				`(allow network-bind (local ip "localhost:43123"))`,
+				`(allow network-inbound (local ip "localhost:43123"))`,
+			},
+			mustNotContain: []string{"(allow network*)", "(allow network-outbound"},
 		},
 		{
 			name: "localhost allow composes with http allow proxy port",
