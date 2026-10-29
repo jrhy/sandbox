@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT>
+  <XCUIElementTypeApplication type="XCUIElementTypeApplication" name="Calendar" visible="true">
+    <XCUIElementTypeWindow type="XCUIElementTypeWindow" visible="true">
+      <XCUIElementTypeOther type="XCUIElementTypeOther" visible="true">
+        <XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" name="Navigation" visible="true">
+          <XCUIElementTypeButton type="XCUIElementTypeButton" name="Search" label="Search" visible="true" enabled="true"/>
+        </XCUIElementTypeNavigationBar>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" name="kViewMonthCalendarA11yID" visible="true">
+          <XCUIElementTypeOther type="XCUIElementTypeOther" visible="true">
+            <XCUIElementTypeScrollView type="XCUIElementTypeScrollView" visible="true">
+              <XCUIElementTypeButton type="XCUIElementTypeButton" name="Monday, June 7" label="Monday, June 7" value="Has 2 events" visible="true" enabled="true"/>
+              <XCUIElementTypeButton type="XCUIElementTypeButton" name="Tuesday, June 8" label="Tuesday, June 8" value="No events for this day" visible="true" enabled="true"/>
+            </XCUIElementTypeScrollView>
+          </XCUIElementTypeOther>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" name="kViewType1DayA11yID" visible="true">
+          <XCUIElementTypeButton type="XCUIElementTypeButton" name="Monday, June 7" label="Monday, June 7" visible="true" enabled="true"/>
+          <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="All-day events" visible="true"/>
+          <XCUIElementTypeButton type="XCUIElementTypeButton" name="Example event A, From 9 to 10 AM" label="Example event A, From 9 to 10 AM" visible="true" enabled="true"/>
+          <XCUIElementTypeButton type="XCUIElementTypeButton" name="Example event B, From 10 to 11 AM" label="Example event B, From 10 to 11 AM" visible="true" enabled="true"/>
+        </XCUIElementTypeOther>
+        <XCUIElementTypeOther type="XCUIElementTypeOther" name="Empty region" visible="true">
+          <XCUIElementTypeButton type="XCUIElementTypeButton" label="Hidden" visible="false"/>
+        </XCUIElementTypeOther>
+      </XCUIElementTypeOther>
+    </XCUIElementTypeWindow>
+  </XCUIElementTypeApplication>
+</AppiumAUT>

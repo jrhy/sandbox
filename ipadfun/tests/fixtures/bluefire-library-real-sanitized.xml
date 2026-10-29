@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<AppiumAUT>
+  <XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" enabled="true" visible="false" accessible="false" x="0" y="0" width="1112" height="834">
+    <XCUIElementTypeCell type="XCUIElementTypeCell" enabled="true" visible="true" accessible="true" x="16" y="102" width="140" height="187" />
+    <XCUIElementTypeCell type="XCUIElementTypeCell" name="Example Book&#10;Example Author" label="Example Book&#10;Example Author" enabled="true" visible="true" accessible="true" x="172" y="102" width="141" height="187" />
+  </XCUIElementTypeCollectionView>
+</AppiumAUT>

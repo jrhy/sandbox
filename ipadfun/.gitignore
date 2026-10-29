@@ -1,0 +1,10 @@
+.local/
+__pycache__/
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+.venv/
+
+# Local enrollment brief includes device and signing identifiers.
+/PROMPT.md

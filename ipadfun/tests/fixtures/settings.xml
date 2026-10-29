@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<AppiumAUT><XCUIElementTypeApplication type="XCUIElementTypeApplication" name="Settings" label="Settings" enabled="true" visible="true">
+<XCUIElementTypeWindow type="XCUIElementTypeWindow" visible="true">
+<XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" name="Settings" label="Settings" visible="true" enabled="true"/>
+<XCUIElementTypeCell type="XCUIElementTypeCell" name="Battery" label="Battery" enabled="true" visible="true" x="10" y="80" width="200" height="44"/>
+<XCUIElementTypeStaticText type="XCUIElementTypeStaticText" name="Battery level" label="Battery level" value="74%" enabled="true" visible="true"/>
+<XCUIElementTypeCell type="XCUIElementTypeCell" label="Section A" visible="true"><XCUIElementTypeButton type="XCUIElementTypeButton" name="More" label="More" enabled="true" visible="true"/></XCUIElementTypeCell>
+<XCUIElementTypeCell type="XCUIElementTypeCell" label="Section B" visible="true"><XCUIElementTypeButton type="XCUIElementTypeButton" name="More" label="More" enabled="true" visible="true"/></XCUIElementTypeCell>
+<XCUIElementTypeSwitch type="XCUIElementTypeSwitch" name="Low Power Mode" label="Low Power Mode" value="0" enabled="false" visible="true"/>
+<XCUIElementTypeButton type="XCUIElementTypeButton" label="Hidden" visible="false"/>
+</XCUIElementTypeWindow></XCUIElementTypeApplication></AppiumAUT>
