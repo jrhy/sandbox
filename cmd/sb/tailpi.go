@@ -83,9 +83,22 @@ type pacer struct {
 	cps       float64
 	paused    bool
 	unlimited bool // non-TTY: emit everything as fast as possible
+	now       func() time.Time
+	last      time.Time
+	carry     float64 // fractional character budget not yet emitted
+	lineStart bool    // last emitted character was a newline
 }
 
-func newPacer(cps float64) *pacer { return &pacer{cps: cps} }
+func newPacer(cps float64) *pacer {
+	return &pacer{cps: cps, now: time.Now, lineStart: true}
+}
+
+// atLineStart reports whether emission currently sits at the start of a line.
+func (p *pacer) atLineStart() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lineStart
+}
 
 func (p *pacer) push(u unit) {
 	p.mu.Lock()
@@ -110,22 +123,38 @@ func (p *pacer) behind() float64 {
 	return float64(n) / p.cps
 }
 
-// tick emits up to cps/10 characters (all of them when unlimited). It reports
-// whether anything was written.
+// tick emits the characters earned since the previous tick (all of them when
+// unlimited). The budget is time-based, so average throughput matches cps even
+// if the caller's sleep drifts. It reports whether anything was written.
 func (p *pacer) tick(w io.Writer, noColor bool) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	now := p.now()
 	if p.paused || len(p.q) == 0 {
+		// Don't bank time while idle or paused, or resuming would burst.
+		p.last = now
+		p.carry = 0
 		return false
 	}
 	budget := 0
 	if p.unlimited {
 		budget = int(^uint(0) >> 1)
 	} else {
-		budget = int(p.cps * 0.1)
-	}
-	if budget <= 0 {
-		budget = 1
+		if p.last.IsZero() {
+			p.last = now
+		}
+		elapsed := now.Sub(p.last).Seconds()
+		// A stalled tick (suspend, debugger) must not dump minutes of text at
+		// once, but ordinary scheduler hiccups should not lose pace either.
+		if elapsed > maxCatchUp {
+			elapsed = maxCatchUp
+		}
+		p.last = now
+		if elapsed > 0 {
+			p.carry += p.cps * elapsed
+		}
+		budget = int(p.carry)
+		p.carry -= float64(budget)
 	}
 	emitted := false
 	for budget > 0 && len(p.q) > 0 {
@@ -141,13 +170,16 @@ func (p *pacer) tick(w io.Writer, noColor bool) bool {
 		}
 		s := u.text[p.cur:]
 		if len(s) > budget {
-			io.WriteString(w, s[:budget])
+			out := s[:budget]
+			io.WriteString(w, out)
+			p.lineStart = strings.HasSuffix(out, "\n")
 			p.cur += budget
 			budget = 0
 		} else {
 			io.WriteString(w, s)
 			_, post := u.s.ansi(noColor)
 			io.WriteString(w, post)
+			p.lineStart = strings.HasSuffix(s, "\n")
 			p.q = p.q[1:]
 			p.cur = 0
 			budget -= len(s)
@@ -156,6 +188,88 @@ func (p *pacer) tick(w io.Writer, noColor bool) bool {
 	}
 	return emitted
 }
+
+// ---------------------------------------------------------------- screen
+
+// screen keeps a status line on the terminal's bottom row and confines streamed
+// output to the rows above it (via a scroll region). Status redraws therefore
+// never overwrite or interleave with the payload.
+type screen struct {
+	rows, cols int
+	region     bool // bottom row reserved for status
+	lastStatus string
+	lastDraw   time.Time
+}
+
+func (s *screen) resize(out io.Writer) {
+	// GetSize returns (width, height).
+	cols, rows, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil || (rows == s.rows && cols == s.cols) {
+		return
+	}
+	s.rows, s.cols = rows, cols
+	s.region = rows >= 3
+	if s.region {
+		// Reset first in case an earlier region is still active, then scroll
+		// only rows 1..rows-1 and park the cursor at the bottom of that area,
+		// nudging the previous prompt line into scrollback.
+		fmt.Fprintf(out, "\x1b[r\x1b[1;%dr\x1b[%d;1H\n", rows-1, rows-1)
+	}
+}
+
+// draw repaints the bottom row. Unchanged status is repainted at most every
+// 300ms.
+func (s *screen) draw(out io.Writer, text string, now time.Time) {
+	if !s.region || text == "" {
+		return
+	}
+	if text == s.lastStatus && now.Sub(s.lastDraw) < 300*time.Millisecond {
+		return
+	}
+	s.lastStatus, s.lastDraw = text, now
+	fmt.Fprintf(out, "\x1b7\x1b[%d;1H\x1b[2K%s\x1b8", s.rows, truncate(text, s.cols-1))
+}
+
+// close clears the status row and restores normal scrolling.
+func (s *screen) close(out io.Writer, atLineStart bool) {
+	if s.region {
+		fmt.Fprintf(out, "\x1b7\x1b[%d;1H\x1b[2K\x1b8\x1b[r", s.rows)
+	}
+	if !atLineStart {
+		fmt.Fprint(out, "\n")
+	}
+}
+
+// statusText renders the status row. behind is pending output in seconds.
+func statusText(paused bool, behind, cps float64) string {
+	const hint = " · space pause · +/- speed · q quit"
+	switch {
+	case paused:
+		return fmt.Sprintf("⏸ paused @ %.0f cps · space resume · +/- speed · q quit", cps)
+	case behind > 1:
+		return fmt.Sprintf("⏳ behind %s @ %.0f cps%s", humanDur(behind), cps, hint)
+	default:
+		return fmt.Sprintf("● live · %.0f cps%s", cps, hint)
+	}
+}
+
+// truncate cuts s to at most width runes, marking the cut with an ellipsis.
+func truncate(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= width {
+		return s
+	}
+	if width == 1 {
+		return "…"
+	}
+	return string(r[:width-1]) + "…"
+}
+
+// maxCatchUp bounds how much idle time one tick may convert into output.
+const maxCatchUp = 2.0 // seconds
 
 // ----------------------------------------------------------------- follower
 
@@ -607,18 +721,23 @@ func tailpiMain(args []string) int {
 	stdinTTY := term.IsTerminal(int(os.Stdin.Fd()))
 	tty := stdoutTTY && stdinTTY
 	noColor := o.NoColor || !stdoutTTY
-	width := 0
-	if stdoutTTY {
-		if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 20 {
-			width = w - 1
-		}
-	}
 
 	p := newPacer(o.CPS)
 	// Reading speed only makes sense for a human watching a terminal; when the
 	// output is piped, drain it as fast as the file is appended.
 	p.unlimited = !tty
-	v := &view{p: p, o: &o, width: width, toolLen: map[string]int{}}
+	v := &view{p: p, o: &o, toolLen: map[string]int{}}
+
+	// Everything the viewer writes - payload and control sequences alike - goes
+	// to stdout, so the two can never interleave out of order. The status line
+	// lives on a reserved bottom row (see screen).
+	var scr screen
+	if tty {
+		scr.resize(os.Stdout)
+		if scr.cols > 21 {
+			v.width = scr.cols - 1
+		}
+	}
 
 	fl := newFollower(path)
 	if o.Live {
@@ -630,26 +749,6 @@ func tailpiMain(args []string) int {
 		if old, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
 			defer term.Restore(int(os.Stdin.Fd()), old)
 			go keyReader(keyCh)
-		}
-	}
-
-	status := func() {
-		if !tty {
-			return
-		}
-		p.mu.Lock()
-		paused := p.paused
-		cps := p.cps
-		p.mu.Unlock()
-		fmt.Fprint(os.Stderr, "\r\x1b[2K")
-		if paused {
-			fmt.Fprintf(os.Stderr, "⏸ paused @ %.0f cps", cps)
-			return
-		}
-		if b := p.behind(); b > 1.0 {
-			fmt.Fprintf(os.Stderr, "⏳ behind %s @ %.0f cps", humanDur(b), cps)
-		} else {
-			fmt.Fprint(os.Stderr, "● live")
 		}
 	}
 
@@ -700,11 +799,17 @@ func tailpiMain(args []string) int {
 			p.tick(os.Stdout, noColor)
 			break
 		}
-		status()
+		if tty {
+			p.mu.Lock()
+			paused, cps := p.paused, p.cps
+			p.mu.Unlock()
+			scr.resize(os.Stdout) // follows terminal resizes
+			scr.draw(os.Stdout, statusText(paused, p.behind(), cps), time.Now())
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if tty {
-		fmt.Fprint(os.Stderr, "\r\x1b[2K")
+		scr.close(os.Stdout, p.atLineStart())
 	}
 	return 0
 }

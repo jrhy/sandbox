@@ -7,10 +7,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+// fakeClock advances a fake pacer clock by step on each call.
+func fakeClock(p *pacer, start time.Time, step time.Duration) *time.Time {
+	cur := start
+	p.last = start
+	p.now = func() time.Time {
+		cur = cur.Add(step)
+		return cur
+	}
+	return &cur
+}
 
 func TestPacerEmitsAtRate(t *testing.T) {
 	p := newPacer(100)
+	fakeClock(p, time.Unix(0, 0), 100*time.Millisecond)
 	p.push(unit{text: strings.Repeat("x", 100), s: stNormal})
 	if !p.tick(io.Discard, true) {
 		t.Fatal("expected emission on first tick")
@@ -26,8 +39,35 @@ func TestPacerEmitsAtRate(t *testing.T) {
 	}
 }
 
+func TestPacerRateIsTimeBased(t *testing.T) {
+	// One long gap must emit exactly the characters earned, independent of how
+	// often tick is called.
+	p := newPacer(1000)
+	fakeClock(p, time.Unix(0, 0), time.Second)
+	p.push(unit{text: strings.Repeat("x", 5000), s: stNormal})
+	var out strings.Builder
+	p.tick(&out, true)
+	if got := out.Len(); got != 1000 {
+		t.Fatalf("emitted %d chars in 1s at 1000 cps, want 1000", got)
+	}
+}
+
+func TestPacerNoBurstAfterIdle(t *testing.T) {
+	p := newPacer(1000)
+	base := time.Unix(0, 0)
+	p.last = base
+	p.now = func() time.Time { return base.Add(10 * time.Second) }
+	p.push(unit{text: strings.Repeat("x", 5000), s: stNormal})
+	var out strings.Builder
+	p.tick(&out, true)
+	if out.Len() != 2000 {
+		t.Fatalf("idle 10s emitted %d chars, want 2000 (2s maxCatchUp cap)", out.Len())
+	}
+}
+
 func TestPacerPaused(t *testing.T) {
 	p := newPacer(100)
+	fakeClock(p, time.Unix(0, 0), 100*time.Millisecond)
 	p.push(unit{text: "hello", s: stNormal})
 	p.paused = true
 	if p.tick(io.Discard, true) {
@@ -44,6 +84,31 @@ func TestPacerBehind(t *testing.T) {
 	b := p.behind()
 	if b < 9.5 || b > 10.5 {
 		t.Fatalf("behind=%v want ~10s", b)
+	}
+}
+
+func TestStatusText(t *testing.T) {
+	if got := statusText(false, 0, 300); !strings.HasPrefix(got, "● live") {
+		t.Fatalf("live status=%q", got)
+	}
+	if got := statusText(false, 21, 133); !strings.Contains(got, "behind 21s") || !strings.Contains(got, "133 cps") {
+		t.Fatalf("behind status=%q", got)
+	}
+	got := statusText(true, 0, 50)
+	if !strings.HasPrefix(got, "⏸ paused") || !strings.Contains(got, "space resume") {
+		t.Fatalf("paused status=%q", got)
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	if got := truncate("abcdef", 3); got != "ab…" {
+		t.Fatalf("truncate=%q", got)
+	}
+	if got := truncate("abc", 10); got != "abc" {
+		t.Fatalf("no-op truncate=%q", got)
+	}
+	if got := truncate("héllo", 2); got != "h…" {
+		t.Fatalf("rune-aware truncate=%q", got)
 	}
 }
 
@@ -215,5 +280,25 @@ func TestToolResultExitCode(t *testing.T) {
 	}
 	if p.q[len(p.q)-1].s != stWarn {
 		t.Fatalf("failed tool must render in warn style")
+	}
+}
+
+func TestPacerTracksEmittedLineStart(t *testing.T) {
+	p := newPacer(1000)
+	cur := time.Unix(0, 0)
+	p.last = cur
+	p.now = func() time.Time { cur = cur.Add(time.Second); return cur }
+	if !p.atLineStart() {
+		t.Fatal("fresh pacer must be at line start")
+	}
+	p.push(unit{text: "partial", s: stNormal})
+	p.tick(io.Discard, true)
+	if p.atLineStart() {
+		t.Fatal("mid-line after emitting text without newline")
+	}
+	p.push(unit{text: " rest\n", s: stNormal})
+	p.tick(io.Discard, true)
+	if !p.atLineStart() {
+		t.Fatal("at line start after emitting trailing newline")
 	}
 }
