@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"os"
@@ -300,5 +301,36 @@ func TestPacerTracksEmittedLineStart(t *testing.T) {
 	p.tick(io.Discard, true)
 	if !p.atLineStart() {
 		t.Fatal("at line start after emitting trailing newline")
+	}
+}
+
+func TestCRLFWriter(t *testing.T) {
+	var buf bytes.Buffer
+	w := crlfWriter{&buf}
+	n, err := w.Write([]byte("a\nb\r\nc"))
+	if err != nil || n != 6 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	if got := buf.String(); got != "a\r\nb\r\nc" {
+		t.Fatalf("got %q", got)
+	}
+	buf.Reset()
+	w.Write([]byte("no newline"))
+	if buf.String() != "no newline" {
+		t.Fatalf("got %q", buf.String())
+	}
+}
+
+func TestPacerWrapsAtWidth(t *testing.T) {
+	p := newPacer(10000)
+	p.wrapWidth = 5
+	cur := time.Unix(0, 0)
+	p.last = cur
+	p.now = func() time.Time { cur = cur.Add(time.Second); return cur }
+	p.push(unit{text: "abcdefghij\nxy", s: stNormal})
+	var out strings.Builder
+	p.tick(&out, true)
+	if got := out.String(); got != "abcde\nfghij\nxy" {
+		t.Fatalf("wrapped output %q", got)
 	}
 }

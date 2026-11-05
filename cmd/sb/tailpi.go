@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/jessevdk/go-flags"
@@ -87,10 +89,31 @@ type pacer struct {
 	last      time.Time
 	carry     float64 // fractional character budget not yet emitted
 	lineStart bool    // last emitted character was a newline
+	wrapWidth int     // >0: emit a newline before a line exceeds this width
+	col       int     // current column, for wrapWidth
 }
 
 func newPacer(cps float64) *pacer {
 	return &pacer{cps: cps, now: time.Now, lineStart: true}
+}
+
+// emit writes s, inserting newlines so no line exceeds wrapWidth. Newlines are
+// emitted bare; the terminal-facing writer turns them into CRLF.
+func (p *pacer) emit(w io.Writer, s string) {
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '\n' {
+			io.WriteString(w, "\n")
+			p.col = 0
+			continue
+		}
+		if p.wrapWidth > 0 && p.col >= p.wrapWidth {
+			io.WriteString(w, "\n")
+			p.col = 0
+		}
+		io.WriteString(w, string(c))
+		p.col++
+	}
 }
 
 // atLineStart reports whether emission currently sits at the start of a line.
@@ -171,12 +194,12 @@ func (p *pacer) tick(w io.Writer, noColor bool) bool {
 		s := u.text[p.cur:]
 		if len(s) > budget {
 			out := s[:budget]
-			io.WriteString(w, out)
+			p.emit(w, out)
 			p.lineStart = strings.HasSuffix(out, "\n")
 			p.cur += budget
 			budget = 0
 		} else {
-			io.WriteString(w, s)
+			p.emit(w, s)
 			_, post := u.s.ansi(noColor)
 			io.WriteString(w, post)
 			p.lineStart = strings.HasSuffix(s, "\n")
@@ -187,6 +210,25 @@ func (p *pacer) tick(w io.Writer, noColor bool) bool {
 		emitted = true
 	}
 	return emitted
+}
+
+// ---------------------------------------------------------------- output
+
+// crlfWriter restores the carriage return that raw mode removes: in a raw
+// terminal ONLCR is off, so a bare "\n" moves down without returning to
+// column 0 (which staircases the output).
+type crlfWriter struct{ w io.Writer }
+
+func (c crlfWriter) Write(b []byte) (int, error) {
+	if !bytes.ContainsRune(b, '\n') {
+		return c.w.Write(b)
+	}
+	norm := bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
+	norm = bytes.ReplaceAll(norm, []byte("\n"), []byte("\r\n"))
+	if _, err := c.w.Write(norm); err != nil {
+		return 0, err
+	}
+	return len(b), nil
 }
 
 // ---------------------------------------------------------------- screen
@@ -722,6 +764,14 @@ func tailpiMain(args []string) int {
 	tty := stdoutTTY && stdinTTY
 	noColor := o.NoColor || !stdoutTTY
 
+	// Everything the viewer writes goes through out: one stream keeps payload
+	// and control sequences ordered, and the CRLF wrapper compensates for raw
+	// mode turning off newline translation.
+	var out io.Writer = os.Stdout
+	if tty {
+		out = crlfWriter{os.Stdout}
+	}
+
 	p := newPacer(o.CPS)
 	// Reading speed only makes sense for a human watching a terminal; when the
 	// output is piped, drain it as fast as the file is appended.
@@ -733,9 +783,10 @@ func tailpiMain(args []string) int {
 	// lives on a reserved bottom row (see screen).
 	var scr screen
 	if tty {
-		scr.resize(os.Stdout)
+		scr.resize(out)
 		if scr.cols > 21 {
 			v.width = scr.cols - 1
+			p.wrapWidth = v.width
 		}
 	}
 
@@ -745,16 +796,23 @@ func tailpiMain(args []string) int {
 	}
 
 	keyCh := make(chan byte, 16)
+	sigCh := make(chan os.Signal, 1)
 	if tty {
 		if old, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
 			defer term.Restore(int(os.Stdin.Fd()), old)
 			go keyReader(keyCh)
 		}
+		// Raw mode swallows Ctrl-C as a key, but an external TERM/HUP still
+		// needs to restore the terminal before exiting.
+		signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+		defer signal.Stop(sigCh)
 	}
 
 	quit := false
 	for !quit {
 		select {
+		case <-sigCh:
+			quit = true
 		case k := <-keyCh:
 			switch k {
 			case 'q', 'Q', 3: // q or Ctrl-C
@@ -791,25 +849,25 @@ func tailpiMain(args []string) int {
 			}
 			v.handle(&ev)
 		}
-		p.tick(os.Stdout, noColor)
+		p.tick(out, noColor)
 		// Piped output is not something a human is reading at their own pace;
 		// stop at the end of a finished session log instead of following
 		// forever.
 		if !tty && v.sawEnd {
-			p.tick(os.Stdout, noColor)
+			p.tick(out, noColor)
 			break
 		}
 		if tty {
 			p.mu.Lock()
 			paused, cps := p.paused, p.cps
 			p.mu.Unlock()
-			scr.resize(os.Stdout) // follows terminal resizes
-			scr.draw(os.Stdout, statusText(paused, p.behind(), cps), time.Now())
+			scr.resize(out) // follows terminal resizes
+			scr.draw(out, statusText(paused, p.behind(), cps), time.Now())
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if tty {
-		scr.close(os.Stdout, p.atLineStart())
+		scr.close(out, p.atLineStart())
 	}
 	return 0
 }
