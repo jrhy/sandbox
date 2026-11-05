@@ -2,6 +2,8 @@ package main
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,5 +68,59 @@ func TestSummarizeArgs(t *testing.T) {
 	}
 	if got := summarizeArgs("other", map[string]any{"a": "b"}); !strings.HasPrefix(got, `{"a":"b"}`) {
 		t.Fatalf("other summary=%q", got)
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFollowerBuffersPartialLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	writeFile(t, path, `{"type":"a"`) // no trailing newline
+	fl := newFollower(path)
+	if lines := fl.poll(); len(lines) != 0 {
+		t.Fatalf("partial line must be buffered, got %v", lines)
+	}
+	writeFile(t, path, `{"type":"a"}`+"\n")
+	lines := fl.poll()
+	if len(lines) != 1 || lines[0] != `{"type":"a"}` {
+		t.Fatalf("poll got %v", lines)
+	}
+}
+
+func TestFollowerTruncation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	writeFile(t, path, `{"type":"a"}`+"\n")
+	fl := newFollower(path)
+	if lines := fl.poll(); len(lines) != 1 {
+		t.Fatalf("initial poll got %v", lines)
+	}
+	writeFile(t, path, "") // simulate rotation: truncate
+	writeFile(t, path, `{"type":"b"}`+"\n")
+	lines := fl.poll()
+	if len(lines) != 1 || lines[0] != `{"type":"b"}` {
+		t.Fatalf("after truncation got %v", lines)
+	}
+}
+
+func TestFollowerSkipExisting(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	writeFile(t, path, `{"type":"a"}`+"\n")
+	fl := newFollower(path)
+	fl.skipExisting()
+	if lines := fl.poll(); len(lines) != 0 {
+		t.Fatalf("skipExisting must hide old content, got %v", lines)
+	}
+	writeFile(t, path, `{"type":"a"}`+"\n"+`{"type":"b"}`+"\n")
+	lines := fl.poll()
+	if len(lines) != 1 || lines[0] != `{"type":"b"}` {
+		t.Fatalf("after skip got %v", lines)
 	}
 }
