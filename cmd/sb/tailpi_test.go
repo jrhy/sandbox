@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -101,11 +102,36 @@ func TestFollowerTruncation(t *testing.T) {
 	if lines := fl.poll(); len(lines) != 1 {
 		t.Fatalf("initial poll got %v", lines)
 	}
-	writeFile(t, path, "") // simulate rotation: truncate
+	// Truncate in place, then observe the empty file before it is rewritten:
+	// truncation is a size decrease, so it must be noticed at that point.
+	writeFile(t, path, "")
+	if lines := fl.poll(); len(lines) != 0 {
+		t.Fatalf("truncation must yield no lines, got %v", lines)
+	}
 	writeFile(t, path, `{"type":"b"}`+"\n")
 	lines := fl.poll()
 	if len(lines) != 1 || lines[0] != `{"type":"b"}` {
 		t.Fatalf("after truncation got %v", lines)
+	}
+}
+
+func TestFollowerRotation(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "s.jsonl")
+	writeFile(t, path, `{"type":"a"}`+"\n")
+	fl := newFollower(path)
+	if lines := fl.poll(); len(lines) != 1 {
+		t.Fatalf("initial poll got %v", lines)
+	}
+	// Rename a new file over the old path: same size, different inode.
+	tmp := filepath.Join(dir, "new.jsonl")
+	writeFile(t, tmp, `{"type":"b"}`+"\n")
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+	lines := fl.poll()
+	if len(lines) != 1 || lines[0] != `{"type":"b"}` {
+		t.Fatalf("after rotation got %v", lines)
 	}
 }
 
@@ -122,5 +148,72 @@ func TestFollowerSkipExisting(t *testing.T) {
 	lines := fl.poll()
 	if len(lines) != 1 || lines[0] != `{"type":"b"}` {
 		t.Fatalf("after skip got %v", lines)
+	}
+}
+
+func TestSystemMessageStringContent(t *testing.T) {
+	// pi writes system messages with content as a JSON string, not an array.
+	line := `{"type":"message_start","message":{"role":"system","content":"","sections":{"rules":"","docs":""}}}`
+	var ev event
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatalf("system message must decode, got %v", err)
+	}
+	p := newPacer(1000)
+	v := &view{p: p, o: &tailpiOpts{}, toolLen: map[string]int{}}
+	v.handle(&ev)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.q) != 1 {
+		t.Fatalf("want 1 unit, got %d", len(p.q))
+	}
+	if !strings.Contains(p.q[0].text, "‹system: docs/rules›") {
+		t.Fatalf("collapsed system line = %q", p.q[0].text)
+	}
+}
+
+func TestToolResultStringStructuredContent(t *testing.T) {
+	// `read` results carry structuredContent as a plain string, not an object.
+	line := `{"type":"tool_execution_end","toolCallId":"c1","toolName":"read","result":{"content":[{"type":"text","text":"file body"}],"structuredContent":"file body"},"durationMs":12}`
+	var ev event
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatalf("tool result must decode, got %v", err)
+	}
+	p := newPacer(10000)
+	v := &view{p: p, o: &tailpiOpts{}, toolLen: map[string]int{}}
+	v.handle(&ev)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out strings.Builder
+	for _, u := range p.q {
+		out.WriteString(u.text)
+	}
+	if !strings.Contains(out.String(), "file body") || !strings.Contains(out.String(), "· 12ms") {
+		t.Fatalf("rendered %q", out.String())
+	}
+	if strings.Contains(out.String(), "exit") {
+		t.Fatalf("string structuredContent must not render an exit code: %q", out.String())
+	}
+}
+
+func TestToolResultExitCode(t *testing.T) {
+	line := `{"type":"tool_execution_end","toolCallId":"c2","toolName":"bash","result":{"content":[{"type":"text","text":"boom"}],"structuredContent":{"exit_code":2}},"isError":true,"durationMs":42}`
+	var ev event
+	if err := json.Unmarshal([]byte(line), &ev); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	p := newPacer(10000)
+	v := &view{p: p, o: &tailpiOpts{}, toolLen: map[string]int{}}
+	v.handle(&ev)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out strings.Builder
+	for _, u := range p.q {
+		out.WriteString(u.text)
+	}
+	if !strings.Contains(out.String(), "· exit 2 · 42ms") {
+		t.Fatalf("rendered %q", out.String())
+	}
+	if p.q[len(p.q)-1].s != stWarn {
+		t.Fatalf("failed tool must render in warn style")
 	}
 }
