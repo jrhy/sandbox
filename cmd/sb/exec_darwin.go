@@ -338,6 +338,15 @@ func runSandboxExecWithOptions(baseDir string, args []string, envOverride map[st
 		return exitError, fmt.Errorf("profile close: %w", err)
 	}
 
+	// Probe existing absolute directories under the same profile before handing
+	// PATH to the child. A denied directory can make execvp return EPERM
+	// instead of continuing to later PATH entries. Preserve relative and missing
+	// entries, whose meaning may change after the child starts.
+	pathEnv, err = filterInaccessiblePath(profilePath, baseDir, pathEnv)
+	if err != nil {
+		return exitError, fmt.Errorf("PATH probe: %w", err)
+	}
+
 	cmd := exec.Command("/usr/bin/sandbox-exec", append([]string{"-f", profilePath}, args...)...)
 	cmd.Dir = baseDir
 	cmd.Stdin = stdin
@@ -596,6 +605,53 @@ func buildProxyDialer() *net.Dialer {
 			return nil
 		},
 	}
+}
+
+// filterInaccessiblePath tests directory traversal inside the actual profile.
+// The host check distinguishes denied existing directories from missing ones.
+func filterInaccessiblePath(profilePath, baseDir, pathEnv string) (string, error) {
+	entries := strings.Split(pathEnv, ":")
+	var candidates []string
+	var indexes []int
+	for i, p := range entries {
+		if !filepath.IsAbs(p) {
+			continue
+		}
+		info, err := os.Stat(p)
+		if err == nil && info.IsDir() {
+			candidates = append(candidates, p)
+			indexes = append(indexes, i)
+		}
+	}
+	if len(candidates) == 0 {
+		return pathEnv, nil
+	}
+	args := []string{"-f", profilePath, "/bin/sh", "-c", `for p do if test -d "$p"; then printf 1; else printf 0; fi; done`, "sb-path-probe"}
+	args = append(args, candidates...)
+	cmd := exec.Command("/usr/bin/sandbox-exec", args...)
+	cmd.Dir = baseDir
+	result, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	if len(result) != len(candidates) {
+		return "", errors.New("unexpected probe output")
+	}
+	remove := make(map[int]bool)
+	for j, ch := range result {
+		if ch == '0' {
+			remove[indexes[j]] = true
+		} else if ch != '1' {
+			return "", errors.New("invalid probe output")
+		}
+	}
+	var kept []string
+	for i, p := range entries {
+		if !remove[i] {
+			kept = append(kept, p)
+		}
+	}
+	return strings.Join(kept, ":"), nil
 }
 
 // buildNoUserPathRules discovers package manager roots from PATH entries

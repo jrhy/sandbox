@@ -1374,3 +1374,44 @@ sys.exit(0 if data == b"loopback" else 1)
 		t.Fatalf("loopback exchange: write=%v close=%v", writeErr, closeErr)
 	}
 }
+
+func TestExecLong_InaccessiblePATHEntryDoesNotBlockLookup(t *testing.T) {
+	requireLongTest(t)
+	const nixPath = "/nix/var/nix/profiles/default/bin"
+	if info, err := os.Stat(nixPath); err != nil || !info.IsDir() {
+		t.Skip("Nix profile unavailable")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	nodeReal, err := filepath.EvalSymlinks(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeRoot := filepath.Dir(filepath.Dir(nodeReal))
+	if strings.HasPrefix(nodeReal, "/opt/homebrew/") {
+		nodeRoot = "/opt/homebrew"
+	}
+	baseDir := userTempDir(t)
+	path := nixPath + ":/usr/bin:/bin"
+	var out bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{nodeReal, "-e", `const r=require("node:child_process").spawnSync("sh",["-c","true"]); if (r.error || r.status !== 0) { console.error(r.error); process.exit(1) }`}, map[string]string{"PATH": path}, sandboxProfileOptions{MinimalFS: true, AllowRead: []string{nodeRoot}}, nil, &out, &out)
+	if err != nil || code != 0 {
+		t.Fatalf("PATH lookup failed: code=%d err=%v output=%s", code, err, out.String())
+	}
+}
+
+func TestExecLong_PATHPreservesAllowedRelativeAndMissingEntries(t *testing.T) {
+	requireLongTest(t)
+	baseDir := userTempDir(t)
+	value := "relative::/usr/bin:/does-not-exist-sb-path:/bin:/usr/bin"
+	var out bytes.Buffer
+	code, err := runSandboxExecWithOptions(baseDir, []string{"/bin/sh", "-c", `printf %s "$PATH"`}, map[string]string{"PATH": value}, sandboxProfileOptions{MinimalFS: true}, nil, &out, &out)
+	if err != nil || code != 0 {
+		t.Fatalf("exit %d: %v: %s", code, err, out.String())
+	}
+	if !strings.HasSuffix(out.String(), ":"+value) {
+		t.Fatalf("PATH not preserved: %q", out.String())
+	}
+}
